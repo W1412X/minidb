@@ -1,0 +1,567 @@
+#include "recovery/wal.h"
+#include "database/database.h"
+#include "storage/page.h"
+#include "storage/heap_file.h"
+#include "catalog/catalog.h"
+#include "container/vector.h"
+#include "container/hash_map.h"
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+namespace minidb {
+
+static u32 value_to_wal_bytes(const Value& key, byte* out, u32 cap) {
+    if (!out || cap < 1) return 0;
+    u32 size = key.serialized_size();
+    if (size > cap) return 0;
+    key.serialize(out);
+    return size;
+}
+
+WalManager::WalManager(const String& wal_dir)
+    : WalManager(wal_dir, 64ULL * 1024ULL * 1024ULL, true) {}
+
+WalManager::WalManager(const String& wal_dir, u64 segment_size_bytes, bool fsync_enabled)
+    : WalManager(wal_dir, segment_size_bytes, fsync_enabled, false, 0) {}
+
+WalManager::WalManager(const String& wal_dir, u64 segment_size_bytes, bool fsync_enabled,
+                       bool group_commit_enabled, u64 group_commit_delay_ms)
+    : wal_dir_(wal_dir), fd_(-1), next_lsn_(1), durable_lsn_(0), last_written_lsn_(0),
+      segment_size_bytes_(segment_size_bytes == 0 ? 64ULL * 1024ULL * 1024ULL : segment_size_bytes),
+      fsync_enabled_(fsync_enabled), group_commit_enabled_(group_commit_enabled),
+      group_commit_delay_ms_(group_commit_delay_ms), pending_commit_waiters_(0),
+      group_commit_batches_(0), buffer_flushes_(0), buffered_bytes_(0),
+      bytes_since_checkpoint_(0), write_buf_pos_(0) {
+    mkdir(wal_dir.c_str(), 0755);
+    String path = wal_dir + "/wal.log";
+    fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
+}
+
+WalManager::~WalManager() {
+    if (fd_ >= 0) {
+        flush_buffer();
+        if (fsync_enabled_) fsync(fd_);
+        close(fd_);
+    }
+}
+
+bool WalManager::write_direct(const byte* data, u32 len) {
+    if (fd_ < 0 || !data) return false;
+    const byte* ptr = data;
+    u32 remaining = len;
+    while (remaining > 0) {
+        ssize_t written = ::write(fd_, ptr, remaining);
+        if (written <= 0) return false;
+        ptr += written;
+        remaining -= static_cast<u32>(written);
+    }
+    return true;
+}
+
+bool WalManager::append_to_buffer(const byte* data, u32 len) {
+    if (len == 0) return true;
+    if (!data) return false;
+    if (len > kWalBufferSize) {
+        flush_buffer();
+        return write_direct(data, len);
+    }
+    if (write_buf_pos_ + len > kWalBufferSize) {
+        flush_buffer();
+    }
+    std::memcpy(write_buf_ + write_buf_pos_, data, len);
+    write_buf_pos_ += len;
+    buffered_bytes_ += len;
+    if (write_buf_pos_ == kWalBufferSize) flush_buffer();
+    return true;
+}
+
+void WalManager::flush_buffer() {
+    if (write_buf_pos_ == 0) return;
+    if (write_direct(write_buf_, write_buf_pos_)) {
+        buffer_flushes_++;
+    }
+    write_buf_pos_ = 0;
+}
+
+u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 data_len) {
+    LockGuard guard(latch_);
+    if (fd_ < 0) return 0;
+
+    WalRecord hdr;
+    hdr.lsn = next_lsn_;
+    hdr.txn_id = txn_id;
+    hdr.type = type;
+    hdr.data_len = data_len;
+
+    if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) {
+        return 0;
+    }
+    if (data_len > 0 && !append_to_buffer(data, data_len)) return 0;
+
+    bytes_since_checkpoint_ += sizeof(hdr) + data_len;
+    next_lsn_++;
+    last_written_lsn_ = hdr.lsn;
+
+    struct stat st;
+    if (fstat(fd_, &st) == 0 &&
+        static_cast<u64>(st.st_size) + write_buf_pos_ > segment_size_bytes_) {
+        flush_buffer();
+        if (fsync_enabled_) fsync(fd_);
+        durable_lsn_ = last_written_lsn_;
+    }
+    return hdr.lsn;
+}
+
+u64 WalManager::log_begin(u64 txn_id) {
+    return write_record(WalType::kTxnBegin, txn_id, nullptr, 0);
+}
+
+u64 WalManager::log_commit(u64 txn_id) {
+    u64 lsn = write_record(WalType::kTxnCommit, txn_id, nullptr, 0);
+    if (lsn != 0) flush_commit(lsn);
+    return lsn;
+}
+
+u64 WalManager::log_abort(u64 txn_id) {
+    u64 lsn = write_record(WalType::kTxnAbort, txn_id, nullptr, 0);
+    if (lsn != 0) {
+        LockGuard guard(latch_);
+        flush_buffer();
+        if (fd_ >= 0 && (!fsync_enabled_ || fsync(fd_) == 0)) durable_lsn_ = lsn;
+    }
+    return lsn;
+}
+
+u64 WalManager::log_insert(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx,
+                           const byte* data, u16 size) {
+    struct __attribute__((packed)) {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+        u16 data_size;
+    } buf;
+    buf.table_id = table_id;
+    buf.page_id = page_id;
+    buf.slot_idx = slot_idx;
+    buf.data_size = size;
+
+    u32 total = sizeof(buf) + size;
+    byte* full = static_cast<byte*>(std::malloc(total));
+    if (!full) return 0;
+    std::memcpy(full, &buf, sizeof(buf));
+    if (size > 0) std::memcpy(full + sizeof(buf), data, size);
+
+    u64 lsn = write_record(WalType::kInsert, txn_id, full, total);
+    std::free(full);
+    return lsn;
+}
+
+u64 WalManager::log_delete(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx) {
+    struct __attribute__((packed)) {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+    } buf;
+    buf.table_id = table_id;
+    buf.page_id = page_id;
+    buf.slot_idx = slot_idx;
+
+    return write_record(WalType::kDelete, txn_id, reinterpret_cast<byte*>(&buf), sizeof(buf));
+}
+
+u64 WalManager::log_update(u64 txn_id, u32 table_id,
+                           PageId old_page_id, SlotIdx old_slot_idx,
+                           PageId new_page_id, SlotIdx new_slot_idx,
+                           const byte* new_data, u16 size) {
+    struct __attribute__((packed)) {
+        u32 table_id;
+        u64 old_page_id;
+        u16 old_slot_idx;
+        u64 new_page_id;
+        u16 new_slot_idx;
+        u16 data_size;
+    } buf;
+    buf.table_id = table_id;
+    buf.old_page_id = old_page_id;
+    buf.old_slot_idx = old_slot_idx;
+    buf.new_page_id = new_page_id;
+    buf.new_slot_idx = new_slot_idx;
+    buf.data_size = size;
+
+    u32 total = sizeof(buf) + size;
+    byte* full = static_cast<byte*>(std::malloc(total));
+    if (!full) return 0;
+    std::memcpy(full, &buf, sizeof(buf));
+    if (size > 0) std::memcpy(full + sizeof(buf), new_data, size);
+
+    u64 lsn = write_record(WalType::kUpdate, txn_id, full, total);
+    std::free(full);
+    return lsn;
+}
+
+u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
+    byte key_buf[64];
+    u32 key_size = value_to_wal_bytes(key, key_buf, sizeof(key_buf));
+    if (key_size == 0) return 0;
+    struct __attribute__((packed)) {
+        u32 index_id;
+        u64 page_id;
+        u16 slot_idx;
+        u16 key_size;
+    } hdr;
+    hdr.index_id = index_id;
+    hdr.page_id = rid.page_id;
+    hdr.slot_idx = rid.slot_idx;
+    hdr.key_size = static_cast<u16>(key_size);
+    u32 total = sizeof(hdr) + key_size;
+    byte* full = static_cast<byte*>(std::malloc(total));
+    if (!full) return 0;
+    std::memcpy(full, &hdr, sizeof(hdr));
+    std::memcpy(full + sizeof(hdr), key_buf, key_size);
+    u64 lsn = write_record(WalType::kIndexInsert, txn_id, full, total);
+    std::free(full);
+    return lsn;
+}
+
+u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
+    byte key_buf[64];
+    u32 key_size = value_to_wal_bytes(key, key_buf, sizeof(key_buf));
+    if (key_size == 0) return 0;
+    struct __attribute__((packed)) {
+        u32 index_id;
+        u64 page_id;
+        u16 slot_idx;
+        u16 key_size;
+    } hdr;
+    hdr.index_id = index_id;
+    hdr.page_id = rid.page_id;
+    hdr.slot_idx = rid.slot_idx;
+    hdr.key_size = static_cast<u16>(key_size);
+    u32 total = sizeof(hdr) + key_size;
+    byte* full = static_cast<byte*>(std::malloc(total));
+    if (!full) return 0;
+    std::memcpy(full, &hdr, sizeof(hdr));
+    std::memcpy(full + sizeof(hdr), key_buf, key_size);
+    u64 lsn = write_record(WalType::kIndexDelete, txn_id, full, total);
+    std::free(full);
+    return lsn;
+}
+
+u64 WalManager::checkpoint() {
+    u64 lsn = write_record(WalType::kCheckpoint, 0, nullptr, 0);
+    flush();
+    if (lsn != 0) truncate();
+    bytes_since_checkpoint_ = 0;
+    return lsn;
+}
+
+void WalManager::flush_commit(u64 lsn) {
+    latch_.lock();
+    if (fd_ < 0) {
+        latch_.unlock();
+        return;
+    }
+    if (!fsync_enabled_) {
+        flush_buffer();
+        if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+        commit_cond_.broadcast();
+        latch_.unlock();
+        return;
+    }
+    if (!group_commit_enabled_ || group_commit_delay_ms_ == 0) {
+        flush_buffer();
+        if (fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        commit_cond_.broadcast();
+        latch_.unlock();
+        return;
+    }
+
+    pending_commit_waiters_++;
+    bool leader = pending_commit_waiters_ == 1;
+    if (leader) {
+        commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
+        flush_buffer();
+        if (fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        group_commit_batches_++;
+        pending_commit_waiters_ = 0;
+        commit_cond_.broadcast();
+    } else {
+        while (durable_lsn_ < lsn && pending_commit_waiters_ != 0) {
+            commit_cond_.wait(latch_);
+        }
+    }
+    latch_.unlock();
+}
+
+void WalManager::flush() {
+    LockGuard guard(latch_);
+    if (fd_ >= 0) {
+        flush_buffer();
+        if (!fsync_enabled_ || fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        pending_commit_waiters_ = 0;
+        commit_cond_.broadcast();
+    }
+}
+
+void WalManager::truncate() {
+    LockGuard guard(latch_);
+    if (fd_ >= 0) {
+        u64 keep_next = next_lsn_;
+        u64 keep_durable = durable_lsn_;
+        close(fd_);
+        String path = wal_dir_ + "/wal.log";
+        fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        next_lsn_ = keep_next;
+        durable_lsn_ = keep_durable;
+        last_written_lsn_ = keep_durable;
+    }
+}
+
+bool WalManager::recover(Database* db) {
+    String path = wal_dir_ + "/wal.log";
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+
+    struct ReplayRef {
+        WalRecord hdr;
+        off_t data_offset;
+    };
+    Vector<ReplayRef> undo_refs;
+    HashMap<u64, bool> committed;
+    HashMap<u64, bool> aborted;
+    u64 max_lsn = 0;
+    u64 max_txn_id = 0;
+
+    auto read_exact = [](int read_fd, void* out, u32 len) -> bool {
+        byte* ptr = static_cast<byte*>(out);
+        u32 remaining = len;
+        while (remaining > 0) {
+            ssize_t n = ::read(read_fd, ptr, remaining);
+            if (n <= 0) return false;
+            ptr += n;
+            remaining -= static_cast<u32>(n);
+        }
+        return true;
+    };
+
+    auto skip_bytes = [](int read_fd, u32 len) -> bool {
+        return lseek(read_fd, static_cast<off_t>(len), SEEK_CUR) >= 0;
+    };
+
+    constexpr u32 kMaxReplayDataLen = kPageSize + 256;
+
+    WalRecord hdr;
+    while (read_exact(fd, &hdr, sizeof(hdr))) {
+        max_lsn = hdr.lsn;
+        if (hdr.txn_id > max_txn_id) max_txn_id = hdr.txn_id;
+        if (hdr.data_len > kMaxReplayDataLen || !skip_bytes(fd, hdr.data_len)) break;
+        if (hdr.type == WalType::kTxnCommit) {
+            committed[hdr.txn_id] = true;
+        } else if (hdr.type == WalType::kTxnAbort) {
+            aborted[hdr.txn_id] = true;
+        }
+    }
+    bool needs_index_rebuild = false;
+
+    if (db) {
+        if (lseek(fd, 0, SEEK_SET) < 0) {
+            close(fd);
+            return false;
+        }
+
+        while (read_exact(fd, &hdr, sizeof(hdr))) {
+            if (hdr.data_len > kMaxReplayDataLen) break;
+            off_t data_offset = lseek(fd, 0, SEEK_CUR);
+            bool is_data_record = hdr.type == WalType::kInsert ||
+                                  hdr.type == WalType::kDelete ||
+                                  hdr.type == WalType::kUpdate;
+            if (!is_data_record) {
+                if (!skip_bytes(fd, hdr.data_len)) break;
+                continue;
+            }
+
+            Vector<byte> data;
+            data.resize(hdr.data_len);
+            if (hdr.data_len > 0 && !read_exact(fd, data.data(), hdr.data_len)) break;
+            const bool* is_committed = committed.find(hdr.txn_id);
+            if (!(is_committed && *is_committed)) {
+                ReplayRef ref;
+                ref.hdr = hdr;
+                ref.data_offset = data_offset;
+                undo_refs.push_back(ref);
+                continue;
+            }
+
+            if (hdr.type == WalType::kInsert) {
+                struct __attribute__((packed)) InsertHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                    u16 data_size;
+                };
+                if (data.size() < sizeof(InsertHdr)) continue;
+                InsertHdr ih;
+                std::memcpy(&ih, data.data(), sizeof(ih));
+                if (data.size() < sizeof(ih) + ih.data_size) continue;
+                HeapFile* heap = db->get_heap_file(ih.table_id);
+                if (heap) {
+                    bool new_tuple = false;
+                    heap->recover_insert_at(ih.page_id, ih.slot_idx,
+                                            data.data() + sizeof(ih),
+                                            ih.data_size, hdr.lsn, &new_tuple);
+                    if (new_tuple) needs_index_rebuild = true;
+                }
+            } else if (hdr.type == WalType::kDelete) {
+                struct __attribute__((packed)) DeleteHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                };
+                if (data.size() < sizeof(DeleteHdr)) continue;
+                DeleteHdr dh;
+                std::memcpy(&dh, data.data(), sizeof(dh));
+                HeapFile* heap = db->get_heap_file(dh.table_id);
+                if (heap) {
+                    // During recovery, historical txn_id is not in TransactionManager.
+                    // Mark the slot DEAD directly so it's invisible to all scans.
+                    auto res = db->pool().fetch_page(dh.page_id);
+                    if (res.ok()) {
+                        Page* page = res.value();
+                        LinePointer* lp = page->line_pointer(dh.slot_idx);
+                        if (lp) {
+                            lp->mark_dead();
+                            if (hdr.lsn != 0) db->pool().set_page_lsn(dh.page_id, hdr.lsn);
+                            db->pool().mark_dirty(dh.page_id);
+                        }
+                        db->pool().unpin_page(dh.page_id);
+                    }
+                }
+            } else if (hdr.type == WalType::kUpdate) {
+                struct __attribute__((packed)) UpdateHdr {
+                    u32 table_id;
+                    u64 old_page_id;
+                    u16 old_slot_idx;
+                    u64 new_page_id;
+                    u16 new_slot_idx;
+                    u16 data_size;
+                };
+                if (data.size() < sizeof(UpdateHdr)) continue;
+                UpdateHdr uh;
+                std::memcpy(&uh, data.data(), sizeof(uh));
+                if (data.size() < sizeof(uh) + uh.data_size) continue;
+                HeapFile* heap = db->get_heap_file(uh.table_id);
+                if (heap) {
+                    bool ok = heap->recover_update(uh.old_page_id, uh.old_slot_idx,
+                                         uh.new_page_id, uh.new_slot_idx,
+                                         hdr.txn_id,
+                                         data.data() + sizeof(uh),
+                                         uh.data_size, hdr.lsn);
+                    if (ok) {
+                        // Mark old tuple DEAD directly (historical txn_id not in TransactionManager)
+                        auto res = db->pool().fetch_page(uh.old_page_id);
+                        if (res.ok()) {
+                            Page* page = res.value();
+                            LinePointer* lp = page->line_pointer(uh.old_slot_idx);
+                            if (lp) {
+                                lp->mark_dead();
+                                if (hdr.lsn != 0) db->pool().set_page_lsn(uh.old_page_id, hdr.lsn);
+                                db->pool().mark_dirty(uh.old_page_id);
+                            }
+                            db->pool().unpin_page(uh.old_page_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (i32 i = static_cast<i32>(undo_refs.size()) - 1; i >= 0; i--) {
+            const ReplayRef& ref = undo_refs[static_cast<u32>(i)];
+            Vector<byte> data;
+            data.resize(ref.hdr.data_len);
+            if (lseek(fd, ref.data_offset, SEEK_SET) < 0) continue;
+            if (ref.hdr.data_len > 0 && !read_exact(fd, data.data(), ref.hdr.data_len)) continue;
+
+            if (ref.hdr.type == WalType::kInsert) {
+                struct __attribute__((packed)) InsertHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                    u16 data_size;
+                };
+                if (data.size() < sizeof(InsertHdr)) continue;
+                InsertHdr ih;
+                std::memcpy(&ih, data.data(), sizeof(ih));
+                HeapFile* heap = db->get_heap_file(ih.table_id);
+                if (heap) {
+                    // Safety check: only rollback if the slot's xmin still matches
+                    // the rolled-back transaction. If a committed INSERT reused the
+                    // slot, the xmin will be different and we must NOT roll it back.
+                    auto pg_res = db->pool().fetch_page(ih.page_id);
+                    if (pg_res.ok()) {
+                        Page* pg = pg_res.value();
+                        const LinePointer* lp = pg->line_pointer(ih.slot_idx);
+                        if (lp && lp->is_valid() && lp->offset + 8 <= kPageSize) {
+                            u64 slot_xmin = 0;
+                            std::memcpy(&slot_xmin, pg->data() + lp->offset, 8);
+                            db->pool().unpin_page(ih.page_id);
+                            if (slot_xmin == ref.hdr.txn_id) {
+                                heap->rollback_insert(ih.page_id, ih.slot_idx, ref.hdr.lsn);
+                                needs_index_rebuild = true;
+                            }
+                        } else {
+                            db->pool().unpin_page(ih.page_id);
+                        }
+                    }
+                }
+            } else if (ref.hdr.type == WalType::kDelete) {
+                struct __attribute__((packed)) DeleteHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                };
+                if (data.size() < sizeof(DeleteHdr)) continue;
+                DeleteHdr dh;
+                std::memcpy(&dh, data.data(), sizeof(dh));
+                HeapFile* heap = db->get_heap_file(dh.table_id);
+                if (heap) {
+                    heap->mark_deleted(dh.page_id, dh.slot_idx, kInvalidTxnId, ref.hdr.lsn);
+                    needs_index_rebuild = true;
+                }
+            } else if (ref.hdr.type == WalType::kUpdate) {
+                struct __attribute__((packed)) UpdateHdr {
+                    u32 table_id;
+                    u64 old_page_id;
+                    u16 old_slot_idx;
+                    u64 new_page_id;
+                    u16 new_slot_idx;
+                    u16 data_size;
+                };
+                if (data.size() < sizeof(UpdateHdr)) continue;
+                UpdateHdr uh;
+                std::memcpy(&uh, data.data(), sizeof(uh));
+                HeapFile* heap = db->get_heap_file(uh.table_id);
+                if (heap) {
+                    heap->mark_deleted(uh.old_page_id, uh.old_slot_idx, kInvalidTxnId, ref.hdr.lsn);
+                    heap->rollback_insert(uh.new_page_id, uh.new_slot_idx, ref.hdr.lsn);
+                    needs_index_rebuild = true;
+                }
+            }
+        }
+    }
+    close(fd);
+
+    next_lsn_ = max_lsn + 1;
+    durable_lsn_ = max_lsn;
+    last_written_lsn_ = max_lsn;
+    if (db && max_txn_id > 0) {
+        db->txn_manager().ensure_next_txn_id_at_least(max_txn_id + 1);
+    }
+    return needs_index_rebuild;
+}
+
+} // namespace minidb

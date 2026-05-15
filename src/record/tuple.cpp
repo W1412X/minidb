@@ -1,0 +1,364 @@
+/**
+ * @file tuple.cpp
+ * @brief Tuple implementation — includes version chain
+ *
+ * Serialization format:
+ *   [xmin 8B][xmax 8B][next_page 8B][next_slot 2B][num_cols 4B][null_bitmap][values]
+ */
+#include "record/tuple.h"
+#include "common/config.h"
+#include <cstring>
+
+namespace minidb {
+
+Tuple::Tuple() : xmin_(0), xmax_(0), next_ver_page_(kNullPageId),
+                 next_ver_slot_(0), schema_(nullptr) {}
+
+Tuple::Tuple(const Schema& schema, const Vector<Value>& values)
+    : xmin_(0), xmax_(0), next_ver_page_(kNullPageId),
+      next_ver_slot_(0), values_(values), schema_(&schema) {}
+
+Value Tuple::get_value(u32 col_idx) const {
+    if (col_idx >= values_.size()) return Value();
+    return values_[col_idx];
+}
+
+void Tuple::set_value(u32 col_idx, const Value& val) {
+    if (col_idx < values_.size()) {
+        values_[col_idx] = val;
+    }
+}
+
+// ============================================================
+// Serialize: [xmin 8B][xmax 8B][next_page 8B][next_slot 2B][num_cols 4B][null_bitmap][values]
+// ============================================================
+
+static constexpr u32 kTupleHeaderSize = 8 + 8 + 8 + 2 + 4;  // 30 bytes
+
+byte* Tuple::serialize_to_page(byte* buf) const {
+    // xmin
+    std::memcpy(buf, &xmin_, 8);
+    buf += 8;
+    // xmax
+    std::memcpy(buf, &xmax_, 8);
+    buf += 8;
+    // next_version
+    std::memcpy(buf, &next_ver_page_, 8);
+    buf += 8;
+    std::memcpy(buf, &next_ver_slot_, 2);
+    buf += 2;
+    // num_cols
+    u32 num_cols = values_.size();
+    std::memcpy(buf, &num_cols, 4);
+    buf += 4;
+
+    // null bitmap
+    u32 bitmap_size = (num_cols + 7) / 8;
+    std::memset(buf, 0, bitmap_size);
+    for (u32 i = 0; i < num_cols; i++) {
+        if (values_[i].is_null()) {
+            buf[i / 8] |= (1 << (i % 8));
+        }
+    }
+    buf += bitmap_size;
+
+    // values
+    for (u32 i = 0; i < num_cols; i++) {
+        if (!values_[i].is_null()) {
+            buf = values_[i].serialize(buf);
+        }
+    }
+
+    return buf;
+}
+
+static bool read_value_bounded(const byte*& buf, const byte* end, Value* out) {
+    if (!out || buf >= end) return false;
+    TypeId type = static_cast<TypeId>(*buf);
+    buf++;
+    switch (type) {
+        case TypeId::kBool:
+            if (buf + 1 > end) return false;
+            *out = Value(*buf == 1);
+            buf += 1;
+            return true;
+        case TypeId::kInt32: {
+            if (buf + 4 > end) return false;
+            i32 v;
+            std::memcpy(&v, buf, 4);
+            *out = Value(v);
+            buf += 4;
+            return true;
+        }
+        case TypeId::kInt64: {
+            if (buf + 8 > end) return false;
+            i64 v;
+            std::memcpy(&v, buf, 8);
+            *out = Value(v);
+            buf += 8;
+            return true;
+        }
+        case TypeId::kFloat: {
+            if (buf + 4 > end) return false;
+            float v;
+            std::memcpy(&v, buf, 4);
+            *out = Value(v);
+            buf += 4;
+            return true;
+        }
+        case TypeId::kDouble: {
+            if (buf + 8 > end) return false;
+            double v;
+            std::memcpy(&v, buf, 8);
+            *out = Value(v);
+            buf += 8;
+            return true;
+        }
+        case TypeId::kVarchar: {
+            if (buf + 4 > end) return false;
+            u32 len;
+            std::memcpy(&len, buf, 4);
+            buf += 4;
+            if (buf + len > end) return false;
+            *out = Value(String(reinterpret_cast<const char*>(buf), len));
+            buf += len;
+            return true;
+        }
+        case TypeId::kNull:
+            *out = Value();
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool skip_value_bounded(const byte*& buf, const byte* end) {
+    if (buf >= end) return false;
+    TypeId type = static_cast<TypeId>(*buf);
+    buf++;
+    switch (type) {
+        case TypeId::kBool:
+            if (buf + 1 > end) return false;
+            buf += 1;
+            return true;
+        case TypeId::kInt32:
+        case TypeId::kFloat:
+            if (buf + 4 > end) return false;
+            buf += 4;
+            return true;
+        case TypeId::kInt64:
+        case TypeId::kDouble:
+            if (buf + 8 > end) return false;
+            buf += 8;
+            return true;
+        case TypeId::kVarchar: {
+            if (buf + 4 > end) return false;
+            u32 len;
+            std::memcpy(&len, buf, 4);
+            buf += 4;
+            if (buf + len > end) return false;
+            buf += len;
+            return true;
+        }
+        case TypeId::kNull:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool column_projected(u32 col_idx, const Vector<u32>& projected, u32* out_pos) {
+    for (u32 i = 0; i < projected.size(); i++) {
+        if (projected[i] == col_idx) {
+            if (out_pos) *out_pos = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+Tuple Tuple::deserialize_from_page(const byte* buf, const Schema& schema) {
+    return deserialize_from_page(buf, schema, kPageSize);
+}
+
+Tuple Tuple::deserialize_from_page(const byte* buf, const Schema& schema, u32 length) {
+    Tuple tuple;
+    tuple.schema_ = &schema;
+    if (!buf || length < kTupleHeaderSize) return tuple;
+    const byte* end = buf + length;
+
+    // xmin
+    std::memcpy(&tuple.xmin_, buf, 8);
+    buf += 8;
+    // xmax
+    std::memcpy(&tuple.xmax_, buf, 8);
+    buf += 8;
+    // next_version
+    std::memcpy(&tuple.next_ver_page_, buf, 8);
+    buf += 8;
+    std::memcpy(&tuple.next_ver_slot_, buf, 2);
+    buf += 2;
+    // num_cols
+    u32 num_cols;
+    std::memcpy(&num_cols, buf, 4);
+    buf += 4;
+    static constexpr u32 kMaxTupleColumns = 4096;
+    if (num_cols > kMaxTupleColumns) {
+        tuple.values_.clear();
+        return tuple;
+    }
+
+    // null bitmap
+    u32 bitmap_size = (num_cols + 7) / 8;
+    if (buf + bitmap_size > end) {
+        tuple.values_.clear();
+        return tuple;
+    }
+    const byte* bitmap = buf;
+    buf += bitmap_size;
+
+    // values
+    tuple.values_.clear();
+    for (u32 i = 0; i < num_cols; i++) {
+        if (bitmap[i / 8] & (1 << (i % 8))) {
+            if (i < schema.column_count()) {
+                tuple.values_.push_back(Value());
+            }
+        } else {
+            Value val;
+            if (!read_value_bounded(buf, end, &val)) {
+                tuple.values_.clear();
+                return tuple;
+            }
+            if (i < schema.column_count()) {
+                tuple.values_.push_back(static_cast<Value&&>(val));
+            }
+        }
+    }
+    // Pad missing columns (from ADD COLUMN) with default values
+    while (tuple.values_.size() < schema.column_count()) {
+        u32 col_idx = static_cast<u32>(tuple.values_.size());
+        const Column& col = schema.get_column(col_idx);
+        Value default_val;
+        if (!col.default_value.empty()) {
+            // Parse default value based on column type
+            if (col.type == TypeId::kInt32 || col.type == TypeId::kInt64) {
+                char* end = nullptr;
+                long v = strtol(col.default_value.c_str(), &end, 10);
+                default_val = Value(static_cast<i64>(v));
+            } else if (col.type == TypeId::kFloat || col.type == TypeId::kDouble) {
+                char* end = nullptr;
+                double v = strtod(col.default_value.c_str(), &end);
+                default_val = Value(v);
+            } else if (col.type == TypeId::kBool) {
+                default_val = Value(col.default_value == "true" || col.default_value == "1" ||
+                                    col.default_value == "TRUE");
+            } else {
+                default_val = Value(col.default_value);
+            }
+        }
+        tuple.values_.push_back(static_cast<Value&&>(default_val));
+    }
+
+    return tuple;
+}
+
+Tuple Tuple::deserialize_projected_from_page(const byte* buf,
+                                             const Schema& source_schema,
+                                             const Schema& output_schema,
+                                             const Vector<u32>& projected_columns,
+                                             u32 length) {
+    if (projected_columns.empty()) {
+        return deserialize_from_page(buf, output_schema, length);
+    }
+
+    Tuple tuple;
+    tuple.schema_ = &output_schema;
+    if (!buf || length < kTupleHeaderSize) return tuple;
+    const byte* end = buf + length;
+
+    std::memcpy(&tuple.xmin_, buf, 8);
+    buf += 8;
+    std::memcpy(&tuple.xmax_, buf, 8);
+    buf += 8;
+    std::memcpy(&tuple.next_ver_page_, buf, 8);
+    buf += 8;
+    std::memcpy(&tuple.next_ver_slot_, buf, 2);
+    buf += 2;
+    u32 num_cols;
+    std::memcpy(&num_cols, buf, 4);
+    buf += 4;
+    static constexpr u32 kMaxTupleColumns = 4096;
+    if (num_cols > kMaxTupleColumns) return tuple;
+
+    u32 bitmap_size = (num_cols + 7) / 8;
+    if (buf + bitmap_size > end) return tuple;
+    const byte* bitmap = buf;
+    buf += bitmap_size;
+
+    tuple.values_.clear();
+    for (u32 i = 0; i < projected_columns.size(); i++) tuple.values_.push_back(Value());
+
+    for (u32 i = 0; i < num_cols; i++) {
+        u32 out_pos = 0;
+        bool needed = column_projected(i, projected_columns, &out_pos);
+        bool is_null_col = (bitmap[i / 8] & (1 << (i % 8))) != 0;
+        if (is_null_col) {
+            if (needed && out_pos < tuple.values_.size()) tuple.values_[out_pos] = Value();
+            continue;
+        }
+        if (needed && out_pos < tuple.values_.size()) {
+            Value val;
+            if (!read_value_bounded(buf, end, &val)) {
+                tuple.values_.clear();
+                return tuple;
+            }
+            tuple.values_[out_pos] = static_cast<Value&&>(val);
+        } else if (!skip_value_bounded(buf, end)) {
+            tuple.values_.clear();
+            return tuple;
+        }
+    }
+
+    for (u32 i = 0; i < projected_columns.size(); i++) {
+        u32 source_col = projected_columns[i];
+        if (source_col < num_cols || source_col >= source_schema.column_count()) continue;
+        const Column& col = source_schema.get_column(source_col);
+        if (!col.default_value.empty()) {
+            if (col.type == TypeId::kInt32 || col.type == TypeId::kInt64) {
+                char* parse_end = nullptr;
+                long v = strtol(col.default_value.c_str(), &parse_end, 10);
+                tuple.values_[i] = Value(static_cast<i64>(v));
+            } else if (col.type == TypeId::kFloat || col.type == TypeId::kDouble) {
+                char* parse_end = nullptr;
+                double v = strtod(col.default_value.c_str(), &parse_end);
+                tuple.values_[i] = Value(v);
+            } else if (col.type == TypeId::kBool) {
+                tuple.values_[i] = Value(col.default_value == "true" || col.default_value == "1" ||
+                                         col.default_value == "TRUE");
+            } else {
+                tuple.values_[i] = Value(col.default_value);
+            }
+        }
+    }
+    return tuple;
+}
+
+u32 Tuple::serialized_size() const {
+    u32 num_cols = values_.size();
+    u32 size = kTupleHeaderSize;
+    size += (num_cols + 7) / 8;
+    for (u32 i = 0; i < num_cols; i++) {
+        if (!values_[i].is_null()) {
+            size += values_[i].serialized_size();
+        }
+    }
+    return size;
+}
+
+int Tuple::compare(const Tuple& other, u32 col_idx) const {
+    if (col_idx >= values_.size() || col_idx >= other.values_.size()) return 0;
+    return values_[col_idx].compare(other.values_[col_idx]);
+}
+
+} // namespace minidb
