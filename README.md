@@ -2,6 +2,8 @@
 
 A PostgreSQL-style relational database engine built in C++20, featuring MVCC snapshot isolation, WAL-first crash recovery, B+ tree indexing, cost-based query optimization, partitioned buffer management, low-memory spill paths, and a TCP server with admission control.
 
+> Most of the code written by GPT-5.5
+
 ## Features
 
 ### SQL Support (19 statement types + 7 expression types)
