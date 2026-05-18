@@ -15,6 +15,12 @@ struct OptimizerConfig {
     bool enable_indexscan = true;
     bool enable_indexonlyscan = true;
     bool enable_hashjoin = true;
+    bool remote_storage = false;
+    double local_seq_page_cost = 0.03;
+    double local_random_page_cost = 0.08;
+    double remote_seq_page_cost = 0.20;
+    double remote_random_page_cost = 0.65;
+    double remote_round_trip_cost = 0.50;
 };
 
 class Optimizer {

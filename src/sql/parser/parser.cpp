@@ -30,6 +30,10 @@ Statement Parser::parse() {
         case TokenType::KW_EXPLAIN: {
             lexer_.consume_token();
             stmt.type = StmtType::kExplain;
+            if (check_keyword(TokenType::KW_ANALYZE)) {
+                lexer_.consume_token();
+                stmt.explain_analyze = true;
+            }
             auto inner = make_unique<Statement>();
             Token next = peek();
             switch (next.type) {

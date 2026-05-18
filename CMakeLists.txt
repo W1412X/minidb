@@ -33,6 +33,9 @@ target_include_directories(minidb_lib PUBLIC src/)
 add_executable(minidb src/main.cpp)
 target_link_libraries(minidb PRIVATE minidb_lib pthread)
 
+add_executable(minidb_pageserver src/pageserver_main.cpp)
+target_link_libraries(minidb_pageserver PRIVATE minidb_lib pthread)
+
 # 测试
 option(BUILD_TESTS "Build tests" ON)
 if(BUILD_TESTS)

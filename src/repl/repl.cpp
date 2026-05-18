@@ -93,6 +93,7 @@ static OptimizerConfig optimizer_config_from_db(const Database& db) {
     cfg.enable_hashjoin = db.config().enable_hashjoin;
     cfg.enable_indexscan = db.config().enable_indexscan;
     cfg.enable_indexonlyscan = db.config().enable_indexonlyscan;
+    cfg.remote_storage = db.config().storage_mode == "remote";
     return cfg;
 }
 
@@ -435,6 +436,38 @@ void REPL::execute_sql(const String& sql) {
             printf("Plan: cost=%.2f..%.2f rows=%.0f\n",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
             print_plan(plan.get());
+            if (stmt.explain_analyze) {
+                if (is_write_statement_type(stmt.explain_stmt->type)) {
+                    printf("Execution: skipped for write statement\n");
+                } else {
+                    ExecutorFactory factory(db_);
+                    UniquePtr<Executor> exec = factory.create(plan.get());
+                    if (!exec) {
+                        printf("Execution: failed to create executor\n");
+                    } else {
+                        clear_executor_error();
+                        set_executor_deadline_ms(g_repl_statement_timeout_ms != 0
+                            ? g_repl_statement_timeout_ms
+                            : db_.config().statement_timeout_ms);
+                        auto start = std::chrono::steady_clock::now();
+                        u64 rows = 0;
+                        exec->init();
+                        while (true) {
+                            ExecResult row = exec->next();
+                            if (!row.ok()) break;
+                            rows++;
+                        }
+                        auto end = std::chrono::steady_clock::now();
+                        set_executor_deadline_ms(0);
+                        double ms = static_cast<double>(
+                            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()) / 1000.0;
+                        printf("Execution: actual_rows=%llu execution_time_ms=%.3f",
+                               static_cast<unsigned long long>(rows), ms);
+                        if (executor_error()) printf(" error=\"%s\"", executor_error());
+                        printf("\n");
+                    }
+                }
+            }
             printf("\n");
         } else {
             printf("Error: failed to build plan.\n\n");
@@ -547,17 +580,26 @@ void REPL::print_tuple(const Tuple& tuple, const Schema& schema) {
 void REPL::print_plan(const PlanNode* plan, int indent) {
     if (!plan) return;
     for (int i = 0; i < indent; i++) printf("  ");
+    auto print_note = [](const PlanNode* p) {
+        if (p && !p->optimizer_note.empty()) {
+            printf(" note=\"%s\"", p->optimizer_note.c_str());
+        }
+    };
     switch (plan->type) {
         case PlanNodeType::kOneRow:
-            printf("OneRow cost=%.2f..%.2f rows=%.0f\n",
+            printf("OneRow cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
+            print_note(plan);
+            printf("\n");
             break;
         case PlanNodeType::kSeqScan: {
             auto* p = static_cast<const SeqScanPlan*>(plan);
             printf("SeqScan table=%s", p->table_name.c_str());
             if (!p->projected_columns.empty()) printf(" projected_cols=%u", p->projected_columns.size());
-            printf(" cost=%.2f..%.2f rows=%.0f\n",
+            printf(" cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
+            print_note(plan);
+            printf("\n");
             break;
         }
         case PlanNodeType::kIndexScan: {
@@ -569,8 +611,10 @@ void REPL::print_plan(const PlanNode* plan, int indent) {
             } else {
                 printf(" key=%s", p->search_key.to_string().c_str());
             }
-            printf(" cost=%.2f..%.2f rows=%.0f\n",
+            printf(" cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
+            print_note(plan);
+            printf("\n");
             break;
         }
         case PlanNodeType::kIndexOnlyScan: {
@@ -582,8 +626,10 @@ void REPL::print_plan(const PlanNode* plan, int indent) {
             } else {
                 printf(" key=%s", p->search_key.to_string().c_str());
             }
-            printf(" cost=%.2f..%.2f rows=%.0f\n",
+            printf(" cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
+            print_note(plan);
+            printf("\n");
             break;
         }
         case PlanNodeType::kFilter: {

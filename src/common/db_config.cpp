@@ -243,6 +243,44 @@ bool DbConfigLoader::load_file(const String& path, DbConfig* config, String* err
         } else if (std::strcmp(key, "fd_cache_limit") == 0) {
             if (!parse_u64_unit(value, &bytes)) goto bad;
             config->fd_cache_limit = static_cast<u32>(bytes);
+        } else if (std::strcmp(key, "storage_mode") == 0) {
+            if (!ascii_ieq(value, "local") && !ascii_ieq(value, "remote")) goto bad;
+            config->storage_mode = ascii_ieq(value, "remote") ? String("remote") : String("local");
+        } else if (std::strcmp(key, "page_server_dir") == 0) {
+            config->page_server_dir = value;
+        } else if (std::strcmp(key, "page_server_host") == 0) {
+            config->page_server_host = value;
+        } else if (std::strcmp(key, "page_server_port") == 0) {
+            if (!parse_u64_unit(value, &bytes) || bytes > 65535) goto bad;
+            config->page_server_port = static_cast<u16>(bytes);
+        } else if (std::strcmp(key, "storage_read_only") == 0) {
+            if (!parse_bool(value, &config->storage_read_only)) goto bad;
+        } else if (std::strcmp(key, "storage_read_lsn") == 0) {
+            if (!parse_u64_unit(value, &config->storage_read_lsn)) goto bad;
+        } else if (std::strcmp(key, "page_server_replicas") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->page_server_replicas = static_cast<u32>(bytes);
+        } else if (std::strcmp(key, "remote_page_batch_size") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_page_batch_size = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "remote_flush_batch_size") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_flush_batch_size = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "remote_connect_timeout") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_connect_timeout_ms = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "remote_io_timeout") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_io_timeout_ms = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "remote_retry_count") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_retry_count = static_cast<u32>(bytes);
+        } else if (std::strcmp(key, "remote_max_connections") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->remote_max_connections = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "page_server_max_connections") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->page_server_max_connections = static_cast<u32>(bytes == 0 ? 1 : bytes);
         }
         continue;
 
@@ -272,7 +310,12 @@ String DbConfigLoader::describe(const DbConfig& config) {
         "connection_idle_timeout=%llu\nclient_output_buffer_limit=%llu\n"
         "buffer_pool_wait_timeout=%llu\nmax_buffer_waiters=%u\nbuffer_pool_partitions=%u\n"
         "dirty_page_threshold=%u\nbackground_flush_pages=%u\ncheckpoint_flush_after=%u\n"
-        "max_sql_size=%u\n",
+        "max_sql_size=%u\n"
+        "storage_mode=%s\npage_server_dir=%s\npage_server_host=%s\npage_server_port=%u\n"
+        "storage_read_only=%s\nstorage_read_lsn=%llu\n"
+        "page_server_replicas=%u\nremote_page_batch_size=%u\nremote_flush_batch_size=%u\n"
+        "remote_connect_timeout=%llu\nremote_io_timeout=%llu\nremote_retry_count=%u\n"
+        "remote_max_connections=%u\npage_server_max_connections=%u\n",
         static_cast<unsigned long long>(config.shared_buffers_bytes),
         static_cast<unsigned long long>(config.work_mem_bytes),
         static_cast<unsigned long long>(config.query_memory_limit),
@@ -313,7 +356,21 @@ String DbConfigLoader::describe(const DbConfig& config) {
         config.dirty_page_threshold_percent,
         config.background_flush_pages,
         config.checkpoint_flush_after,
-        config.max_sql_size);
+        config.max_sql_size,
+        config.storage_mode.c_str(),
+        config.page_server_dir.c_str(),
+        config.page_server_host.c_str(),
+        config.page_server_port,
+        config.storage_read_only ? "on" : "off",
+        static_cast<unsigned long long>(config.storage_read_lsn),
+        config.page_server_replicas,
+        config.remote_page_batch_size,
+        config.remote_flush_batch_size,
+        static_cast<unsigned long long>(config.remote_connect_timeout_ms),
+        static_cast<unsigned long long>(config.remote_io_timeout_ms),
+        config.remote_retry_count,
+        config.remote_max_connections,
+        config.page_server_max_connections);
     return String(buf);
 }
 

@@ -254,9 +254,10 @@ struct Statement {
     String drop_index_name;
     String analyze_table_name;
     UniquePtr<Statement> explain_stmt;
+    bool explain_analyze;
     double join_hint;  // >0 favors hash join, <0 favors nested loop, 0 = no hint
 
-    Statement() : type(StmtType::kSelect), join_hint(0.0) {}
+    Statement() : type(StmtType::kSelect), explain_analyze(false), join_hint(0.0) {}
 };
 
 inline Expression* Expression::clone() const {

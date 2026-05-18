@@ -14,7 +14,7 @@
 #include "container/hash_map.h"
 #include "container/linked_list.h"
 #include "storage/page.h"
-#include "storage/disk_manager.h"
+#include "storage/page_store.h"
 
 namespace minidb {
 
@@ -52,8 +52,9 @@ struct Frame {
 
 class BufferPool : NonCopyable {
 public:
-    BufferPool(DiskManager* disk_mgr, u32 pool_size, u64 wait_timeout_ms = 5000,
-               u32 max_waiters = 1024, u32 partitions = 1);
+    BufferPool(PageStore* page_store, u32 pool_size, u64 wait_timeout_ms = 5000,
+               u32 max_waiters = 1024, u32 partitions = 1,
+               u32 flush_batch_size = 64);
     ~BufferPool();
 
     // Get page
@@ -93,10 +94,11 @@ private:
     void record_hit();
     void record_miss();
 
-    DiskManager* disk_mgr_;
+    PageStore* page_store_;
     WalManager* wal_mgr_;
     u32 pool_size_;
     u32 partition_count_;
+    u32 flush_batch_size_;
     u64 wait_timeout_ms_;
     u32 max_waiters_;
     Frame* frames_;                    // 固定大小帧Array

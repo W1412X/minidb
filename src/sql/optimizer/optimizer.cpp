@@ -682,7 +682,11 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
                     if (has_usable_index(right_scan->table_id, right_key_idx, &lookup_index_id)) {
                         double expected_matches = right_rows > 0.0 ? output_rows / (left_rows > 0.0 ? left_rows : 1.0) : 1.0;
                         if (expected_matches < 1.0) expected_matches = 1.0;
-                        index_lookup_cost = left_cost + left_rows * (0.15 + expected_matches * 0.02);
+                        double lookup_startup = config_.remote_storage
+                            ? config_.remote_round_trip_cost + config_.remote_random_page_cost
+                            : 0.15;
+                        double lookup_tuple_cost = config_.remote_storage ? 0.08 : 0.02;
+                        index_lookup_cost = left_cost + left_rows * (lookup_startup + expected_matches * lookup_tuple_cost);
                         can_index_lookup = true;
                     }
                 }
@@ -849,9 +853,16 @@ void Optimizer::estimate_scan(PlanNode* plan) {
     if (plan->type == PlanNodeType::kSeqScan) {
         auto* p = static_cast<SeqScanPlan*>(plan);
         plan->plan_rows = estimate_table_rows(p->table_id);
+        double pages = 1.0;
+        TableEntry* table = catalog_ ? catalog_->get_table(p->table_id) : nullptr;
+        if (table && table->stat_num_pages > 0) pages = static_cast<double>(table->stat_num_pages);
+        else if (table && table->num_pages > 0) pages = static_cast<double>(table->num_pages);
+        double page_cost = config_.remote_storage ? config_.remote_seq_page_cost : config_.local_seq_page_cost;
         plan->startup_cost = 0.0;
-        plan->total_cost = plan->plan_rows * 0.05;
-        plan->optimizer_note = "sequential scan path";
+        plan->total_cost = pages * page_cost + plan->plan_rows * 0.05;
+        plan->optimizer_note = config_.remote_storage
+            ? "sequential scan path remote-cost"
+            : "sequential scan path";
         return;
     }
     if (plan->type == PlanNodeType::kIndexScan || plan->type == PlanNodeType::kIndexOnlyScan) {
@@ -899,9 +910,14 @@ void Optimizer::estimate_scan(PlanNode* plan) {
 
         plan->plan_rows = table_rows * idx_selectivity;
         if (plan->plan_rows < 1.0) plan->plan_rows = 1.0;
-        plan->startup_cost = 0.15;
-        plan->total_cost = plan->startup_cost + plan->plan_rows * 0.02;
-        plan->optimizer_note = is_range ? "btree range path" : "btree equality path";
+        double random_cost = config_.remote_storage
+            ? config_.remote_random_page_cost + config_.remote_round_trip_cost
+            : config_.local_random_page_cost;
+        plan->startup_cost = config_.remote_storage ? config_.remote_round_trip_cost : 0.15;
+        plan->total_cost = plan->startup_cost + plan->plan_rows * (0.02 + random_cost);
+        plan->optimizer_note = is_range
+            ? (config_.remote_storage ? "btree range path remote-cost" : "btree range path")
+            : (config_.remote_storage ? "btree equality path remote-cost" : "btree equality path");
     }
 }
 

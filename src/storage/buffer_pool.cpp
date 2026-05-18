@@ -13,10 +13,11 @@ namespace minidb {
 // Constructor / Destructor
 // ============================================================
 
-BufferPool::BufferPool(DiskManager* disk_mgr, u32 pool_size, u64 wait_timeout_ms,
-                       u32 max_waiters, u32 partitions)
-    : disk_mgr_(disk_mgr), wal_mgr_(nullptr), pool_size_(pool_size),
+BufferPool::BufferPool(PageStore* page_store, u32 pool_size, u64 wait_timeout_ms,
+                       u32 max_waiters, u32 partitions, u32 flush_batch_size)
+    : page_store_(page_store), wal_mgr_(nullptr), pool_size_(pool_size),
       partition_count_(partitions == 0 ? 1 : partitions),
+      flush_batch_size_(flush_batch_size == 0 ? 1 : flush_batch_size),
       wait_timeout_ms_(wait_timeout_ms), max_waiters_(max_waiters) {
     if (partition_count_ > pool_size_) partition_count_ = pool_size_ == 0 ? 1 : pool_size_;
     frames_ = new Frame[pool_size];
@@ -117,10 +118,12 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
         if (evict_page_id != kNullPageId) {
             if (need_wal_flush) wal_mgr_->flush();
             if (victim_frame.is_dirty) {
-                disk_mgr_->write_page(evict_page_id, victim_frame.page.data());
+                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                page_store_->write_page(evict_page_id, victim_frame.page.data(),
+                                        victim_frame.page.header()->lsn);
             }
         }
-        disk_mgr_->read_page(page_id, victim_frame.page.data());
+        page_store_->read_page(page_id, victim_frame.page.data());
 
         // Phase 3: Update metadata (holding write lock)
         {
@@ -187,7 +190,9 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
         if (evict_page_id != kNullPageId) {
             if (need_wal_flush) wal_mgr_->flush();
             if (frames_[victim].is_dirty) {
-                disk_mgr_->write_page(evict_page_id, frames_[victim].page.data());
+                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                page_store_->write_page(evict_page_id, frames_[victim].page.data(),
+                                        frames_[victim].page.header()->lsn);
             }
         }
 
@@ -275,12 +280,15 @@ void BufferPool::flush_page(PageId page_id) {
         if (wal_mgr_ && f.page.header()->lsn > wal_mgr_->durable_lsn()) {
             wal_mgr_->flush();
         }
-        disk_mgr_->write_page(f.page_id, f.page.data());
+        if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+        page_store_->write_page(f.page_id, f.page.data(), f.page.header()->lsn);
         f.is_dirty = false;
     }
 }
 
 void BufferPool::flush_all() {
+    Vector<PageWriteRequest> batch;
+    batch.reserve(flush_batch_size_);
     for (u32 p = 0; p < partition_count_; p++) {
         WriteGuard guard(partitions_[p].latch);
         for (u32 i = 0; i < pool_size_; i++) {
@@ -289,9 +297,20 @@ void BufferPool::flush_all() {
                 if (wal_mgr_ && frames_[i].page.header()->lsn > wal_mgr_->durable_lsn()) {
                     wal_mgr_->flush();
                 }
-                disk_mgr_->write_page(frames_[i].page_id, frames_[i].page.data());
+                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                batch.push_back(PageWriteRequest(frames_[i].page_id,
+                                                 frames_[i].page.data(),
+                                                 frames_[i].page.header()->lsn));
+                if (batch.size() >= flush_batch_size_) {
+                    page_store_->write_pages(batch);
+                    batch.clear();
+                }
                 frames_[i].is_dirty = false;
             }
+        }
+        if (!batch.empty()) {
+            page_store_->write_pages(batch);
+            batch.clear();
         }
     }
 }

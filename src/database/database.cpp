@@ -47,10 +47,38 @@ Database::Database(const String& db_dir, const DbConfig& config)
     disk_mgr_ = UniquePtr<DiskManager>(new DiskManager(db_dir, config_.doublewrite,
                                                        config_.page_checksum,
                                                        config_.fd_cache_limit));
-    pool_ = UniquePtr<BufferPool>(new BufferPool(disk_mgr_.get(), pool_frames_from_config(config_),
+    if (config_.storage_mode == "remote") {
+        if (!config_.page_server_host.empty()) {
+            page_store_ = UniquePtr<PageStore>(new RemotePageStoreClient(
+                config_.page_server_host, config_.page_server_port,
+                config_.storage_read_only, config_.storage_read_lsn,
+                config_.remote_page_batch_size,
+                config_.remote_connect_timeout_ms,
+                config_.remote_io_timeout_ms,
+                config_.remote_retry_count,
+                config_.remote_max_connections));
+        } else {
+            String page_server_dir = config_.page_server_dir.empty()
+                ? db_dir + "/page_server"
+                : config_.page_server_dir;
+            page_server_ = UniquePtr<PageServer>(new PageServer(page_server_dir,
+                                                                config_.doublewrite,
+                                                                config_.page_checksum,
+                                                                config_.fd_cache_limit,
+                                                                config_.page_server_replicas));
+            page_store_ = UniquePtr<PageStore>(new RemotePageStore(page_server_.get(),
+                                                                   config_.storage_read_only,
+                                                                   config_.storage_read_lsn,
+                                                                   config_.remote_page_batch_size));
+        }
+    } else {
+        page_store_ = UniquePtr<PageStore>(new LocalPageStore(disk_mgr_.get()));
+    }
+    pool_ = UniquePtr<BufferPool>(new BufferPool(page_store_.get(), pool_frames_from_config(config_),
                                                  config_.buffer_pool_wait_timeout_ms,
                                                  config_.max_buffer_waiters,
-                                                 config_.buffer_pool_partitions));
+                                                 config_.buffer_pool_partitions,
+                                                 config_.remote_flush_batch_size));
     wal_ = UniquePtr<WalManager>(new WalManager(db_dir + "/wal",
                                                 config_.wal_segment_size_bytes,
                                                 config_.wal_fsync,
@@ -135,7 +163,13 @@ void Database::background_maintenance_loop() {
 String Database::stats_summary() const {
     ResourceSnapshot rs = resources_ ? resources_->snapshot() : ResourceSnapshot();
     BufferPoolStats bs = pool_ ? pool_->stats() : BufferPoolStats();
-    char buf[2048];
+    RemotePageStoreClientStats remote_client_stats;
+    PageServerStats page_server_stats;
+    const RemotePageStoreClient* remote_client =
+        page_store_ ? dynamic_cast<const RemotePageStoreClient*>(page_store_.get()) : nullptr;
+    if (remote_client) remote_client_stats = remote_client->stats();
+    if (page_server_) page_server_stats = page_server_->stats();
+    char buf[4096];
     std::snprintf(buf, sizeof(buf),
                   "active_connections=%u\n"
                   "active_queries=%u\n"
@@ -157,6 +191,20 @@ String Database::stats_summary() const {
                   "buffer_wait_timeouts=%lu\n"
                   "buffer_wait_rejections=%lu\n"
                   "dirty_pages=%u\n"
+                  "storage_mode=%s\n"
+                  "page_server_host=%s\n"
+                  "page_server_port=%u\n"
+                  "storage_read_only=%s\n"
+                  "page_server_replicas=%u\n"
+                  "remote_read_batches=%lu\n"
+                  "remote_write_batches=%lu\n"
+                  "remote_retries=%lu\n"
+                  "remote_reconnects=%lu\n"
+                  "remote_failures=%lu\n"
+                  "pageserver_wal_image_bytes=%lu\n"
+                  "pageserver_lazy_apply_hits=%lu\n"
+                  "pageserver_future_page_fallbacks=%lu\n"
+                  "pageserver_rejected_writes=%lu\n"
                   "wal_next_lsn=%lu\n"
                   "wal_durable_lsn=%lu\n"
                   "wal_bytes_since_checkpoint=%lu\n"
@@ -188,6 +236,20 @@ String Database::stats_summary() const {
                   static_cast<unsigned long>(bs.wait_timeouts),
                   static_cast<unsigned long>(bs.wait_rejections),
                   bs.dirty_pages,
+                  config_.storage_mode.c_str(),
+                  config_.page_server_host.c_str(),
+                  config_.page_server_port,
+                  config_.storage_read_only ? "on" : "off",
+                  page_server_ ? page_server_->replica_count() : 0,
+                  static_cast<unsigned long>(remote_client_stats.read_batches),
+                  static_cast<unsigned long>(remote_client_stats.write_batches),
+                  static_cast<unsigned long>(remote_client_stats.retries),
+                  static_cast<unsigned long>(remote_client_stats.reconnects),
+                  static_cast<unsigned long>(remote_client_stats.failures),
+                  static_cast<unsigned long>(page_server_stats.wal_image_bytes),
+                  static_cast<unsigned long>(page_server_stats.lazy_apply_hits),
+                  static_cast<unsigned long>(page_server_stats.future_page_fallbacks),
+                  static_cast<unsigned long>(page_server_stats.rejected_writes),
                   static_cast<unsigned long>(wal_ ? wal_->next_lsn() : 0),
                   static_cast<unsigned long>(wal_ ? wal_->durable_lsn() : 0),
                   static_cast<unsigned long>(wal_ ? wal_->bytes_since_checkpoint() : 0),
@@ -239,10 +301,10 @@ bool Database::drop_table(const String& name) {
 
     for (u32 i = 0; i < index_ids.size(); i++) {
         index_trees_.erase(index_ids[i]);
-        disk_mgr_->delete_file(String("indexes/") + String(index_ids[i]) + ".btree");
+        page_store_->delete_file(String("indexes/") + String(index_ids[i]) + ".btree");
     }
     heap_files_.erase(table_id);
-    disk_mgr_->delete_file(String("tables/") + String(table_id) + ".heap");
+    page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
     save_catalog();
     return true;
 }
@@ -253,7 +315,7 @@ bool Database::drop_index(const String& name) {
     u32 index_id = index->index_id;
     if (!catalog_.drop_index(name)) return false;
     index_trees_.erase(index_id);
-    disk_mgr_->delete_file(String("indexes/") + String(index_id) + ".btree");
+    page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
     save_catalog();
     return true;
 }
@@ -538,8 +600,9 @@ void Database::advance_txn_id_watermark_from_storage() {
 
 void Database::flush() {
     wal_->flush();
+    if (page_store_) page_store_->set_durable_lsn(wal_->durable_lsn());
     pool_->flush_all();
-    disk_mgr_->flush();
+    if (page_store_) page_store_->flush();
     // Sync table row counts for optimizer cost estimation
     for (auto it = heap_files_.begin(); it; it = heap_files_.next(it)) {
         TableEntry* table = catalog_.get_table(it->key);

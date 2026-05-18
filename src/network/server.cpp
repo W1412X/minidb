@@ -210,6 +210,7 @@ static OptimizerConfig optimizer_config_from_db(const Database& db) {
     cfg.enable_hashjoin = db.config().enable_hashjoin;
     cfg.enable_indexscan = db.config().enable_indexscan;
     cfg.enable_indexonlyscan = db.config().enable_indexonlyscan;
+    cfg.remote_storage = db.config().storage_mode == "remote";
     return cfg;
 }
 

@@ -9,6 +9,9 @@
 #include "common/resource_manager.h"
 #include "storage/disk_manager.h"
 #include "storage/buffer_pool.h"
+#include "storage/page_store.h"
+#include "storage/page_server.h"
+#include "storage/remote_page_store_client.h"
 #include "storage/heap_file.h"
 #include "storage/shared_memory.h"
 #include "catalog/catalog.h"
@@ -75,6 +78,8 @@ private:
     String db_dir_;
     DbConfig config_;
     UniquePtr<DiskManager> disk_mgr_;
+    UniquePtr<PageStore> page_store_;
+    UniquePtr<PageServer> page_server_;
     UniquePtr<ResourceManager> resources_;
     UniquePtr<BufferPool> pool_;
     Catalog catalog_;

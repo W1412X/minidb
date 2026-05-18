@@ -51,9 +51,23 @@ add_test(
     COMMAND $<TARGET_FILE:tuple_value_edge_test>
 )
 
+add_executable(page_store_remote_test page_store_remote_test.cpp)
+target_link_libraries(page_store_remote_test PRIVATE minidb_lib pthread)
+target_include_directories(page_store_remote_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_test(
+    NAME page_store_remote_test
+    COMMAND $<TARGET_FILE:page_store_remote_test>
+)
+
 add_test(
     NAME persistence_and_composite
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/persistence_and_composite.sh $<TARGET_FILE:minidb>
+)
+
+add_test(
+    NAME remote_page_store
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/remote_page_store.sh $<TARGET_FILE:minidb>
 )
 
 add_test(

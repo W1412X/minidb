@@ -72,6 +72,21 @@ struct DbConfig {
     bool doublewrite = true;
     bool page_checksum = true;
     u32 fd_cache_limit = 1024;
+
+    String storage_mode = String("local");       // local | remote
+    String page_server_dir = String("");         // empty => <db_dir>/page_server
+    String page_server_host = String("");
+    u16 page_server_port = 15433;
+    bool storage_read_only = false;
+    u64 storage_read_lsn = 0;
+    u32 page_server_replicas = 0;
+    u32 remote_page_batch_size = 64;
+    u32 remote_flush_batch_size = 64;
+    u32 remote_connect_timeout_ms = 1000;
+    u32 remote_io_timeout_ms = 5000;
+    u32 remote_retry_count = 2;
+    u32 remote_max_connections = 8;
+    u32 page_server_max_connections = 1024;
 };
 
 class DbConfigLoader {
