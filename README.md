@@ -2,6 +2,8 @@
 
 A PostgreSQL-style relational database engine built in C++20, featuring MVCC snapshot isolation, WAL-first crash recovery, B+ tree indexing, cost-based query optimization, partitioned buffer management, low-memory spill paths, and a TCP server with admission control.
 
+> Most of the code written by GPT-5.5
+
 ## Features
 
 ### SQL Support (19 statement types + 7 expression types)
@@ -451,49 +453,26 @@ python3 scripts/load_perf_data.py \
 
 ## Architecture
 
-```
-SQL Text
-    │
-    ▼
-┌──────────────┐
-│    Parser    │  Recursive descent → AST (19 statement types)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   Planner    │  AST → PlanNode tree (14+ node types)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Optimizer   │  Cost-based: NDV selectivity, index/join paths, pushdown
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Executor    │  Volcano iterator model (15 executor types)
-│  (15 types)  │  Expression evaluator, deadline enforcement
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┬──────────────┬──────────────┐
-│  Transaction │    Catalog   │ Lock Manager │
-│  Manager     │  (schema +   │ (4 lock modes│
-│  (MVCC,      │   stats)     │  table/row/  │
-│   snapshot)  │              │  key locks)  │
-└──────┬───────┴──────┬───────┴──────┬───────┘
-       │              │              │
-       ▼              ▼              ▼
-┌──────────────┬──────────────┬──────────────┐
-│ Buffer Pool  │  B+ Tree     │ WAL + GC     │
-│ (partitioned │  Indexes     │ (buffered    │
-│  LRU/table)  │              │  recovery)   │
-└──────┬───────┴──────────────┴──────────────┘
-       │
-       ▼
-┌──────────────┐
-│ Disk Manager │  Double-write, checksums, FD cache
-└──────────────┘
+```mermaid
+flowchart TD
+A["SQL Text"]
+
+    A -->B["Parser<br/>Recursive descent → AST(19 statement types)"]
+    B --> C["Planner<br/>AST → PlanNode tree (14+ node types)"]
+    C --> D["Optimizer<br/>Cost-based: NDV selectivity, index/join paths, pushdown"]
+    D --> E["Executor<br/>Volcano iterator model (15 executor types)<br/>Expression evaluator, deadline enforcement"]
+
+    E --> F["Transaction Manager<br/>(MVCC, snapshot)"]
+    E --> G["Catalog<br/>(schema + stats)"]
+    E --> H["Lock Manager<br/>(4 lock modes,<br/>table/row/key locks)"]
+
+    F --> I["Buffer Pool<br/>(partitioned LRU/table)"]
+    G --> J["B+ Tree Indexes"]
+    H --> K["WAL +GC<br/>(buffered recovery)"]
+
+    I --> L["Disk Manager<br/>Double-write, checksums, FD cache"]
+    J --> L
+    K --> L
 ```
 
 ## Project Structure
