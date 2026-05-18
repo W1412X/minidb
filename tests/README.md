@@ -18,6 +18,7 @@
 ## Storage, Recovery, And Concurrency
 
 - `persistence_and_composite.sh`: persistence and composite index behavior.
+- `remote_page_store.sh`: standalone `minidb_pageserver` integration, TCP RemotePageStoreClient, batch remote IO, restart recovery, remote metadata/WAL image persistence, remote-cost EXPLAIN, and remote client stats.
 - `recovery_smoke.sh`: WAL recovery and checkpoint smoke tests.
 - `index_delete_rebuild.sh`: index delete/rebuild consistency.
 - `concurrent_test.py` and `concurrent_test.sh`: multi-client concurrency coverage.
@@ -26,3 +27,4 @@
 
 - `lock_manager_wait_test.cpp`: lock wait/timeout behavior.
 - `tuple_value_edge_test.cpp`: tuple/value edge cases.
+- `page_store_remote_test.cpp`: LocalPageStore compatibility, in-process PageServer semantics, durable-LSN rejection, batch IO, LogIndex restart rebuild, RO snapshot reads, future-page handling, TCP PageServer, and RemotePageStoreClient coverage.
