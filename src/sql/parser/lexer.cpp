@@ -56,6 +56,7 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("LEFT", TokenType::KW_LEFT);
     m.insert("RIGHT", TokenType::KW_RIGHT);
     m.insert("OUTER", TokenType::KW_OUTER);
+    m.insert("CROSS", TokenType::KW_CROSS);
     m.insert("GROUP", TokenType::KW_GROUP);
     m.insert("BY", TokenType::KW_BY);
     m.insert("ORDER", TokenType::KW_ORDER);

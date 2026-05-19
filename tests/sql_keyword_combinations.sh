@@ -15,8 +15,8 @@ INSERT INTO order_items VALUES (1, 1, 2, 12.5), (2, 1, 3, 9.5), (11, 2, 4, 8.0);
 SELECT count FROM order ORDER BY count LIMIT 1;
 SELECT sum + default FROM order WHERE group = 1 ORDER BY id LIMIT 1;
 SELECT LENGTH FROM order WHERE id = 1;
-SELECT COUNT(*) FROM order LEFT JOIN order_items oi WHERE oi.id < 10;
-SELECT COUNT(*) FROM order o LEFT JOIN order_items oi WHERE oi.id < 10;
+SELECT COUNT(*) FROM order CROSS JOIN order_items oi WHERE oi.id < 10;
+SELECT COUNT(*) FROM order o INNER JOIN order_items oi ON o.id = oi.order_id WHERE oi.id < 10;
 SELECT COUNT(*) FROM order o LEFT JOIN order_items oi ON o.id = oi.order_id WHERE oi.id < 10;
 SELECT group, COUNT(*) AS count FROM order GROUP BY group ORDER BY group;
 SELECT o.id AS order, oi.quantity AS group FROM order AS o INNER JOIN order_items AS oi ON o.id = oi.order_id ORDER BY order LIMIT 2;
@@ -55,6 +55,7 @@ fi
 grep -q '^10$' "$OUT_FILE"
 grep -q '^107$' "$OUT_FILE"
 grep -q '^5$' "$OUT_FILE"
+grep -q '^6$' "$OUT_FILE"
 grep -q '^2$' "$OUT_FILE"
 grep -q '^1 | 2$' "$OUT_FILE"
 grep -q '^8$' "$OUT_FILE"

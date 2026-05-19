@@ -33,6 +33,11 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/join_optimizer.sh $<TARGET_FILE:minidb>
 )
 
+add_test(
+    NAME join_syntax_strict
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/join_syntax_strict.sh $<TARGET_FILE:minidb>
+)
+
 add_executable(lock_manager_wait_test lock_manager_wait_test.cpp)
 target_link_libraries(lock_manager_wait_test PRIVATE minidb_lib pthread)
 target_include_directories(lock_manager_wait_test PRIVATE ${CMAKE_SOURCE_DIR}/src)

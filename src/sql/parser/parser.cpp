@@ -244,11 +244,21 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
         stmt->from_tables.push_back(ref);
     }
 
-    // JOINs — ON is optional; no ON means cross join (cartesian product)
+    // JOINs
     while (check_keyword(TokenType::KW_INNER) || check_keyword(TokenType::KW_JOIN) ||
-           check_keyword(TokenType::KW_LEFT)) {
+           check_keyword(TokenType::KW_LEFT) || check_keyword(TokenType::KW_CROSS) ||
+           check_keyword(TokenType::KW_RIGHT)) {
         JoinClause join;
-        if (check_keyword(TokenType::KW_LEFT)) {
+        bool requires_on = true;
+        if (check_keyword(TokenType::KW_RIGHT)) {
+            mark_error();
+            lexer_.consume_token();
+            break;
+        } else if (check_keyword(TokenType::KW_CROSS)) {
+            lexer_.consume_token();
+            join.type = JoinType::kInner;
+            requires_on = false;
+        } else if (check_keyword(TokenType::KW_LEFT)) {
             lexer_.consume_token();
             match_keyword(TokenType::KW_OUTER);
             join.type = JoinType::kLeft;
@@ -264,8 +274,15 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
             join.table.alias = peek().value;
             lexer_.consume_token();
         }
+        if (!requires_on && check_keyword(TokenType::KW_ON)) {
+            mark_error();
+            break;
+        }
         if (match_keyword(TokenType::KW_ON)) {
             join.on_condition = static_cast<UniquePtr<Expression>&&>(parse_expression());
+        } else if (requires_on) {
+            mark_error();
+            break;
         }
         stmt->joins.push_back(static_cast<JoinClause&&>(join));
     }

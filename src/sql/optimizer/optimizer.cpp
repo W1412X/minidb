@@ -301,6 +301,102 @@ static bool extract_join_key_indices(const JoinPlan* plan, u32* left_idx, u32* r
     return false;
 }
 
+static bool schema_contains_expr(const Schema& schema, const Expression* expr) {
+    if (!expr || expr->type != ExprType::kColumnRef) return false;
+    return expr->table_name.empty()
+        ? schema.get_column_index(expr->column_name) >= 0
+        : schema.get_column_index(expr->table_name, expr->column_name) >= 0;
+}
+
+static bool find_expr_table_column_in_subtree(const PlanNode* plan, const Expression* expr,
+                                              u32* table_id, u32* column_idx) {
+    if (!plan || !expr || expr->type != ExprType::kColumnRef) return false;
+
+    switch (plan->type) {
+        case PlanNodeType::kSeqScan: {
+            const auto* scan = static_cast<const SeqScanPlan*>(plan);
+            int idx = expr->table_name.empty()
+                ? scan->output_schema.get_column_index(expr->column_name)
+                : scan->output_schema.get_column_index(expr->table_name, expr->column_name);
+            if (idx < 0) return false;
+            if (table_id) *table_id = scan->table_id;
+            if (column_idx) *column_idx = static_cast<u32>(idx);
+            return true;
+        }
+        case PlanNodeType::kIndexScan: {
+            const auto* scan = static_cast<const IndexScanPlan*>(plan);
+            int idx = expr->table_name.empty()
+                ? scan->output_schema.get_column_index(expr->column_name)
+                : scan->output_schema.get_column_index(expr->table_name, expr->column_name);
+            if (idx < 0) return false;
+            if (table_id) *table_id = scan->table_id;
+            if (column_idx) *column_idx = static_cast<u32>(idx);
+            return true;
+        }
+        case PlanNodeType::kIndexOnlyScan: {
+            const auto* scan = static_cast<const IndexOnlyScanPlan*>(plan);
+            int idx = expr->table_name.empty()
+                ? scan->output_schema.get_column_index(expr->column_name)
+                : scan->output_schema.get_column_index(expr->table_name, expr->column_name);
+            if (idx < 0) return false;
+            if (table_id) *table_id = scan->table_id;
+            if (column_idx) *column_idx = static_cast<u32>(idx);
+            return true;
+        }
+        case PlanNodeType::kFilter:
+            return find_expr_table_column_in_subtree(static_cast<const FilterPlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kProject:
+            return find_expr_table_column_in_subtree(static_cast<const ProjectPlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kLimit:
+            return find_expr_table_column_in_subtree(static_cast<const LimitPlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kSort:
+            return find_expr_table_column_in_subtree(static_cast<const SortPlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kDistinct:
+            return find_expr_table_column_in_subtree(static_cast<const DistinctPlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kAggregate:
+            return find_expr_table_column_in_subtree(static_cast<const AggregatePlan*>(plan)->child.get(),
+                                                     expr, table_id, column_idx);
+        case PlanNodeType::kJoin: {
+            const auto* join = static_cast<const JoinPlan*>(plan);
+            bool on_left = join->left && schema_contains_expr(join->left->output_schema, expr);
+            bool on_right = join->right && schema_contains_expr(join->right->output_schema, expr);
+            if (on_left && !on_right) {
+                return find_expr_table_column_in_subtree(join->left.get(), expr, table_id, column_idx);
+            }
+            if (on_right && !on_left) {
+                return find_expr_table_column_in_subtree(join->right.get(), expr, table_id, column_idx);
+            }
+            return false;
+        }
+        case PlanNodeType::kUnion:
+        case PlanNodeType::kOneRow:
+        case PlanNodeType::kInsert:
+        case PlanNodeType::kDelete:
+        case PlanNodeType::kUpdate:
+            return false;
+    }
+    return false;
+}
+
+static u32 ndv_for_join_expr(Catalog* catalog, const PlanNode* subtree, const Expression* expr) {
+    if (!catalog || !subtree || !expr || expr->type != ExprType::kColumnRef) return 0;
+    u32 table_id = 0;
+    if (!find_expr_table_column_in_subtree(subtree, expr, &table_id, nullptr)) return 0;
+    TableEntry* table = catalog->get_table(table_id);
+    if (!table || !table->stats_valid) return 0;
+
+    int base_idx = expr->table_name.empty()
+        ? table->schema.get_column_index(expr->column_name)
+        : table->schema.get_column_index(expr->table_name, expr->column_name);
+    if (base_idx < 0 || static_cast<u32>(base_idx) >= table->col_stats.size()) return 0;
+    return static_cast<u32>(table->col_stats[static_cast<u32>(base_idx)].ndv);
+}
+
 static void add_required_col(Vector<u32>* cols, u32 idx) {
     if (!cols || cols->contains(idx)) return;
     cols->push_back(idx);
@@ -627,23 +723,13 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
             if (p->on_condition && p->on_condition->type == ExprType::kBinaryOp &&
                 p->on_condition->op == "=" &&
                 p->on_condition->left && p->on_condition->right) {
-                // Try to get NDV from statistics for both sides
-                u32 left_ndv = 0, right_ndv = 0;
-                auto get_ndv = [&](const Expression* expr) -> u32 {
-                    if (!expr || expr->type != ExprType::kColumnRef) return 0;
-                    u32 tid = 0;
-                    if (p->left && p->left->type == PlanNodeType::kSeqScan)
-                        tid = static_cast<SeqScanPlan*>(p->left.get())->table_id;
-                    TableEntry* table = catalog_ ? catalog_->get_table(tid) : nullptr;
-                    if (table && table->stats_valid) {
-                        int idx = table->schema.get_column_index(expr->column_name);
-                        if (idx >= 0 && static_cast<u32>(idx) < table->col_stats.size())
-                            return table->col_stats[idx].ndv;
-                    }
-                    return 0;
-                };
-                left_ndv = get_ndv(p->on_condition->left.get());
-                right_ndv = get_ndv(p->on_condition->right.get());
+                // Try to get NDV from the correct base table on each side.
+                u32 left_ndv = ndv_for_join_expr(catalog_, p->left.get(), p->on_condition->left.get());
+                u32 right_ndv = ndv_for_join_expr(catalog_, p->right.get(), p->on_condition->right.get());
+                if (left_ndv == 0 || right_ndv == 0) {
+                    left_ndv = ndv_for_join_expr(catalog_, p->left.get(), p->on_condition->right.get());
+                    right_ndv = ndv_for_join_expr(catalog_, p->right.get(), p->on_condition->left.get());
+                }
 
                 if (left_ndv > 0 && right_ndv > 0) {
                     // Standard join selectivity: 1 / max(NDV_left, NDV_right)

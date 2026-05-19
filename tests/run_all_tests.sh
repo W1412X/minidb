@@ -28,7 +28,7 @@ echo "============================================"
 echo "  MiniDB Test Suite"
 echo "============================================"
 echo "  Binary: $BIN"
-echo "  Tests:  21 test scripts"
+echo "  Tests:  22 test scripts"
 echo "============================================"
 
 # --- Unit Tests ---
@@ -41,6 +41,7 @@ echo -e "\n[SQL Regression]"
 run_test "regression"     "bash tests/sql_regression.sh $BIN"
 run_test "resource_limits" "bash tests/resource_limits.sh $BIN"
 run_test "keyword_combos" "bash tests/sql_keyword_combinations.sh $BIN"
+run_test "join_syntax"    "bash tests/join_syntax_strict.sh $BIN"
 
 # --- Comprehensive SQL ---
 echo -e "\n[Comprehensive SQL]"
