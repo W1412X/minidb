@@ -37,6 +37,17 @@ static u32 image_checksum(const byte* data) {
     return sum == 0 ? 1 : sum;
 }
 
+class WalImageBuffer {
+public:
+    WalImageBuffer() : buffer_(kPageSize, 0) {}
+
+    byte* data() { return buffer_.data(); }
+    const byte* data() const { return buffer_.data(); }
+
+private:
+    Vector<byte> buffer_;
+};
+
 static u32 upper_bound_lsn(const Vector<PageLogIndexEntry>& list, LSN lsn) {
     u32 left = 0;
     u32 right = list.size();
@@ -57,7 +68,15 @@ PageServer::PageServer(const String& storage_dir, bool doublewrite_enabled,
       primary_(storage_dir, doublewrite_enabled, page_checksum_enabled, fd_cache_limit),
       durable_lsn_(0),
       cached_versions_per_page_(cached_versions_per_page == 0 ? 1 : cached_versions_per_page),
-      wal_image_bytes_(0) {
+      wal_image_bytes_(0),
+      read_ops_(0),
+      write_ops_(0),
+      batch_read_ops_(0),
+      batch_write_ops_(0),
+      lazy_apply_hits_(0),
+      future_page_fallbacks_(0),
+      rejected_writes_(0),
+      wal_image_bytes_stat_(0) {
     mkdir(storage_dir.c_str(), 0755);
     load_wal_index();
     for (u32 i = 0; i < replica_count; i++) {
@@ -90,6 +109,7 @@ void PageServer::load_wal_index() {
 
     FILE* wal = std::fopen(wal_image_path_.c_str(), "rb");
     if (!wal) return;
+    WalImageBuffer wal_buf;
     while (true) {
         long offset = std::ftell(wal);
         if (offset < 0) break;
@@ -97,9 +117,8 @@ void PageServer::load_wal_index() {
         size_t n = std::fread(&hdr, 1, sizeof(hdr), wal);
         if (n == 0) break;
         if (n != sizeof(hdr) || hdr.magic != kRemoteWalMagic || hdr.page_size != kPageSize) break;
-        byte page[kPageSize];
-        if (std::fread(page, 1, kPageSize, wal) != kPageSize) break;
-        if (hdr.checksum != image_checksum(page)) break;
+        if (std::fread(wal_buf.data(), 1, kPageSize, wal) != kPageSize) break;
+        if (hdr.checksum != image_checksum(wal_buf.data())) break;
 
         insert_log_entry_locked(hdr.page_id, PageLogIndexEntry(hdr.lsn, static_cast<u64>(offset)));
         PageMetadata& meta_entry = page_metadata_[hdr.page_id];
@@ -110,7 +129,7 @@ void PageServer::load_wal_index() {
         wal_image_bytes_ = static_cast<u64>(std::ftell(wal));
     }
     std::fclose(wal);
-    stats_.wal_image_bytes = wal_image_bytes_;
+    wal_image_bytes_stat_.store(wal_image_bytes_, std::memory_order_relaxed);
 }
 
 void PageServer::save_metadata_locked() {
@@ -148,7 +167,7 @@ u64 PageServer::append_wal_image_locked(PageId page_id, const byte* page_data, L
     std::fclose(f);
     if (!ok || offset < 0) return 0;
     wal_image_bytes_ = static_cast<u64>(offset) + sizeof(hdr) + kPageSize;
-    stats_.wal_image_bytes = wal_image_bytes_;
+    wal_image_bytes_stat_.store(wal_image_bytes_, std::memory_order_relaxed);
     return static_cast<u64>(offset);
 }
 
@@ -212,12 +231,12 @@ void PageServer::remember_version_locked(PageId page_id, const byte* page_data,
 }
 
 void PageServer::read_page(PageId page_id, byte* page_data) {
-    stats_.read_ops++;
+    read_ops_.fetch_add(1, std::memory_order_relaxed);
     primary_.read_page(page_id, page_data);
 }
 
 void PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
-    stats_.read_ops++;
+    read_ops_.fetch_add(1, std::memory_order_relaxed);
     primary_.read_page(page_id, page_data);
     if (read_lsn == 0) return;
 
@@ -241,13 +260,13 @@ void PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
             } else {
                 future_without_base = true;
             }
-            stats_.future_page_fallbacks++;
+            future_page_fallbacks_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
     if (need_wal && read_wal_image(wal_offset, page_data)) {
         (void)wal_lsn;
-        stats_.lazy_apply_hits++;
+        lazy_apply_hits_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (future_without_base) {
@@ -262,7 +281,7 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
     {
         LockGuard guard(latch_);
         if (durable_lsn_ != 0 && lsn > durable_lsn_) {
-            stats_.rejected_writes++;
+            rejected_writes_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
         wal_offset = append_wal_image_locked(page_id, page_data, lsn);
@@ -273,19 +292,19 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
     for (u32 i = 0; i < replicas_.size(); i++) {
         replicas_[i]->write_page(page_id, page_data);
     }
-    stats_.write_ops++;
+    write_ops_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
 void PageServer::read_pages(const Vector<PageReadRequest>& pages) {
-    stats_.batch_read_ops++;
+    batch_read_ops_.fetch_add(1, std::memory_order_relaxed);
     for (u32 i = 0; i < pages.size(); i++) {
         if (pages[i].data) read_page(pages[i].page_id, pages[i].data);
     }
 }
 
 void PageServer::write_pages(const Vector<PageWriteRequest>& pages) {
-    stats_.batch_write_ops++;
+    batch_write_ops_.fetch_add(1, std::memory_order_relaxed);
     for (u32 i = 0; i < pages.size(); i++) {
         if (pages[i].data) write_page(pages[i].page_id, pages[i].data, pages[i].page_lsn);
     }
@@ -335,9 +354,15 @@ u32 PageServer::cached_version_count(PageId page_id) const {
 }
 
 PageServerStats PageServer::stats() const {
-    LockGuard guard(latch_);
-    PageServerStats out = stats_;
-    out.wal_image_bytes = wal_image_bytes_;
+    PageServerStats out;
+    out.read_ops = read_ops_.load(std::memory_order_relaxed);
+    out.write_ops = write_ops_.load(std::memory_order_relaxed);
+    out.batch_read_ops = batch_read_ops_.load(std::memory_order_relaxed);
+    out.batch_write_ops = batch_write_ops_.load(std::memory_order_relaxed);
+    out.wal_image_bytes = wal_image_bytes_stat_.load(std::memory_order_relaxed);
+    out.lazy_apply_hits = lazy_apply_hits_.load(std::memory_order_relaxed);
+    out.future_page_fallbacks = future_page_fallbacks_.load(std::memory_order_relaxed);
+    out.rejected_writes = rejected_writes_.load(std::memory_order_relaxed);
     return out;
 }
 

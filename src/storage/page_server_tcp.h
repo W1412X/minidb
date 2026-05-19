@@ -5,9 +5,11 @@
 #pragma once
 
 #include "common/defs.h"
+#include "common/mutex.h"
 #include "storage/page_server.h"
 #include <atomic>
 #include <thread>
+#include <vector>
 
 namespace minidb {
 
@@ -35,6 +37,10 @@ private:
     std::atomic<bool> running_;
     std::atomic<u32> active_connections_;
     std::thread accept_thread_;
+    mutable Mutex workers_latch_;
+    mutable Mutex clients_latch_;
+    std::vector<std::thread> worker_threads_;
+    std::vector<int> active_client_fds_;
 };
 
 } // namespace minidb

@@ -13,6 +13,7 @@
 #include "storage/page.h"
 #include "storage/page_store.h"
 #include <array>
+#include <atomic>
 
 namespace minidb {
 
@@ -93,7 +94,14 @@ private:
     HashMap<PageId, Vector<PageVersion>> versions_;
     HashMap<PageId, Vector<PageLogIndexEntry>> log_index_;
     HashMap<PageId, PageMetadata> page_metadata_;
-    PageServerStats stats_;
+    std::atomic<u64> read_ops_;
+    std::atomic<u64> write_ops_;
+    std::atomic<u64> batch_read_ops_;
+    std::atomic<u64> batch_write_ops_;
+    std::atomic<u64> lazy_apply_hits_;
+    std::atomic<u64> future_page_fallbacks_;
+    std::atomic<u64> rejected_writes_;
+    std::atomic<u64> wal_image_bytes_stat_;
 };
 
 class RemotePageStore : public PageStore {

@@ -44,6 +44,10 @@ static void set_timeouts(int fd, u32 timeout_ms) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
+static void shutdown_fd(int fd) {
+    if (fd >= 0) ::shutdown(fd, SHUT_RDWR);
+}
+
 PageServerTcpService::PageServerTcpService(PageServer* server, const String& listen_host,
                                            u16 port, u32 max_connections, u32 io_timeout_ms)
     : server_(server), listen_host_(listen_host), port_(port),
@@ -98,14 +102,27 @@ bool PageServerTcpService::start() {
 }
 
 void PageServerTcpService::stop() {
-    running_.store(false);
+    bool was_running = running_.exchange(false);
     if (listen_fd_ >= 0) {
-        ::shutdown(listen_fd_, SHUT_RDWR);
+        shutdown_fd(listen_fd_);
         ::close(listen_fd_);
         listen_fd_ = -1;
     }
+    if (was_running) {
+        LockGuard clients_guard(clients_latch_);
+        for (size_t i = 0; i < active_client_fds_.size(); i++) {
+            shutdown_fd(active_client_fds_[i]);
+        }
+    }
     if (accept_thread_.joinable()) {
         accept_thread_.join();
+    }
+    {
+        LockGuard workers_guard(workers_latch_);
+        for (size_t i = 0; i < worker_threads_.size(); i++) {
+            if (worker_threads_[i].joinable()) worker_threads_[i].join();
+        }
+        worker_threads_.clear();
     }
 }
 
@@ -128,12 +145,26 @@ void PageServerTcpService::accept_loop() {
             continue;
         }
         active_connections_.fetch_add(1);
-        std::thread([this, fd]() {
+        LockGuard workers_guard(workers_latch_);
+        worker_threads_.emplace_back([this, fd]() {
             set_timeouts(fd, io_timeout_ms_);
+            {
+                LockGuard clients_guard(clients_latch_);
+                active_client_fds_.push_back(fd);
+            }
             handle_client(fd);
+            {
+                LockGuard clients_guard(clients_latch_);
+                for (size_t i = 0; i < active_client_fds_.size(); i++) {
+                    if (active_client_fds_[i] == fd) {
+                        active_client_fds_.erase(active_client_fds_.begin() + i);
+                        break;
+                    }
+                }
+            }
             ::close(fd);
             active_connections_.fetch_sub(1);
-        }).detach();
+        });
     }
 }
 

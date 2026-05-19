@@ -8,12 +8,24 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <netdb.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
 #include <chrono>
 #include <unistd.h>
 
 using namespace minidb;
+
+static void check(bool cond, const char* expr, const char* file, int line) {
+    if (cond) return;
+    std::fprintf(stderr, "CHECK failed at %s:%d: %s\n", file, line, expr);
+    std::fflush(stderr);
+    std::abort();
+}
+
+#undef assert
+#define assert(expr) check((expr), #expr, __FILE__, __LINE__)
 
 static String make_temp_dir(const char* pattern) {
     char tmpl[256];
@@ -27,6 +39,28 @@ static void fill_page(Page* page, PageId page_id, LSN lsn, byte marker) {
     page->init(page_id, PageType::kHeapData);
     page->header()->lsn = lsn;
     std::memset(page->data() + sizeof(PageHeader), marker, kPageSize - sizeof(PageHeader));
+}
+
+static int connect_tcp(const char* host, u16 port) {
+    char port_buf[16];
+    std::snprintf(port_buf, sizeof(port_buf), "%u", port);
+    addrinfo hints;
+    std::memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo(host, port_buf, &hints, &res) != 0) return -1;
+
+    int fd = -1;
+    for (addrinfo* ai = res; ai; ai = ai->ai_next) {
+        fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        ::close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    return fd;
 }
 
 static void assert_local_page_store_roundtrip() {
@@ -224,6 +258,64 @@ static void assert_tcp_remote_page_store_client() {
     service.stop();
 }
 
+static void assert_page_server_stats_are_thread_safe() {
+    String dir = make_temp_dir("minidb-page-stats.XXXXXX");
+    PageServer server(dir, true, true, 32, 0);
+    server.set_durable_lsn(1000);
+
+    const u32 worker_count = 4;
+    const u32 iterations = 32;
+    std::thread workers[worker_count];
+    for (u32 w = 0; w < worker_count; w++) {
+        workers[w] = std::thread([&server, w]() {
+            for (u32 i = 0; i < iterations; i++) {
+                PageId pid = make_page_id(20 + w, i + 1);
+                Page page;
+                fill_page(&page, pid, static_cast<LSN>(100 + w * iterations + i),
+                          static_cast<byte>(0x40 + w));
+                assert(server.write_page(pid, page.data(), page.header()->lsn));
+                byte out[kPageSize];
+                std::memset(out, 0, sizeof(out));
+                server.read_page(pid, out);
+                assert(reinterpret_cast<PageHeader*>(out)->lsn == page.header()->lsn);
+                assert(out[sizeof(PageHeader)] == static_cast<byte>(0x40 + w));
+            }
+        });
+    }
+    for (u32 w = 0; w < worker_count; w++) workers[w].join();
+
+    PageServerStats stats = server.stats();
+    const u64 expected = static_cast<u64>(worker_count) * iterations;
+    assert(stats.write_ops == expected);
+    assert(stats.read_ops == expected);
+    assert(stats.rejected_writes == 0);
+}
+
+static void assert_tcp_stop_joins_active_handlers() {
+    String dir = make_temp_dir("minidb-page-stop.XXXXXX");
+    PageServer server(dir, true, true, 32, 0);
+    PageServerTcpService service(&server, "127.0.0.1", 0, 16, 3000);
+    assert(service.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    int fd = connect_tcp("127.0.0.1", service.port());
+    assert(fd >= 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    bool stopped = false;
+    std::thread stopper([&service, &stopped]() {
+        service.stop();
+        stopped = true;
+    });
+    stopper.join();
+    assert(stopped);
+
+    char byte = 0;
+    ssize_t n = ::recv(fd, &byte, 1, 0);
+    assert(n <= 0);
+    ::close(fd);
+}
+
 int main() {
     assert_local_page_store_roundtrip();
     assert_remote_page_store_features();
@@ -231,5 +323,7 @@ int main() {
     assert_log_index_survives_restart();
     assert_log_index_binary_search_boundaries();
     assert_tcp_remote_page_store_client();
+    assert_page_server_stats_are_thread_safe();
+    assert_tcp_stop_joins_active_handlers();
     return 0;
 }
