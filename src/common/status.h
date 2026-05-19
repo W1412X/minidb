@@ -6,6 +6,7 @@
 
 #include "common/defs.h"
 #include "container/string.h"
+#include <new>
 
 namespace minidb {
 

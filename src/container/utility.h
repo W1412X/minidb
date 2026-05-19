@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <type_traits>
 
 namespace minidb {
 
@@ -51,8 +52,10 @@ struct Pair {
 };
 
 // === Swap ===
+// Exclude pointers so ADL does not compete with std::swap (e.g. std::unique_ptr::reset).
 template<typename T>
-void swap(T& a, T& b) {
+typename std::enable_if<!std::is_pointer<T>::value, void>::type
+swap(T& a, T& b) {
     T tmp = move(a);
     a = move(b);
     b = move(tmp);

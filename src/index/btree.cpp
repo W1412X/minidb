@@ -1129,7 +1129,7 @@ bool BPlusTree::insert_into_parent(PageId parent_id, const Value& key,
     internal_set_num_keys(parent, n + 1);
 
     pool_->mark_dirty(parent_id);
-    bool need_split = (n + 1 > kIndexMaxKeys);
+    bool need_split = (static_cast<u32>(n) + 1 > kIndexMaxKeys);
     pool_->unpin_page(parent_id);
 
     if (need_split) {
