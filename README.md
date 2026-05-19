@@ -4,7 +4,11 @@ MiniDB is a C++20 relational database engine with a PostgreSQL-style storage mod
 
 The project currently includes MVCC snapshot isolation, WAL-based crash recovery, B+ tree indexes, a cost-based optimizer, spill paths for memory pressure, a TCP SQL server, and a TCP PageServer/RemotePageStoreClient path for compute/storage separation.
 
-> Status: educational/prototype database. The tested distributed mode supports a single writer compute and read-only snapshot reads over remote page storage. It is not a full production distributed database with Raft, multi-writer distributed transactions, automatic failover, or shard rebalancing.
+> Status: educational/prototype database. MiniDB is intended for learning and experimentation, not production use.
+>
+> Test coverage is currently limited. Untested areas may still contain bugs, especially around concurrency, crash recovery, optimizer rewrites, index maintenance, and shared-storage mode. These issues are being gradually investigated and fixed.
+>
+> The tested shared-storage mode supports a single writer compute and read-only snapshot reads over remote page storage. It is not a full production distributed database with Raft, multi-writer distributed transactions, automatic failover, shard rebalancing, or distributed lock/transaction protocols.
 
 ## Implemented Features
 
