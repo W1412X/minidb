@@ -50,7 +50,8 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, handle_signal);
 
     minidb::PageServer server(data_dir, config.doublewrite, config.page_checksum,
-                              config.fd_cache_limit, config.page_server_replicas);
+                              config.fd_cache_limit, config.page_server_replicas,
+                              config.page_server_cached_versions_per_page);
     minidb::PageServerTcpService service(&server, host, static_cast<minidb::u16>(port),
                                          config.page_server_max_connections,
                                          config.remote_io_timeout_ms);

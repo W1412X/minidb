@@ -65,7 +65,8 @@ Database::Database(const String& db_dir, const DbConfig& config)
                                                                 config_.doublewrite,
                                                                 config_.page_checksum,
                                                                 config_.fd_cache_limit,
-                                                                config_.page_server_replicas));
+                                                                config_.page_server_replicas,
+                                                                config_.page_server_cached_versions_per_page));
             page_store_ = UniquePtr<PageStore>(new RemotePageStore(page_server_.get(),
                                                                    config_.storage_read_only,
                                                                    config_.storage_read_lsn,

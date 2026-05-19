@@ -281,6 +281,9 @@ bool DbConfigLoader::load_file(const String& path, DbConfig* config, String* err
         } else if (std::strcmp(key, "page_server_max_connections") == 0) {
             if (!parse_u64_unit(value, &bytes)) goto bad;
             config->page_server_max_connections = static_cast<u32>(bytes == 0 ? 1 : bytes);
+        } else if (std::strcmp(key, "page_server_cached_versions_per_page") == 0) {
+            if (!parse_u64_unit(value, &bytes)) goto bad;
+            config->page_server_cached_versions_per_page = static_cast<u32>(bytes == 0 ? 1 : bytes);
         }
         continue;
 
@@ -315,7 +318,8 @@ String DbConfigLoader::describe(const DbConfig& config) {
         "storage_read_only=%s\nstorage_read_lsn=%llu\n"
         "page_server_replicas=%u\nremote_page_batch_size=%u\nremote_flush_batch_size=%u\n"
         "remote_connect_timeout=%llu\nremote_io_timeout=%llu\nremote_retry_count=%u\n"
-        "remote_max_connections=%u\npage_server_max_connections=%u\n",
+        "remote_max_connections=%u\npage_server_max_connections=%u\n"
+        "page_server_cached_versions_per_page=%u\n",
         static_cast<unsigned long long>(config.shared_buffers_bytes),
         static_cast<unsigned long long>(config.work_mem_bytes),
         static_cast<unsigned long long>(config.query_memory_limit),
@@ -370,7 +374,8 @@ String DbConfigLoader::describe(const DbConfig& config) {
         static_cast<unsigned long long>(config.remote_io_timeout_ms),
         config.remote_retry_count,
         config.remote_max_connections,
-        config.page_server_max_connections);
+        config.page_server_max_connections,
+        config.page_server_cached_versions_per_page);
     return String(buf);
 }
 

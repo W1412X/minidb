@@ -42,8 +42,7 @@ static void assert_local_page_store_roundtrip() {
     byte out[kPageSize];
     std::memset(out, 0, sizeof(out));
     store.read_page(pid, out);
-    const PageHeader* hdr = reinterpret_cast<const PageHeader*>(out);
-    assert(hdr->page_id == pid);
+    assert(reinterpret_cast<const PageHeader*>(out)->page_id == pid);
     assert(out[sizeof(PageHeader)] == 0x11);
 }
 
@@ -63,8 +62,7 @@ static void assert_remote_page_store_features() {
 
     Page v10;
     fill_page(&v10, pid, 10, 0xaa);
-    bool rejected = server.write_page(pid, v10.data(), 10);
-    assert(!rejected);
+    assert(!server.write_page(pid, v10.data(), 10));
     assert(server.latest_page_lsn(pid) == 5);
 
     server.set_durable_lsn(10);
@@ -151,6 +149,57 @@ static void assert_log_index_survives_restart() {
     }
 }
 
+static void assert_log_index_binary_search_boundaries() {
+    String dir = make_temp_dir("minidb-page-bsearch.XXXXXX");
+    PageServer server(dir, true, true, 32, 0, 2);
+    PageId pid = make_page_id(16, 1);
+
+    server.set_durable_lsn(50);
+    Page p20;
+    Page p10;
+    Page p30;
+    fill_page(&p20, pid, 20, 0x20);
+    fill_page(&p10, pid, 10, 0x10);
+    fill_page(&p30, pid, 30, 0x30);
+
+    assert(server.write_page(pid, p20.data(), 20));
+    assert(server.write_page(pid, p10.data(), 10));
+    assert(server.write_page(pid, p30.data(), 30));
+    assert(server.log_index_size(pid) == 3);
+    assert(server.latest_page_lsn(pid) == 30);
+    assert(server.cached_versions_per_page() == 2);
+    assert(server.cached_version_count(pid) == 2);
+
+    byte before_first[kPageSize];
+    std::memset(before_first, 0x7f, sizeof(before_first));
+    server.read_page(pid, 5, before_first);
+    assert(reinterpret_cast<const PageHeader*>(before_first)->lsn == 0);
+
+    byte exact[kPageSize];
+    std::memset(exact, 0, sizeof(exact));
+    server.read_page(pid, 10, exact);
+    assert(reinterpret_cast<PageHeader*>(exact)->lsn == 10);
+    assert(exact[sizeof(PageHeader)] == 0x10);
+
+    byte between[kPageSize];
+    std::memset(between, 0, sizeof(between));
+    server.read_page(pid, 25, between);
+    assert(reinterpret_cast<PageHeader*>(between)->lsn == 20);
+    assert(between[sizeof(PageHeader)] == 0x20);
+
+    byte after_last[kPageSize];
+    std::memset(after_last, 0, sizeof(after_last));
+    server.read_page(pid, 35, after_last);
+    assert(reinterpret_cast<PageHeader*>(after_last)->lsn == 30);
+    assert(after_last[sizeof(PageHeader)] == 0x30);
+
+    byte evicted_but_reconstructable[kPageSize];
+    std::memset(evicted_but_reconstructable, 0, sizeof(evicted_but_reconstructable));
+    server.read_page(pid, 10, evicted_but_reconstructable);
+    assert(reinterpret_cast<PageHeader*>(evicted_but_reconstructable)->lsn == 10);
+    assert(evicted_but_reconstructable[sizeof(PageHeader)] == 0x10);
+}
+
 static void assert_tcp_remote_page_store_client() {
     String dir = make_temp_dir("minidb-page-tcp.XXXXXX");
     PageServer server(dir, true, true, 32, 1);
@@ -180,6 +229,7 @@ int main() {
     assert_remote_page_store_features();
     assert_batch_io();
     assert_log_index_survives_restart();
+    assert_log_index_binary_search_boundaries();
     assert_tcp_remote_page_store_client();
     return 0;
 }

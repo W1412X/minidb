@@ -87,6 +87,7 @@ struct DbConfig {
     u32 remote_retry_count = 2;
     u32 remote_max_connections = 8;
     u32 page_server_max_connections = 1024;
+    u32 page_server_cached_versions_per_page = 32;
 };
 
 class DbConfigLoader {

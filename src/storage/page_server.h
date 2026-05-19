@@ -50,7 +50,8 @@ struct PageServerStats {
 class PageServer : NonCopyable {
 public:
     PageServer(const String& storage_dir, bool doublewrite_enabled,
-               bool page_checksum_enabled, u32 fd_cache_limit, u32 replica_count = 0);
+               bool page_checksum_enabled, u32 fd_cache_limit, u32 replica_count = 0,
+               u32 cached_versions_per_page = 32);
     ~PageServer();
 
     void read_page(PageId page_id, byte* page_data);
@@ -66,6 +67,8 @@ public:
     LSN latest_page_lsn(PageId page_id) const;
     u32 replica_count() const { return replicas_.size(); }
     u32 log_index_size(PageId page_id) const;
+    u32 cached_version_count(PageId page_id) const;
+    u32 cached_versions_per_page() const { return cached_versions_per_page_; }
     PageServerStats stats() const;
 
 private:
@@ -74,6 +77,7 @@ private:
     u64 append_wal_image_locked(PageId page_id, const byte* page_data, LSN page_lsn);
     bool read_wal_image(u64 offset, byte* page_data) const;
     const PageLogIndexEntry* find_log_entry_locked(PageId page_id, LSN read_lsn) const;
+    void insert_log_entry_locked(PageId page_id, const PageLogIndexEntry& entry);
     void remember_version_locked(PageId page_id, const byte* page_data,
                                  LSN page_lsn, u64 wal_offset);
 
@@ -84,6 +88,7 @@ private:
     Vector<DiskManager*> replicas_;
     mutable Mutex latch_;
     LSN durable_lsn_;
+    u32 cached_versions_per_page_;
     u64 wal_image_bytes_;
     HashMap<PageId, Vector<PageVersion>> versions_;
     HashMap<PageId, Vector<PageLogIndexEntry>> log_index_;

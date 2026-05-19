@@ -37,14 +37,26 @@ static u32 image_checksum(const byte* data) {
     return sum == 0 ? 1 : sum;
 }
 
+static u32 upper_bound_lsn(const Vector<PageLogIndexEntry>& list, LSN lsn) {
+    u32 left = 0;
+    u32 right = list.size();
+    while (left < right) {
+        u32 mid = left + (right - left) / 2;
+        if (list[mid].lsn <= lsn) left = mid + 1;
+        else right = mid;
+    }
+    return left;
+}
+
 PageServer::PageServer(const String& storage_dir, bool doublewrite_enabled,
                        bool page_checksum_enabled, u32 fd_cache_limit,
-                       u32 replica_count)
+                       u32 replica_count, u32 cached_versions_per_page)
     : storage_dir_(storage_dir),
       wal_image_path_(storage_dir + "/remote_wal_images.bin"),
       metadata_path_(storage_dir + "/page_server.meta"),
       primary_(storage_dir, doublewrite_enabled, page_checksum_enabled, fd_cache_limit),
       durable_lsn_(0),
+      cached_versions_per_page_(cached_versions_per_page == 0 ? 1 : cached_versions_per_page),
       wal_image_bytes_(0) {
     mkdir(storage_dir.c_str(), 0755);
     load_wal_index();
@@ -89,7 +101,7 @@ void PageServer::load_wal_index() {
         if (std::fread(page, 1, kPageSize, wal) != kPageSize) break;
         if (hdr.checksum != image_checksum(page)) break;
 
-        log_index_[hdr.page_id].push_back(PageLogIndexEntry(hdr.lsn, static_cast<u64>(offset)));
+        insert_log_entry_locked(hdr.page_id, PageLogIndexEntry(hdr.lsn, static_cast<u64>(offset)));
         PageMetadata& meta_entry = page_metadata_[hdr.page_id];
         if (hdr.lsn >= meta_entry.latest_lsn) {
             meta_entry.latest_lsn = hdr.lsn;
@@ -156,18 +168,28 @@ bool PageServer::read_wal_image(u64 offset, byte* page_data) const {
     return ok;
 }
 
+void PageServer::insert_log_entry_locked(PageId page_id, const PageLogIndexEntry& entry) {
+    Vector<PageLogIndexEntry>& list = log_index_[page_id];
+    if (list.empty() || list.back().lsn <= entry.lsn) {
+        list.push_back(entry);
+        return;
+    }
+    u32 pos = upper_bound_lsn(list, entry.lsn);
+    list.resize(list.size() + 1);
+    for (u32 i = list.size() - 1; i > pos; i--) {
+        list[i] = list[i - 1];
+    }
+    list[pos] = entry;
+}
+
 const PageLogIndexEntry* PageServer::find_log_entry_locked(PageId page_id, LSN read_lsn) const {
     const Vector<PageLogIndexEntry>* list =
         const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(log_index_).find(page_id);
-    if (!list) return nullptr;
-    const PageLogIndexEntry* best = nullptr;
-    for (u32 i = 0; i < list->size(); i++) {
-        const PageLogIndexEntry& e = (*list)[i];
-        if (e.lsn <= read_lsn && (!best || e.lsn > best->lsn)) {
-            best = &e;
-        }
-    }
-    return best;
+    if (!list || list->empty()) return nullptr;
+
+    u32 pos = upper_bound_lsn(*list, read_lsn);
+    if (pos == 0) return nullptr;
+    return &(*list)[pos - 1];
 }
 
 void PageServer::remember_version_locked(PageId page_id, const byte* page_data,
@@ -176,11 +198,12 @@ void PageServer::remember_version_locked(PageId page_id, const byte* page_data,
     version.lsn = page_lsn;
     version.wal_offset = wal_offset;
     std::memcpy(version.data.data(), page_data, kPageSize);
-    versions_[page_id].push_back(version);
-    if (versions_[page_id].size() > 8) {
-        versions_[page_id].erase(versions_[page_id].begin());
+    Vector<PageVersion>& page_versions = versions_[page_id];
+    page_versions.push_back(version);
+    while (page_versions.size() > cached_versions_per_page_) {
+        page_versions.erase(page_versions.begin());
     }
-    log_index_[page_id].push_back(PageLogIndexEntry(page_lsn, wal_offset));
+    insert_log_entry_locked(page_id, PageLogIndexEntry(page_lsn, wal_offset));
     PageMetadata& meta = page_metadata_[page_id];
     if (page_lsn >= meta.latest_lsn) {
         meta.latest_lsn = page_lsn;
@@ -301,6 +324,13 @@ u32 PageServer::log_index_size(PageId page_id) const {
     LockGuard guard(latch_);
     const Vector<PageLogIndexEntry>* list =
         const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(log_index_).find(page_id);
+    return list ? list->size() : 0;
+}
+
+u32 PageServer::cached_version_count(PageId page_id) const {
+    LockGuard guard(latch_);
+    const Vector<PageVersion>* list =
+        const_cast<HashMap<PageId, Vector<PageVersion>>&>(versions_).find(page_id);
     return list ? list->size() : 0;
 }
 
