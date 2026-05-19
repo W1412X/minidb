@@ -2,6 +2,7 @@
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
 #include <cstring>
+#include <vector>
 #include <unistd.h>
 
 namespace minidb {
@@ -11,7 +12,8 @@ HashJoinExecutor::HashJoinExecutor(
     UniquePtr<Expression> on_condition, const Schema& output_schema,
     JoinType join_type,
     u64 work_mem_bytes,
-    bool build_left)
+    bool build_left,
+    const char* temp_dir)
     : left_(static_cast<UniquePtr<Executor>&&>(left)),
       right_(static_cast<UniquePtr<Executor>&&>(right)),
       on_condition_(static_cast<UniquePtr<Expression>&&>(on_condition)),
@@ -20,6 +22,7 @@ HashJoinExecutor::HashJoinExecutor(
       current_left_matched_(false), join_type_(join_type),
       build_left_(join_type == JoinType::kInner && build_left),
       built_(false), work_mem_bytes_(work_mem_bytes), spilled_(false),
+      temp_dir_(temp_dir && temp_dir[0] ? temp_dir : "/tmp"),
       right_scan_(nullptr), probe_scan_(nullptr), current_partition_(0),
       grace_ready_(false) {
     std::memset(buckets_, 0, sizeof(buckets_));
@@ -84,10 +87,9 @@ bool HashJoinExecutor::write_spill_tuple(std::FILE* file, const Tuple& tuple) {
     if (!file) return false;
     u32 len = tuple.serialized_size();
     if (std::fwrite(&len, sizeof(len), 1, file) != 1) return false;
-    byte* bytes = new byte[len];
-    tuple.serialize_to_page(bytes);
-    bool ok = std::fwrite(bytes, 1, len, file) == len;
-    delete[] bytes;
+    std::vector<byte> bytes(len);
+    tuple.serialize_to_page(bytes.data());
+    bool ok = std::fwrite(bytes.data(), 1, len, file) == len;
     return ok;
 }
 
@@ -99,10 +101,9 @@ bool HashJoinExecutor::read_spill_tuple(std::FILE* file, const Schema& schema, T
         set_executor_error("corrupt hash join spill file");
         return false;
     }
-    byte* bytes = new byte[len];
-    bool ok = std::fread(bytes, 1, len, file) == len;
-    if (ok) *out = Tuple::deserialize_from_page(bytes, schema, len);
-    delete[] bytes;
+    std::vector<byte> bytes(len);
+    bool ok = std::fread(bytes.data(), 1, len, file) == len;
+    if (ok) *out = Tuple::deserialize_from_page(bytes.data(), schema, len);
     if (!ok) set_executor_error("failed to read hash join spill file");
     return ok;
 }
@@ -188,12 +189,16 @@ void HashJoinExecutor::build_hash_table() {
         right_key_expr_ = rhs;
     }
 
-    char path[] = "/tmp/minidb_hash_join_XXXXXX";
-    int spill_fd = mkstemp(path);
+    std::string spill_template = temp_dir_;
+    if (!spill_template.empty() && spill_template.back() != '/') spill_template += "/";
+    spill_template += "minidb_hash_join_XXXXXX";
+    std::vector<char> path(spill_template.begin(), spill_template.end());
+    path.push_back('\0');
+    int spill_fd = mkstemp(path.data());
     std::FILE* spill_file = nullptr;
     if (spill_fd >= 0) {
         spill_file = fdopen(spill_fd, "wb");
-        if (spill_file) right_spill_path_ = path;
+        if (spill_file) right_spill_path_ = path.data();
         else close(spill_fd);
     }
 
@@ -257,39 +262,70 @@ bool HashJoinExecutor::prepare_grace_partitions() {
     std::FILE* probe_out[GRACE_PARTITIONS];
     std::memset(build_out, 0, sizeof(build_out));
     std::memset(probe_out, 0, sizeof(probe_out));
+    auto close_partitions = [&]() {
+        for (u32 j = 0; j < GRACE_PARTITIONS; j++) {
+            if (build_out[j]) {
+                std::fclose(build_out[j]);
+                build_out[j] = nullptr;
+            }
+            if (probe_out[j]) {
+                std::fclose(probe_out[j]);
+                probe_out[j] = nullptr;
+            }
+        }
+    };
+    auto fail_partitions = [&]() {
+        close_partitions();
+        cleanup_spill();
+    };
 
     for (u32 i = 0; i < GRACE_PARTITIONS; i++) {
-        char bpath[] = "/tmp/minidb_hj_build_XXXXXX";
-        int bfd = mkstemp(bpath);
+        std::string btmpl = temp_dir_;
+        if (!btmpl.empty() && btmpl.back() != '/') btmpl += "/";
+        btmpl += "minidb_hj_build_XXXXXX";
+        std::vector<char> bpath(btmpl.begin(), btmpl.end());
+        bpath.push_back('\0');
+        int bfd = mkstemp(bpath.data());
         if (bfd < 0) {
+            fail_partitions();
             set_executor_error("failed to create hash join build partition");
             return false;
         }
         build_out[i] = fdopen(bfd, "wb");
         if (!build_out[i]) {
             close(bfd);
+            unlink(bpath.data());
+            fail_partitions();
             set_executor_error("failed to open hash join build partition");
             return false;
         }
-        build_partitions_[i] = bpath;
+        build_partitions_[i] = bpath.data();
 
-        char ppath[] = "/tmp/minidb_hj_probe_XXXXXX";
-        int pfd = mkstemp(ppath);
+        std::string ptmpl = temp_dir_;
+        if (!ptmpl.empty() && ptmpl.back() != '/') ptmpl += "/";
+        ptmpl += "minidb_hj_probe_XXXXXX";
+        std::vector<char> ppath(ptmpl.begin(), ptmpl.end());
+        ppath.push_back('\0');
+        int pfd = mkstemp(ppath.data());
         if (pfd < 0) {
+            fail_partitions();
             set_executor_error("failed to create hash join probe partition");
             return false;
         }
         probe_out[i] = fdopen(pfd, "wb");
         if (!probe_out[i]) {
             close(pfd);
+            unlink(ppath.data());
+            fail_partitions();
             set_executor_error("failed to open hash join probe partition");
             return false;
         }
-        probe_partitions_[i] = ppath;
+        probe_partitions_[i] = ppath.data();
     }
 
     std::FILE* build_in = std::fopen(right_spill_path_.c_str(), "rb");
     if (!build_in) {
+        fail_partitions();
         set_executor_error("failed to read hash join spill file");
         return false;
     }
@@ -304,31 +340,36 @@ bool HashJoinExecutor::prepare_grace_partitions() {
         u32 part = key.is_null() ? 0 : static_cast<u32>(hash_value(key) % GRACE_PARTITIONS);
         if (!write_spill_tuple(build_out[part], tuple)) {
             std::fclose(build_in);
+            fail_partitions();
             set_executor_error("failed to write hash join build partition");
             return false;
         }
     }
     std::fclose(build_in);
-    if (executor_error()) return false;
+    if (executor_error()) {
+        fail_partitions();
+        return false;
+    }
 
     Executor* probe_exec = build_left_ ? right_.get() : left_.get();
     while (true) {
-        if (executor_cancelled()) return false;
+        if (executor_cancelled()) {
+            fail_partitions();
+            return false;
+        }
         ExecResult r = probe_exec->next();
         if (!r.ok()) break;
         Tuple pt = static_cast<Tuple&&>(r.tuple);
         Value key = eval_key(probe_key_expr, pt);
         u32 part = key.is_null() ? 0 : static_cast<u32>(hash_value(key) % GRACE_PARTITIONS);
         if (!write_spill_tuple(probe_out[part], pt)) {
+            fail_partitions();
             set_executor_error("failed to write hash join probe partition");
             return false;
         }
     }
 
-    for (u32 i = 0; i < GRACE_PARTITIONS; i++) {
-        if (build_out[i]) std::fclose(build_out[i]);
-        if (probe_out[i]) std::fclose(probe_out[i]);
-    }
+    close_partitions();
     if (!right_spill_path_.empty()) {
         unlink(right_spill_path_.c_str());
         right_spill_path_.clear();

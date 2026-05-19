@@ -34,7 +34,9 @@ void Transaction::record_delete(u32 table_id, const RecordId& rid) {
 
 TransactionManager::TransactionManager(Database* db)
     : db_(db), next_txn_id_(1) {
-    std::memset(txn_slots_, 0, sizeof(txn_slots_));
+    u32 slots = db ? db->config().max_active_transactions : 256;
+    if (slots == 0) slots = 1;
+    txn_slots_.resize(slots);
 }
 
 Transaction* TransactionManager::current() const {
@@ -42,7 +44,7 @@ Transaction* TransactionManager::current() const {
 }
 
 TxnSlot* TransactionManager::find_slot(u64 txn_id) {
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == txn_id) {
             return &txn_slots_[i];
         }
@@ -51,7 +53,7 @@ TxnSlot* TransactionManager::find_slot(u64 txn_id) {
 }
 
 TxnSlot* TransactionManager::find_active_slot(u64 txn_id) {
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == txn_id && txn_slots_[i].state == TxnState::kActive) {
             return &txn_slots_[i];
         }
@@ -60,7 +62,7 @@ TxnSlot* TransactionManager::find_active_slot(u64 txn_id) {
 }
 
 TxnSlot* TransactionManager::alloc_slot(u64 txn_id, u64 snapshot_id) {
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == kInvalidTxnId || txn_slots_[i].state != TxnState::kActive) {
             txn_slots_[i].txn_id = txn_id;
             txn_slots_[i].snapshot_id = snapshot_id;
@@ -88,7 +90,7 @@ Transaction* TransactionManager::begin() {
     }
 
     TxnSlot* free_slot = nullptr;
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == kInvalidTxnId || txn_slots_[i].state != TxnState::kActive) {
             free_slot = &txn_slots_[i];
             break;
@@ -102,7 +104,7 @@ Transaction* TransactionManager::begin() {
     u64 txn_id = next_txn_id_++;
     u64 snapshot_id = next_txn_id_;  // Snapshot = next ID; all versions committed before snapshot_id are visible
     Vector<u64> active_snapshot;
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id != kInvalidTxnId && txn_slots_[i].state == TxnState::kActive) {
             active_snapshot.push_back(txn_slots_[i].txn_id);
         }
@@ -139,7 +141,7 @@ bool TransactionManager::commit(Transaction* txn) {
         slot->state = TxnState::kCommitted;
     }
 
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].state == TxnState::kActive &&
             txn_slots_[i].txn_id != kInvalidTxnId &&
             txn_slots_[i].txn_id < oldest_active) {
@@ -264,7 +266,7 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
 
     {
         LockGuard guard(latch_);
-        for (u32 i = 0; i < kMaxTxns; i++) {
+        for (u32 i = 0; i < txn_slots_.size(); i++) {
             if (!xmin_found && txn_slots_[i].txn_id == xmin) {
                 xmin_state = txn_slots_[i].state;
                 xmin_found = true;
@@ -311,7 +313,7 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
 
 bool TransactionManager::is_txn_committed(u64 txn_id) const {
     LockGuard guard(latch_);
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == txn_id) {
             return txn_slots_[i].state == TxnState::kCommitted;
         }
@@ -322,7 +324,7 @@ bool TransactionManager::is_txn_committed(u64 txn_id) const {
 bool TransactionManager::get_txn_state(u64 txn_id, TxnState* out) const {
     if (!out) return false;
     LockGuard guard(latch_);
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == txn_id) {
             *out = txn_slots_[i].state;
             return true;
@@ -333,7 +335,7 @@ bool TransactionManager::get_txn_state(u64 txn_id, TxnState* out) const {
 
 u64 TransactionManager::get_commit_id(u64 txn_id) const {
     LockGuard guard(latch_);
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].txn_id == txn_id) {
             return txn_slots_[i].commit_id;
         }
@@ -344,7 +346,7 @@ u64 TransactionManager::get_commit_id(u64 txn_id) const {
 u64 TransactionManager::get_oldest_active_txn_id() const {
     LockGuard guard(latch_);
     u64 oldest = next_txn_id_;
-    for (u32 i = 0; i < kMaxTxns; i++) {
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
         if (txn_slots_[i].state == TxnState::kActive && txn_slots_[i].txn_id != kInvalidTxnId) {
             if (txn_slots_[i].txn_id < oldest) {
                 oldest = txn_slots_[i].txn_id;

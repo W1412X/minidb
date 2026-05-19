@@ -92,15 +92,15 @@ public:
     void ensure_next_txn_id_at_least(u64 next_id);
     u64  next_txn_id() const;
 
-    TxnSlot* txn_slots() { return txn_slots_; }
+    TxnSlot* txn_slots() { return txn_slots_.data(); }
+    u32 txn_slot_count() const { return txn_slots_.size(); }
 
 private:
     TxnSlot* find_slot(u64 txn_id);
     TxnSlot* find_active_slot(u64 txn_id);
     TxnSlot* alloc_slot(u64 txn_id, u64 snapshot_id);
 
-    static constexpr u32 kMaxTxns = 256;
-    TxnSlot txn_slots_[kMaxTxns];
+    Vector<TxnSlot> txn_slots_;
 
     mutable Mutex latch_;
     Database* db_;

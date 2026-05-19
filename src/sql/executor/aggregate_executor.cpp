@@ -15,11 +15,13 @@ AggregateExecutor::AggregateExecutor(
     Vector<UniquePtr<Expression>>&& group_by,
     UniquePtr<Expression> having,
     const Schema& output_schema,
-    u64 work_mem_bytes)
+    u64 work_mem_bytes,
+    const char* temp_dir)
     : child_(static_cast<UniquePtr<Executor>&&>(child)),
       aggregates_(static_cast<Vector<AggregateColumn>&&>(aggregates)),
       having_(static_cast<UniquePtr<Expression>&&>(having)),
-      output_schema_(output_schema), cursor_(0), work_mem_bytes_(work_mem_bytes) {
+      output_schema_(output_schema), cursor_(0), work_mem_bytes_(work_mem_bytes),
+      temp_dir_(temp_dir && temp_dir[0] ? temp_dir : "/tmp") {
     for (u32 i = 0; i < group_by.size(); i++) {
         group_by_.push_back(UniquePtr<Expression>(group_by[i]->clone()));
     }
@@ -285,8 +287,12 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         chunk.sort([&](const Tuple& a, const Tuple& b) {
             return key_for_tuple(a) < key_for_tuple(b);
         });
-        char path[] = "/tmp/minidb_agg_XXXXXX";
-        int fd = mkstemp(path);
+        std::string path_template = temp_dir_;
+        if (!path_template.empty() && path_template.back() != '/') path_template += "/";
+        path_template += "minidb_agg_XXXXXX";
+        std::vector<char> path(path_template.begin(), path_template.end());
+        path.push_back('\0');
+        int fd = mkstemp(path.data());
         if (fd < 0) {
             set_executor_error("failed to create aggregate spill file");
             return false;
@@ -294,7 +300,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         std::FILE* file = fdopen(fd, "wb");
         if (!file) {
             close(fd);
-            unlink(path);
+            unlink(path.data());
             set_executor_error("failed to open aggregate spill file");
             return false;
         }
@@ -302,23 +308,22 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             u32 len = chunk[i].serialized_size();
             if (std::fwrite(&len, sizeof(len), 1, file) != 1) {
                 std::fclose(file);
-                unlink(path);
+                unlink(path.data());
                 set_executor_error("failed to write aggregate spill file");
                 return false;
             }
-            byte* bytes = new byte[len];
-            chunk[i].serialize_to_page(bytes);
-            bool ok = std::fwrite(bytes, 1, len, file) == len;
-            delete[] bytes;
+            std::vector<byte> bytes(len);
+            chunk[i].serialize_to_page(bytes.data());
+            bool ok = std::fwrite(bytes.data(), 1, len, file) == len;
             if (!ok) {
                 std::fclose(file);
-                unlink(path);
+                unlink(path.data());
                 set_executor_error("failed to write aggregate spill file");
                 return false;
             }
         }
         std::fclose(file);
-        run_paths.push_back(path);
+        run_paths.push_back(path.data());
         chunk.clear();
         memory_used = 0;
         return true;
@@ -400,26 +405,35 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             set_executor_error("corrupt aggregate spill file");
             return false;
         }
-        byte* bytes = new byte[len];
-        bool ok = std::fread(bytes, 1, len, file) == len;
-        if (ok) *out = Tuple::deserialize_from_page(bytes, input_schema, len);
-        delete[] bytes;
+        std::vector<byte> bytes(len);
+        bool ok = std::fread(bytes.data(), 1, len, file) == len;
+        if (ok) *out = Tuple::deserialize_from_page(bytes.data(), input_schema, len);
         if (!ok) set_executor_error("failed to read aggregate spill file");
         return ok;
     };
 
     std::vector<RunCursor> cursors;
+    auto close_cursors = [&]() {
+        for (RunCursor& c : cursors) {
+            if (c.file) {
+                std::fclose(c.file);
+                c.file = nullptr;
+            }
+        }
+    };
     for (const std::string& path : run_paths) {
         RunCursor c;
         c.path = path;
         c.file = std::fopen(path.c_str(), "rb");
         if (!c.file) {
+            close_cursors();
             cleanup();
             set_executor_error("failed to open aggregate spill file");
             return true;
         }
         c.has_tuple = read_tuple(c.file, &c.tuple);
         if (executor_error()) {
+            close_cursors();
             cleanup();
             return true;
         }
@@ -447,6 +461,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
     };
 
     while (true) {
+        if (executor_cancelled()) break;
         i32 best = -1;
         for (u32 i = 0; i < cursors.size(); i++) {
             if (!cursors[i].has_tuple) continue;
@@ -482,9 +497,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
     }
     flush_group();
 
-    for (RunCursor& c : cursors) {
-        if (c.file) std::fclose(c.file);
-    }
+    close_cursors();
     cleanup();
     return true;
 }

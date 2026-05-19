@@ -15,6 +15,7 @@
 #include "container/linked_list.h"
 #include "storage/page.h"
 #include "storage/page_store.h"
+#include <atomic>
 
 namespace minidb {
 
@@ -40,7 +41,7 @@ struct BufferPoolPartition {
 struct Frame {
     Page    page;
     PageId  page_id;
-    volatile u32 pin_count;  // volatile + atomic for lock-free fast path
+    std::atomic<u32> pin_count;
     bool    is_dirty;
     bool    is_io_in_progress;
     u32     partition_idx;
@@ -93,6 +94,9 @@ private:
     void notify_buffer_available();
     void record_hit();
     void record_miss();
+    bool flush_frame_wal_first(Frame& frame);
+    void restore_evicted_frame(BufferPoolPartition& partition, FrameIdx victim,
+                               PageId old_page_id);
 
     PageStore* page_store_;
     WalManager* wal_mgr_;

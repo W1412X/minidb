@@ -174,10 +174,9 @@ bool SortExecutor::write_sorted_run() {
             set_executor_error("failed to write sort spill file");
             return false;
         }
-        byte* bytes = new byte[len];
-        buffer_[i].serialize_to_page(bytes);
-        bool ok = std::fwrite(bytes, 1, len, file) == len;
-        delete[] bytes;
+        std::vector<byte> bytes(len);
+        buffer_[i].serialize_to_page(bytes.data());
+        bool ok = std::fwrite(bytes.data(), 1, len, file) == len;
         if (!ok) {
             std::fclose(file);
             unlink(path_buf.data());
@@ -200,12 +199,11 @@ bool SortExecutor::read_run_tuple(std::FILE* file, Tuple* out) {
         set_executor_error("corrupt sort spill file");
         return false;
     }
-    byte* bytes = new byte[len];
-    bool ok = std::fread(bytes, 1, len, file) == len;
+    std::vector<byte> bytes(len);
+    bool ok = std::fread(bytes.data(), 1, len, file) == len;
     if (ok) {
-        *out = Tuple::deserialize_from_page(bytes, output_schema_, len);
+        *out = Tuple::deserialize_from_page(bytes.data(), output_schema_, len);
     }
-    delete[] bytes;
     if (!ok) {
         set_executor_error("failed to read sort spill file");
         return false;

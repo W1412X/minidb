@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <vector>
 
 namespace minidb {
 
@@ -44,7 +45,7 @@ WalManager::WalManager(const String& wal_dir, u64 segment_size_bytes, bool fsync
 
 WalManager::~WalManager() {
     if (fd_ >= 0) {
-        flush_buffer();
+        (void)flush_buffer();
         if (fsync_enabled_) fsync(fd_);
         close(fd_);
     }
@@ -67,25 +68,27 @@ bool WalManager::append_to_buffer(const byte* data, u32 len) {
     if (len == 0) return true;
     if (!data) return false;
     if (len > kWalBufferSize) {
-        flush_buffer();
+        if (!flush_buffer()) return false;
         return write_direct(data, len);
     }
     if (write_buf_pos_ + len > kWalBufferSize) {
-        flush_buffer();
+        if (!flush_buffer()) return false;
     }
     std::memcpy(write_buf_ + write_buf_pos_, data, len);
     write_buf_pos_ += len;
     buffered_bytes_ += len;
-    if (write_buf_pos_ == kWalBufferSize) flush_buffer();
+    if (write_buf_pos_ == kWalBufferSize && !flush_buffer()) return false;
     return true;
 }
 
-void WalManager::flush_buffer() {
-    if (write_buf_pos_ == 0) return;
+bool WalManager::flush_buffer() {
+    if (write_buf_pos_ == 0) return true;
     if (write_direct(write_buf_, write_buf_pos_)) {
         buffer_flushes_++;
+        write_buf_pos_ = 0;
+        return true;
     }
-    write_buf_pos_ = 0;
+    return false;
 }
 
 u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 data_len) {
@@ -110,9 +113,9 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     struct stat st;
     if (fstat(fd_, &st) == 0 &&
         static_cast<u64>(st.st_size) + write_buf_pos_ > segment_size_bytes_) {
-        flush_buffer();
-        if (fsync_enabled_) fsync(fd_);
-        durable_lsn_ = last_written_lsn_;
+        if (flush_buffer() && (!fsync_enabled_ || fsync(fd_) == 0)) {
+            durable_lsn_ = last_written_lsn_;
+        }
     }
     return hdr.lsn;
 }
@@ -131,8 +134,7 @@ u64 WalManager::log_abort(u64 txn_id) {
     u64 lsn = write_record(WalType::kTxnAbort, txn_id, nullptr, 0);
     if (lsn != 0) {
         LockGuard guard(latch_);
-        flush_buffer();
-        if (fd_ >= 0 && (!fsync_enabled_ || fsync(fd_) == 0)) durable_lsn_ = lsn;
+        if (flush_buffer() && fd_ >= 0 && (!fsync_enabled_ || fsync(fd_) == 0)) durable_lsn_ = lsn;
     }
     return lsn;
 }
@@ -205,9 +207,10 @@ u64 WalManager::log_update(u64 txn_id, u32 table_id,
 }
 
 u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
-    byte key_buf[64];
-    u32 key_size = value_to_wal_bytes(key, key_buf, sizeof(key_buf));
-    if (key_size == 0) return 0;
+    u32 key_size = key.serialized_size();
+    if (key_size == 0 || key_size > 0xffff) return 0;
+    std::vector<byte> key_buf(key_size);
+    if (value_to_wal_bytes(key, key_buf.data(), key_size) != key_size) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -222,16 +225,17 @@ u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, con
     byte* full = static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &hdr, sizeof(hdr));
-    std::memcpy(full + sizeof(hdr), key_buf, key_size);
+    std::memcpy(full + sizeof(hdr), key_buf.data(), key_size);
     u64 lsn = write_record(WalType::kIndexInsert, txn_id, full, total);
     std::free(full);
     return lsn;
 }
 
 u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
-    byte key_buf[64];
-    u32 key_size = value_to_wal_bytes(key, key_buf, sizeof(key_buf));
-    if (key_size == 0) return 0;
+    u32 key_size = key.serialized_size();
+    if (key_size == 0 || key_size > 0xffff) return 0;
+    std::vector<byte> key_buf(key_size);
+    if (value_to_wal_bytes(key, key_buf.data(), key_size) != key_size) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -246,7 +250,7 @@ u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, con
     byte* full = static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &hdr, sizeof(hdr));
-    std::memcpy(full + sizeof(hdr), key_buf, key_size);
+    std::memcpy(full + sizeof(hdr), key_buf.data(), key_size);
     u64 lsn = write_record(WalType::kIndexDelete, txn_id, full, total);
     std::free(full);
     return lsn;
@@ -267,15 +271,13 @@ void WalManager::flush_commit(u64 lsn) {
         return;
     }
     if (!fsync_enabled_) {
-        flush_buffer();
-        if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+        if (flush_buffer() && durable_lsn_ < lsn) durable_lsn_ = lsn;
         commit_cond_.broadcast();
         latch_.unlock();
         return;
     }
     if (!group_commit_enabled_ || group_commit_delay_ms_ == 0) {
-        flush_buffer();
-        if (fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        if (flush_buffer() && fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
         commit_cond_.broadcast();
         latch_.unlock();
         return;
@@ -285,8 +287,7 @@ void WalManager::flush_commit(u64 lsn) {
     bool leader = pending_commit_waiters_ == 1;
     if (leader) {
         commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
-        flush_buffer();
-        if (fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        if (flush_buffer() && fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
         group_commit_batches_++;
         pending_commit_waiters_ = 0;
         commit_cond_.broadcast();
@@ -301,11 +302,24 @@ void WalManager::flush_commit(u64 lsn) {
 void WalManager::flush() {
     LockGuard guard(latch_);
     if (fd_ >= 0) {
-        flush_buffer();
-        if (!fsync_enabled_ || fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
-        pending_commit_waiters_ = 0;
-        commit_cond_.broadcast();
+        if (flush_buffer() && (!fsync_enabled_ || fsync(fd_) == 0)) {
+            durable_lsn_ = last_written_lsn_;
+            pending_commit_waiters_ = 0;
+            commit_cond_.broadcast();
+        }
     }
+}
+
+bool WalManager::flush_until(u64 lsn) {
+    LockGuard guard(latch_);
+    if (lsn == 0 || durable_lsn_ >= lsn) return true;
+    if (fd_ < 0) return false;
+    if (!flush_buffer()) return false;
+    if (fsync_enabled_ && fsync(fd_) != 0) return false;
+    durable_lsn_ = last_written_lsn_;
+    pending_commit_waiters_ = 0;
+    commit_cond_.broadcast();
+    return durable_lsn_ >= lsn;
 }
 
 void WalManager::truncate() {

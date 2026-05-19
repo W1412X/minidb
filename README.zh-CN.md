@@ -309,6 +309,9 @@ bash tests/run_all_tests.sh ./build/minidb
 
 ```bash
 ./build/tests/page_store_remote_test
+./build/tests/wal_buffer_pool_test
+./build/tests/transaction_slots_test
+bash tests/production_regression.sh ./build/minidb
 bash tests/remote_page_store.sh ./build/minidb
 bash tests/join_optimizer.sh ./build/minidb
 bash tests/performance_optimizations.sh ./build/minidb
@@ -317,6 +320,13 @@ bash tests/resource_limits.sh ./build/minidb
 ```
 
 PageServer 测试覆盖 Local PageStore 兼容性、TCP 远程读写、批量 IO、PageServer 重启恢复、持久化 LogIndex/WAL image、RO 快照读、future page 处理和 replica 目录写入。
+
+## 生产说明
+
+- [WAL 与恢复协议](docs/WAL_RECOVERY_PROTOCOL.md)
+- [并发控制](docs/CONCURRENCY_CONTROL.md)
+- [优化器成本模型](docs/OPTIMIZER_COST_MODEL.md)
+- [已知限制](docs/KNOWN_LIMITATIONS.md)
 
 ## 架构
 

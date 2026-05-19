@@ -30,7 +30,8 @@ public:
                      const Schema& output_schema,
                      JoinType join_type = JoinType::kInner,
                      u64 work_mem_bytes = 0,
-                     bool build_left = false);
+                     bool build_left = false,
+                     const char* temp_dir = "/tmp");
     ~HashJoinExecutor() override;
     void init() override;
     ExecResult next() override;
@@ -71,6 +72,7 @@ private:
     u64 work_mem_bytes_;
     bool spilled_;
     std::string right_spill_path_;
+    std::string temp_dir_;
     std::FILE* right_scan_;
     static constexpr u32 GRACE_PARTITIONS = 32;
     std::string build_partitions_[GRACE_PARTITIONS];

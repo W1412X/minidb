@@ -38,6 +38,11 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/join_syntax_strict.sh $<TARGET_FILE:minidb>
 )
 
+add_test(
+    NAME production_regression
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/production_regression.sh $<TARGET_FILE:minidb>
+)
+
 add_executable(lock_manager_wait_test lock_manager_wait_test.cpp)
 target_link_libraries(lock_manager_wait_test PRIVATE minidb_lib pthread)
 target_include_directories(lock_manager_wait_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -63,6 +68,24 @@ target_include_directories(page_store_remote_test PRIVATE ${CMAKE_SOURCE_DIR}/sr
 add_test(
     NAME page_store_remote_test
     COMMAND $<TARGET_FILE:page_store_remote_test>
+)
+
+add_executable(wal_buffer_pool_test wal_buffer_pool_test.cpp)
+target_link_libraries(wal_buffer_pool_test PRIVATE minidb_lib pthread)
+target_include_directories(wal_buffer_pool_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_test(
+    NAME wal_buffer_pool_test
+    COMMAND $<TARGET_FILE:wal_buffer_pool_test>
+)
+
+add_executable(transaction_slots_test transaction_slots_test.cpp)
+target_link_libraries(transaction_slots_test PRIVATE minidb_lib pthread)
+target_include_directories(transaction_slots_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_test(
+    NAME transaction_slots_test
+    COMMAND $<TARGET_FILE:transaction_slots_test>
 )
 
 add_test(

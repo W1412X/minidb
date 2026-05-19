@@ -674,10 +674,15 @@ void Database::collect_statistics(u32 table_id) {
     u32 num_cols = table->schema.column_count();
     table->col_stats.resize(num_cols);
 
+    constexpr u32 kExactNdvLimitPerColumn = 100000;
+    Vector<bool> ndv_capped;
+    ndv_capped.resize(num_cols);
+
     // Initialize per-column stats
     HashMap<String, bool> seen_values;
     for (u32 c = 0; c < num_cols; c++) {
         table->col_stats[c] = ColumnStats();
+        ndv_capped[c] = false;
     }
 
     PageId first_page = heap->first_data_page_id();
@@ -714,14 +719,19 @@ void Database::collect_statistics(u32 table_id) {
                     continue;
                 }
 
-                // NDV: use string key for uniqueness
-                char key_buf[32];
-                snprintf(key_buf, sizeof(key_buf), "%u:%d", c,
-                         val.type_id() == TypeId::kInt32 ? val.get_int32() : 0);
-                String key(key_buf);
-                if (!seen_values.find(key)) {
-                    seen_values.insert(key, true);
-                    stats.ndv++;
+                // NDV: exact until the per-column cap, using the same typed value encoding
+                // as hash-based executor paths so non-int values do not collapse together.
+                if (!ndv_capped[c]) {
+                    String key(static_cast<u64>(c));
+                    key += ':';
+                    key += encode_value_key(val);
+                    if (!seen_values.find(key)) {
+                        seen_values.insert(key, true);
+                        stats.ndv++;
+                        if (stats.ndv >= kExactNdvLimitPerColumn) {
+                            ndv_capped[c] = true;
+                        }
+                    }
                 }
 
                 // Min/Max (numeric types only)

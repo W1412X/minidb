@@ -329,6 +329,9 @@ Important targeted tests:
 
 ```bash
 ./build/tests/page_store_remote_test
+./build/tests/wal_buffer_pool_test
+./build/tests/transaction_slots_test
+bash tests/production_regression.sh ./build/minidb
 bash tests/remote_page_store.sh ./build/minidb
 bash tests/join_optimizer.sh ./build/minidb
 bash tests/performance_optimizations.sh ./build/minidb
@@ -337,6 +340,13 @@ bash tests/resource_limits.sh ./build/minidb
 ```
 
 The PageServer tests cover local PageStore compatibility, TCP remote reads/writes, batch IO, PageServer restart recovery, persistent LogIndex/WAL image files, read-only snapshot reads, future-page handling, and replica directory writes.
+
+## Production Notes
+
+- [WAL and recovery protocol](docs/WAL_RECOVERY_PROTOCOL.md)
+- [Concurrency control](docs/CONCURRENCY_CONTROL.md)
+- [Optimizer cost model](docs/OPTIMIZER_COST_MODEL.md)
+- [Known limitations](docs/KNOWN_LIMITATIONS.md)
 
 ## Architecture
 

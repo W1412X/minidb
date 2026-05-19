@@ -9,6 +9,15 @@ static bool btree_supports_type(TypeId type) {
            type == TypeId::kFloat || type == TypeId::kDouble;
 }
 
+static bool table_stats_fresh(const TableEntry* table) {
+    if (!table || !table->stats_valid || table->stat_num_tuples == 0) return false;
+    u64 current = table->num_tuples;
+    u64 analyzed = table->stat_num_tuples;
+    u64 diff = current > analyzed ? current - analyzed : analyzed - current;
+    u64 base = analyzed > 0 ? analyzed : 1;
+    return diff * 100 <= base * 20;
+}
+
 static bool extract_index_eq_predicate(const Expression* expr, const Schema& schema,
                                        u32* column_idx, Value* key) {
     if (!expr || expr->type != ExprType::kBinaryOp || expr->op != "=") return false;
@@ -388,7 +397,7 @@ static u32 ndv_for_join_expr(Catalog* catalog, const PlanNode* subtree, const Ex
     u32 table_id = 0;
     if (!find_expr_table_column_in_subtree(subtree, expr, &table_id, nullptr)) return 0;
     TableEntry* table = catalog->get_table(table_id);
-    if (!table || !table->stats_valid) return 0;
+    if (!table_stats_fresh(table)) return 0;
 
     int base_idx = expr->table_name.empty()
         ? table->schema.get_column_index(expr->column_name)
@@ -671,7 +680,7 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
                         }
                     }
                         TableEntry* table = catalog_->get_table(tid);
-                        if (table && table->stats_valid) {
+                        if (table_stats_fresh(table)) {
                             int idx = table->schema.get_column_index(p->group_by[i]->column_name);
                             if (idx >= 0 && static_cast<u32>(idx) < table->col_stats.size()) {
                                 u32 ndv = table->col_stats[idx].ndv;
@@ -719,7 +728,7 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
             // For equality joins: selectivity ≈ 1/max(NDV_left, NDV_right)
             // Default fallback: 0.1 (more conservative than product)
             // ================================================================
-            double join_selectivity = 0.1;
+            double join_selectivity = p->on_condition ? 0.1 : 1.0;
             if (p->on_condition && p->on_condition->type == ExprType::kBinaryOp &&
                 p->on_condition->op == "=" &&
                 p->on_condition->left && p->on_condition->right) {
@@ -732,14 +741,19 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
                 }
 
                 if (left_ndv > 0 && right_ndv > 0) {
-                    // Standard join selectivity: 1 / max(NDV_left, NDV_right)
-                    double max_ndv = static_cast<double>(left_ndv > right_ndv ? left_ndv : right_ndv);
+                    double effective_left_ndv = static_cast<double>(left_ndv);
+                    double effective_right_ndv = static_cast<double>(right_ndv);
+                    if (left_rows > 0.0 && effective_left_ndv > left_rows) effective_left_ndv = left_rows;
+                    if (right_rows > 0.0 && effective_right_ndv > right_rows) effective_right_ndv = right_rows;
+                    double max_ndv = effective_left_ndv > effective_right_ndv
+                        ? effective_left_ndv : effective_right_ndv;
+                    if (max_ndv < 1.0) max_ndv = 1.0;
                     join_selectivity = 1.0 / max_ndv;
-                    if (join_selectivity < 0.001) join_selectivity = 0.001; // floor
                 }
             }
             double output_rows = static_cast<double>(left_rows) * static_cast<double>(right_rows) * join_selectivity;
             if (output_rows < 1.0) output_rows = 1.0;
+            if (p->join_type == JoinType::kLeft && output_rows < left_rows) output_rows = left_rows;
             if (output_rows > static_cast<double>(left_rows) * static_cast<double>(right_rows))
                 output_rows = static_cast<double>(left_rows) * static_cast<double>(right_rows);
 
@@ -941,7 +955,7 @@ void Optimizer::estimate_scan(PlanNode* plan) {
         plan->plan_rows = estimate_table_rows(p->table_id);
         double pages = 1.0;
         TableEntry* table = catalog_ ? catalog_->get_table(p->table_id) : nullptr;
-        if (table && table->stat_num_pages > 0) pages = static_cast<double>(table->stat_num_pages);
+        if (table_stats_fresh(table) && table->stat_num_pages > 0) pages = static_cast<double>(table->stat_num_pages);
         else if (table && table->num_pages > 0) pages = static_cast<double>(table->num_pages);
         double page_cost = config_.remote_storage ? config_.remote_seq_page_cost : config_.local_seq_page_cost;
         plan->startup_cost = 0.0;
@@ -976,7 +990,7 @@ void Optimizer::estimate_scan(PlanNode* plan) {
         } else if (catalog_ && index) {
             u32 col_idx = index->key_columns[0];
             TableEntry* table = catalog_->get_table(table_id);
-            if (table && table->stats_valid && col_idx < table->col_stats.size()) {
+            if (table_stats_fresh(table) && col_idx < table->col_stats.size()) {
                 const ColumnStats& stats = table->col_stats[col_idx];
                     if (!is_range) {
                     // Equality: 1/NDV
@@ -1028,7 +1042,7 @@ void Optimizer::estimate_binary(PlanNode* plan, const PlanNode* left, const Plan
 
 double Optimizer::estimate_table_rows(u32 table_id) const {
     TableEntry* table = catalog_ ? catalog_->get_table(table_id) : nullptr;
-    if (table && table->stat_num_tuples > 0) return static_cast<double>(table->stat_num_tuples);
+    if (table_stats_fresh(table)) return static_cast<double>(table->stat_num_tuples);
     if (table && table->num_tuples > 0) return static_cast<double>(table->num_tuples);
     return 1000.0;
 }
@@ -1053,7 +1067,7 @@ double Optimizer::estimate_selectivity(const Expression* predicate, u32 table_id
     if (predicate->type == ExprType::kUnaryOp && predicate->op == "IS NULL") {
         if (predicate->child && predicate->child->type == ExprType::kColumnRef) {
             TableEntry* table = catalog_ ? catalog_->get_table(table_id) : nullptr;
-            if (table && table->stats_valid) {
+            if (table_stats_fresh(table)) {
                 int col_idx = table->schema.get_column_index(predicate->child->column_name);
                 if (col_idx >= 0 && static_cast<u32>(col_idx) < table->col_stats.size()) {
                     const ColumnStats& stats = table->col_stats[col_idx];
@@ -1080,7 +1094,7 @@ double Optimizer::estimate_selectivity(const Expression* predicate, u32 table_id
             const Expression* col_expr = col_on_left ? predicate->left.get() : predicate->right.get();
 
             TableEntry* table = catalog_ ? catalog_->get_table(table_id) : nullptr;
-            if (table && table->stats_valid) {
+        if (table_stats_fresh(table)) {
                 int col_idx = table->schema.get_column_index(col_expr->column_name);
                 if (col_idx >= 0 && static_cast<u32>(col_idx) < table->col_stats.size()) {
                     const ColumnStats& stats = table->col_stats[col_idx];

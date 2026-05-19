@@ -58,6 +58,7 @@ public:
     u64 checkpoint();
 
     void flush();
+    bool flush_until(u64 lsn);
     bool recover(Database* db);
     u64 durable_lsn() const { return durable_lsn_; }
     u64 next_lsn() const { return next_lsn_; }
@@ -70,7 +71,7 @@ private:
     u64 write_record(WalType type, u64 txn_id, const byte* data, u32 data_len);
     bool append_to_buffer(const byte* data, u32 len);
     bool write_direct(const byte* data, u32 len);
-    void flush_buffer();
+    bool flush_buffer();
     void flush_commit(u64 lsn);
     void truncate();
 

@@ -43,6 +43,12 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
     if (page_id == kNullPageId) {
         return Status(ErrorCode::kInvalidArgument, "null page id");
     }
+    static thread_local PageId last_fetch_page_id = kNullPageId;
+    bool sequential_hint = is_sequential ||
+        (last_fetch_page_id != kNullPageId &&
+         file_id_from_page(last_fetch_page_id) == file_id_from_page(page_id) &&
+         page_num_from_page(last_fetch_page_id) + 1 == page_num_from_page(page_id));
+    last_fetch_page_id = page_id;
 
     while (true) {
         u32 part_idx = partition_for(page_id);
@@ -57,7 +63,7 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                     // Another thread is already loading this page. Wait for that I/O
                     // rather than allocating a duplicate frame and doubling disk work.
                 } else {
-                    __sync_fetch_and_add(&f.pin_count, 1u);
+                    f.pin_count.fetch_add(1u, std::memory_order_acquire);
                     record_hit();
                     // LRU update under read lock is not safe — defer to unpin or accept approximation
                     return &f.page;
@@ -81,7 +87,7 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                 if (f.is_io_in_progress) {
                     should_wait = true;
                 } else {
-                    __sync_fetch_and_add(&f.pin_count, 1u);
+                    f.pin_count.fetch_add(1u, std::memory_order_acquire);
                     move_to_lru_head(partition, *frame_idx);
                     record_hit();
                     return &f.page;
@@ -97,7 +103,7 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                     evict_page_id = victim_frame.page_id;
                     need_wal_flush = victim_frame.is_dirty && evict_page_id != kNullPageId &&
                                      wal_mgr_ && victim_frame.page.header()->lsn > wal_mgr_->durable_lsn();
-                    victim_frame.pin_count = 1;
+                    victim_frame.pin_count.store(1, std::memory_order_release);
                     victim_frame.is_io_in_progress = true;
                     if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
                     victim_frame.page_id = page_id;
@@ -116,9 +122,13 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
         Frame& victim_frame = frames_[victim];
         // Phase 2: Disk I/O (lock-free)
         if (evict_page_id != kNullPageId) {
-            if (need_wal_flush) wal_mgr_->flush();
             if (victim_frame.is_dirty) {
-                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                if (need_wal_flush && !flush_frame_wal_first(victim_frame)) {
+                    WriteGuard guard(partition.latch);
+                    restore_evicted_frame(partition, victim, evict_page_id);
+                    notify_buffer_available();
+                    return Status(ErrorCode::kIOError, "failed to flush WAL before dirty page eviction");
+                }
                 page_store_->write_page(evict_page_id, victim_frame.page.data(),
                                         victim_frame.page.header()->lsn);
             }
@@ -129,12 +139,12 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
         {
             WriteGuard guard(partition.latch);
             victim_frame.page_id = page_id;
-            victim_frame.pin_count = 1;
+            victim_frame.pin_count.store(1, std::memory_order_release);
             victim_frame.is_dirty = false;
             victim_frame.is_io_in_progress = false;
             insert_page_mapping(partition, page_id, victim);
 
-            if (is_sequential) {
+            if (sequential_hint) {
                 partition.lru_list.move_node_to_back(victim_frame.lru_node);
             } else {
                 partition.lru_list.move_node_to_front(victim_frame.lru_node);
@@ -171,7 +181,7 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
                 evict_page_id = victim_frame.page_id;
                 need_wal_flush = victim_frame.is_dirty && evict_page_id != kNullPageId &&
                                  wal_mgr_ && victim_frame.page.header()->lsn > wal_mgr_->durable_lsn();
-                victim_frame.pin_count = 1;
+                victim_frame.pin_count.store(1, std::memory_order_release);
                 victim_frame.is_io_in_progress = true;
                 if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
                 victim_frame.page_id = page_id;
@@ -188,9 +198,13 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
 
         // Disk I/O (无锁)
         if (evict_page_id != kNullPageId) {
-            if (need_wal_flush) wal_mgr_->flush();
             if (frames_[victim].is_dirty) {
-                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                if (need_wal_flush && !flush_frame_wal_first(frames_[victim])) {
+                    WriteGuard guard(partition.latch);
+                    restore_evicted_frame(partition, victim, evict_page_id);
+                    notify_buffer_available();
+                    return Status(ErrorCode::kIOError, "failed to flush WAL before dirty page eviction");
+                }
                 page_store_->write_page(evict_page_id, frames_[victim].page.data(),
                                         frames_[victim].page.header()->lsn);
             }
@@ -202,7 +216,7 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
             Frame& victim_frame = frames_[victim];
             victim_frame.page.init(page_id, type);
             victim_frame.page_id = page_id;
-            victim_frame.pin_count = 1;
+            victim_frame.pin_count.store(1, std::memory_order_release);
             victim_frame.is_dirty = true;
             victim_frame.is_io_in_progress = false;
             insert_page_mapping(partition, page_id, victim);
@@ -226,11 +240,11 @@ void BufferPool::unpin_page(PageId page_id) {
 
     Frame& f = frames_[*frame_idx];
     // Atomic decrement: safe under ReadGuard
-    u32 old = __sync_fetch_and_sub(&f.pin_count, 1u);
-    if (old == 0) {
-        // Already 0 — restore to 0 (underflow protection)
-        __sync_fetch_and_add(&f.pin_count, 1u);
-    } else if (old == 1) {
+    u32 old = f.pin_count.load(std::memory_order_acquire);
+    while (old != 0 && !f.pin_count.compare_exchange_weak(old, old - 1,
+                                                          std::memory_order_acq_rel,
+                                                          std::memory_order_acquire)) {}
+    if (old == 1) {
         notify_buffer_available();
     }
 }
@@ -277,10 +291,7 @@ void BufferPool::flush_page(PageId page_id) {
 
     Frame& f = frames_[*frame_idx];
     if (f.is_dirty) {
-        if (wal_mgr_ && f.page.header()->lsn > wal_mgr_->durable_lsn()) {
-            wal_mgr_->flush();
-        }
-        if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+        if (!flush_frame_wal_first(f)) return;
         page_store_->write_page(f.page_id, f.page.data(), f.page.header()->lsn);
         f.is_dirty = false;
     }
@@ -294,10 +305,7 @@ void BufferPool::flush_all() {
         for (u32 i = 0; i < pool_size_; i++) {
             if (frames_[i].partition_idx != p) continue;
             if (frames_[i].is_dirty && frames_[i].page_id != kNullPageId) {
-                if (wal_mgr_ && frames_[i].page.header()->lsn > wal_mgr_->durable_lsn()) {
-                    wal_mgr_->flush();
-                }
-                if (wal_mgr_) page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+                if (!flush_frame_wal_first(frames_[i])) continue;
                 batch.push_back(PageWriteRequest(frames_[i].page_id,
                                                  frames_[i].page.data(),
                                                  frames_[i].page.header()->lsn));
@@ -331,7 +339,8 @@ FrameIdx BufferPool::find_victim_frame(BufferPoolPartition& partition, u32 parti
     // 从 LRU 尾部 (最久Unused) 开始扫描, 找 pin_count==0 的帧
     for (auto it = partition.lru_list.rbegin(); it != partition.lru_list.rend(); ++it) {
         FrameIdx idx = *it;
-        if (frames_[idx].pin_count == 0 && !frames_[idx].is_io_in_progress) {
+        if (frames_[idx].pin_count.load(std::memory_order_acquire) == 0 &&
+            !frames_[idx].is_io_in_progress) {
             return idx;
         }
     }
@@ -393,6 +402,26 @@ void BufferPool::record_hit() {
 void BufferPool::record_miss() {
     LockGuard guard(wait_latch_);
     stats_.misses++;
+}
+
+bool BufferPool::flush_frame_wal_first(Frame& frame) {
+    if (!wal_mgr_) return true;
+    u64 page_lsn = frame.page.header()->lsn;
+    if (page_lsn > wal_mgr_->durable_lsn() && !wal_mgr_->flush_until(page_lsn)) {
+        return false;
+    }
+    page_store_->set_durable_lsn(wal_mgr_->durable_lsn());
+    return wal_mgr_->durable_lsn() >= page_lsn;
+}
+
+void BufferPool::restore_evicted_frame(BufferPoolPartition& partition, FrameIdx victim,
+                                       PageId old_page_id) {
+    Frame& frame = frames_[victim];
+    erase_page_mapping(partition, frame.page_id);
+    frame.page_id = old_page_id;
+    frame.pin_count.store(0, std::memory_order_release);
+    frame.is_io_in_progress = false;
+    if (old_page_id != kNullPageId) insert_page_mapping(partition, old_page_id, victim);
 }
 
 BufferPoolStats BufferPool::stats() const {

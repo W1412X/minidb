@@ -249,7 +249,8 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                     static_cast<UniquePtr<Executor>&&>(right),
                     UniquePtr<Expression>(j_plan->on_condition->clone()),
                     j_plan->output_schema, j_plan->join_type,
-                    db_.config().work_mem_bytes, j_plan->hash_build_left));
+                    db_.config().work_mem_bytes, j_plan->hash_build_left,
+                    db_.config().temp_dir.c_str()));
             }
             return UniquePtr<Executor>(new NestedLoopJoinExecutor(
                 static_cast<UniquePtr<Executor>&&>(left),
@@ -291,7 +292,7 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             if (!child) return UniquePtr<Executor>();
             return UniquePtr<Executor>(new DistinctExecutor(
                 static_cast<UniquePtr<Executor>&&>(child), dist_plan->output_schema,
-                db_.config().work_mem_bytes));
+                db_.config().work_mem_bytes, db_.config().temp_dir.c_str()));
         }
 
         case PlanNodeType::kAggregate: {
@@ -324,7 +325,8 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 static_cast<Vector<UniquePtr<Expression>>&&>(gb),
                 static_cast<UniquePtr<Expression>&&>(having),
                 a_plan->output_schema,
-                db_.config().work_mem_bytes));
+                db_.config().work_mem_bytes,
+                db_.config().temp_dir.c_str()));
         }
 
         case PlanNodeType::kUnion: {
