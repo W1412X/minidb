@@ -8,6 +8,22 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 编译选项
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 
+set(MINIDB_SANITIZER "" CACHE STRING "Enable sanitizer: address, undefined, or thread")
+if(MINIDB_SANITIZER)
+    if(MINIDB_SANITIZER STREQUAL "address")
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address)
+    elseif(MINIDB_SANITIZER STREQUAL "undefined")
+        add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=undefined)
+    elseif(MINIDB_SANITIZER STREQUAL "thread")
+        add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=thread)
+    else()
+        message(FATAL_ERROR "Unsupported MINIDB_SANITIZER=${MINIDB_SANITIZER}")
+    endif()
+endif()
+
 # 收集所有源文件 (不含 main.cpp)
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS
     src/common/*.cpp

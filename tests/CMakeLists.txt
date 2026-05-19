@@ -43,6 +43,26 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/production_regression.sh $<TARGET_FILE:minidb>
 )
 
+add_test(
+    NAME sql_correctness_matrix
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql_correctness_matrix.py $<TARGET_FILE:minidb> --seed 12648430
+)
+
+add_test(
+    NAME differential_sqlite
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/differential_sqlite.py $<TARGET_FILE:minidb> --seed 12648431
+)
+
+add_test(
+    NAME crash_recovery_harness
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/crash_recovery_harness.py $<TARGET_FILE:minidb> --seed 12648432
+)
+
+add_test(
+    NAME mvcc_lock_regression
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/mvcc_lock_regression.py $<TARGET_FILE:minidb> --seed 12648433
+)
+
 add_executable(lock_manager_wait_test lock_manager_wait_test.cpp)
 target_link_libraries(lock_manager_wait_test PRIVATE minidb_lib pthread)
 target_include_directories(lock_manager_wait_test PRIVATE ${CMAKE_SOURCE_DIR}/src)

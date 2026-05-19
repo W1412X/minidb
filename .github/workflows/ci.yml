@@ -1,0 +1,83 @@
+name: MiniDB CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      stress:
+        description: "Run stress/nightly workload"
+        required: false
+        default: "false"
+
+jobs:
+  pr-smoke:
+    name: PR smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build -j2
+      - name: CTest smoke
+        run: ctest --test-dir build --output-on-failure -R "sql_regression|sql_keyword_combinations|join_syntax_strict|production_regression|sql_correctness_matrix|differential_sqlite|wal_buffer_pool_test|transaction_slots_test"
+      - name: PR run_all
+        run: bash tests/run_all_tests.sh ./build/minidb --suite pr --seed 12648430 --report build/pr-test-report.md
+
+  main-regression:
+    name: Main regression
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build -j2
+      - name: CTest all
+        run: ctest --test-dir build --output-on-failure
+      - name: Full run_all
+        run: bash tests/run_all_tests.sh ./build/minidb --suite main --seed 12648430 --report build/main-test-report.md
+
+  sanitizer:
+    name: Sanitizer ${{ matrix.sanitizer }}
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure sanitizer
+        run: cmake -S . -B build-${{ matrix.sanitizer }} -DBUILD_TESTS=ON -DMINIDB_SANITIZER=${{ matrix.sanitizer }}
+      - name: Build sanitizer
+        run: cmake --build build-${{ matrix.sanitizer }} -j2
+      - name: Run sanitizer smoke
+        run: ctest --test-dir build-${{ matrix.sanitizer }} --output-on-failure -R "tuple_value_edge_test|lock_manager_wait_test|wal_buffer_pool_test|sql_correctness_matrix|differential_sqlite"
+
+  nightly-stress:
+    name: Nightly stress
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.stress == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build -j2
+      - name: Stress run_all
+        run: bash tests/run_all_tests.sh ./build/minidb --suite nightly --stress --seed 12648430 --report build/nightly-test-report.md
+      - name: Crash stress
+        run: python3 tests/crash_recovery_harness.py ./build/minidb --stress --seed 12648500 --cases 5000
+      - name: Differential stress
+        run: python3 tests/differential_sqlite.py ./build/minidb --stress --seed 12648600 --cases 10000
+

@@ -474,7 +474,8 @@ String Server::execute_sql(const String& sql) {
     if (!query_guard.acquired()) {
         return String("Error: server busy: admission timeout.\n");
     }
-    ExecRwGuard guard(exec_latch_, needs_schema_execution_lock(stmt));
+    ExecRwGuard guard(exec_latch_, is_write_statement_type(stmt.type) ||
+                                   needs_schema_execution_lock(stmt));
 
     char buf[512];
 
@@ -809,7 +810,8 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         send_str("Error: server busy: admission timeout.\n");
         return 0;
     }
-    ExecRwGuard guard(exec_latch_, needs_schema_execution_lock(stmt));
+    ExecRwGuard guard(exec_latch_, is_write_statement_type(stmt.type) ||
+                                   needs_schema_execution_lock(stmt));
 
     char buf[512];
 

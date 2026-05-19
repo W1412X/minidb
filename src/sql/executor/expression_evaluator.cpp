@@ -12,6 +12,42 @@ namespace minidb {
 // NULL helpers
 static bool is_null(const Value& v) { return v.is_null(); }
 
+static bool is_numeric_like(TypeId type) {
+    return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
+           type == TypeId::kFloat || type == TypeId::kDouble;
+}
+
+static double numeric_as_double(const Value& value) {
+    switch (value.type_id()) {
+        case TypeId::kBool: return value.get_bool() ? 1.0 : 0.0;
+        case TypeId::kInt32: return static_cast<double>(value.get_int32());
+        case TypeId::kInt64: return static_cast<double>(value.get_int64());
+        case TypeId::kFloat: return static_cast<double>(value.get_float());
+        case TypeId::kDouble: return value.get_double();
+        default: return 0.0;
+    }
+}
+
+static int sql_compare_values(const Value& left, const Value& right) {
+    if (is_numeric_like(left.type_id()) && is_numeric_like(right.type_id())) {
+        double l = numeric_as_double(left);
+        double r = numeric_as_double(right);
+        return (l < r) ? -1 : (l > r ? 1 : 0);
+    }
+    return left.compare(right);
+}
+
+static Value compare_result(const Value& left, const Value& right, const String& op) {
+    int cmp = sql_compare_values(left, right);
+    if (op == "=") return Value(cmp == 0);
+    if (op == "<>" || op == "!=") return Value(cmp != 0);
+    if (op == "<") return Value(cmp < 0);
+    if (op == ">") return Value(cmp > 0);
+    if (op == "<=") return Value(cmp <= 0);
+    if (op == ">=") return Value(cmp >= 0);
+    return Value();
+}
+
 // LIKE pattern matching: % = any character sequence, _ = single character
 static bool like_match(const char* str, u32 str_len, const char* pat, u32 pat_len) {
     u32 si = 0, pi = 0;
@@ -59,12 +95,11 @@ bool ExpressionEvaluator::fast_evaluate(const Expression& expr, const Tuple& tup
                 return true;
             }
             const String& op = expr.op;
-            if (op == "=")  { *out = Value(col_val == lit_val); return true; }
-            if (op == "<>" || op == "!=") { *out = Value(col_val != lit_val); return true; }
-            if (op == "<")  { *out = Value(col_val < lit_val); return true; }
-            if (op == ">")  { *out = Value(col_val > lit_val); return true; }
-            if (op == "<=") { *out = Value(col_val <= lit_val); return true; }
-            if (op == ">=") { *out = Value(col_val >= lit_val); return true; }
+            if (op == "=" || op == "<>" || op == "!=" || op == "<" ||
+                op == ">" || op == "<=" || op == ">=") {
+                *out = compare_result(col_val, lit_val, op);
+                return true;
+            }
         }
         return false;
     }
@@ -86,12 +121,14 @@ bool ExpressionEvaluator::fast_evaluate(const Expression& expr, const Tuple& tup
                 return true;
             }
             const String& op = expr.op;
-            if (op == "=")  { *out = Value(col_val == lit_val); return true; }
-            if (op == "<>" || op == "!=") { *out = Value(col_val != lit_val); return true; }
-            if (op == "<")  { *out = Value(col_val > lit_val); return true; }  // reversed
-            if (op == ">")  { *out = Value(col_val < lit_val); return true; }  // reversed
-            if (op == "<=") { *out = Value(col_val >= lit_val); return true; } // reversed
-            if (op == ">=") { *out = Value(col_val <= lit_val); return true; } // reversed
+            if (op == "=" || op == "<>" || op == "!=") {
+                *out = compare_result(col_val, lit_val, op);
+                return true;
+            }
+            if (op == "<")  { *out = compare_result(col_val, lit_val, ">"); return true; }
+            if (op == ">")  { *out = compare_result(col_val, lit_val, "<"); return true; }
+            if (op == "<=") { *out = compare_result(col_val, lit_val, ">="); return true; }
+            if (op == ">=") { *out = compare_result(col_val, lit_val, "<="); return true; }
         }
         return false;
     }
@@ -143,12 +180,7 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
             if (op == "=" || op == "<>" || op == "!=" || op == "<" || op == ">" ||
                 op == "<=" || op == ">=") {
                 if (is_null(left) || is_null(right)) return Value();
-                if (op == "=")  return Value(left == right);
-                if (op == "<>" || op == "!=") return Value(left != right);
-                if (op == "<")  return Value(left < right);
-                if (op == ">")  return Value(left > right);
-                if (op == "<=") return Value(left <= right);
-                if (op == ">=") return Value(left >= right);
+                return compare_result(left, right, op);
             }
 
             // AND: SQL 三值逻辑
