@@ -513,6 +513,88 @@ void Database::rebuild_all_indexes() {
     catalog_.for_each_index(callback, &ctx);
 }
 
+bool Database::check_table_index_consistency(String* error) {
+    struct CheckCtx {
+        Database* db;
+        String* error;
+        bool ok;
+    } ctx{this, error, true};
+
+    auto callback = [](TableEntry& table, void* raw) {
+        auto* ctx = static_cast<CheckCtx*>(raw);
+        if (!ctx->ok) return;
+        HeapFile* heap = ctx->db->get_heap_file(table.table_id);
+        if (!heap) {
+            ctx->ok = false;
+            if (ctx->error && ctx->error->empty()) *ctx->error = String("missing heap file");
+            return;
+        }
+        Vector<IndexEntry*> indexes = ctx->db->catalog_.get_indexes(table.table_id);
+        if (indexes.empty()) return;
+
+        PageId first_page = heap->first_data_page_id();
+        if (first_page == kNullPageId) return;
+        u32 file_id = file_id_from_page(first_page);
+        u32 page_num = page_num_from_page(first_page);
+        u32 pages = heap->meta().num_data_pages;
+
+        for (u32 p = 0; ctx->ok && p < pages; p++, page_num++) {
+            PageId page_id = make_page_id(file_id, page_num);
+            auto page_result = ctx->db->pool_->fetch_page(page_id, true);
+            if (!page_result.ok()) {
+                ctx->ok = false;
+                if (ctx->error && ctx->error->empty()) {
+                    *ctx->error = String("failed to fetch heap page");
+                }
+                return;
+            }
+            Page* page = page_result.value();
+            u16 num_tuples = page->header()->num_tuples;
+            for (u16 slot = 0; ctx->ok && slot < num_tuples; slot++) {
+                const LinePointer* lp = page->line_pointer(slot);
+                if (!lp || !lp->is_valid()) continue;
+                Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
+                                                           table.schema, lp->length);
+                if (tuple.xmax() != kInvalidTxnId) continue;
+                RecordId rid(page_id, slot);
+                for (u32 i = 0; i < indexes.size(); i++) {
+                    IndexEntry* index = indexes[i];
+                    if (!index) continue;
+                    BPlusTree* tree = ctx->db->get_index_tree(index->index_id);
+                    if (!tree) {
+                        ctx->ok = false;
+                        if (ctx->error && ctx->error->empty()) {
+                            *ctx->error = String("missing index tree");
+                        }
+                        break;
+                    }
+                    Value key = index_key_from_tuple(*index, tuple);
+                    if (key.is_null()) continue;
+                    Vector<RecordId> found = tree->search(key);
+                    bool matched = false;
+                    for (u32 r = 0; r < found.size(); r++) {
+                        if (found[r] == rid) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        ctx->ok = false;
+                        if (ctx->error && ctx->error->empty()) {
+                            *ctx->error = String("heap tuple missing from index");
+                        }
+                        break;
+                    }
+                }
+            }
+            ctx->db->pool_->unpin_page(page_id);
+        }
+    };
+
+    catalog_.for_each_table(callback, &ctx);
+    return ctx.ok;
+}
+
 void Database::save_catalog() {
     sync_catalog_metadata();
     catalog_.save(db_dir_ + "/catalog.mdbc");

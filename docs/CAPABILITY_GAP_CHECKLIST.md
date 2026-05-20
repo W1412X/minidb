@@ -144,7 +144,7 @@ The main distinction used here:
 - [ ] Tighten B+ tree deletion APIs:
   - [ ] Make `remove(key)` valid only for unique indexes or remove the method.
   - [ ] Use `remove(key, rid)` for non-unique indexes.
-  - [ ] Add duplicate-key deletion tests.
+  - [x] Add duplicate-key deletion tests.
   - [ ] Add invariant checks after delete, borrow, merge, and root shrink.
 
 - [ ] Remove `collect_all_entries` / `rebuild_from_entries` from normal B+ tree
@@ -189,7 +189,7 @@ The main distinction used here:
   - [ ] DELETE removes or invalidates index entries consistently.
   - [ ] UPDATE changes indexed and non-indexed columns correctly.
   - [ ] Recovery verifies heap/index consistency.
-  - [ ] Add table/index consistency checker.
+  - [x] Add table/index consistency checker.
 
 - [ ] UNIQUE / PRIMARY KEY semantics:
   - [ ] Define UNIQUE NULL behavior.
@@ -347,7 +347,7 @@ The main distinction used here:
 
 ## P5: Test System
 
-- [ ] B+ tree property testing against `std::multimap`.
+- [x] B+ tree property testing against `std::multimap`.
 - [ ] Hash map property testing against `std::unordered_map`.
 - [ ] SQL differential testing expanded to:
   - [ ] NULL logic.
@@ -375,7 +375,7 @@ The main distinction used here:
 
 1. Downgrade README claims and link this checklist. (done)
 2. Convert `PageStore` to result-returning APIs and propagate errors. (done)
-3. Add table/index consistency checker and B+ tree property tests.
+3. Add table/index consistency checker and B+ tree property tests. (done)
 4. Introduce `IndexKey` / `IndexKeySchema`.
 5. Rebuild composite and text/varchar index support on top of `IndexKey`.
 6. Make covering-index scan MVCC-correct or keep it documented as non-index-only.

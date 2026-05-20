@@ -195,8 +195,37 @@ bool BPlusTree::remove(const Value& key, const RecordId& rid) {
         current = child;
     }
 
-    if (leaf_id == kNullPageId) return false;
-    return remove_from_leaf(leaf_id, key, rid);
+    while (leaf_id != kNullPageId) {
+        auto result = pool_->fetch_page(leaf_id, true);
+        if (!result.ok()) return false;
+        Page* leaf = result.value();
+        u16 n = leaf_num_keys(leaf);
+        PageId next = leaf_next(leaf);
+        bool found_here = false;
+        bool stop_after_this = false;
+
+        for (u16 i = 0; i < n; i++) {
+            Value current_key = leaf_key(leaf, i);
+            if (current_key > key) {
+                stop_after_this = true;
+                break;
+            }
+            if (current_key == key) {
+                RecordId current_rid = leaf_rid(leaf, i);
+                bool rid_matches = (rid.page_id == kNullPageId) || (current_rid == rid);
+                if (rid_matches) {
+                    found_here = true;
+                    break;
+                }
+            }
+        }
+
+        pool_->unpin_page(leaf_id);
+        if (found_here) return remove_from_leaf(leaf_id, key, rid);
+        if (stop_after_this) return false;
+        leaf_id = next;
+    }
+    return false;
 }
 
 bool BPlusTree::remove_from_leaf(PageId leaf_id, const Value& key, const RecordId& rid) {

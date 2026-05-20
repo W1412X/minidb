@@ -108,6 +108,15 @@ add_test(
     COMMAND $<TARGET_FILE:transaction_slots_test>
 )
 
+add_executable(btree_property_test btree_property_test.cpp)
+target_link_libraries(btree_property_test PRIVATE minidb_lib pthread)
+target_include_directories(btree_property_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_test(
+    NAME btree_property_test
+    COMMAND $<TARGET_FILE:btree_property_test> 12648434
+)
+
 add_test(
     NAME persistence_and_composite
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/persistence_and_composite.sh $<TARGET_FILE:minidb>
