@@ -152,6 +152,11 @@ add_test(
 )
 
 add_test(
+    NAME index_unique_matrix
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/index_unique_matrix.sh $<TARGET_FILE:minidb>
+)
+
+add_test(
     NAME bulk_update_delete_perf
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/bulk_update_delete_perf.sh $<TARGET_FILE:minidb>
 )
