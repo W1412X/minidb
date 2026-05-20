@@ -534,14 +534,46 @@ UniquePtr<AlterTableStmt> Parser::parse_alter_table() {
         if (check_keyword(TokenType::KW_COLUMN)) lexer_.consume_token();
         stmt->alter_type = AlterType::kAddColumn;
         stmt->new_column.name = expect_identifier().value;
-        Token type_tok = peek();
-        lexer_.consume_token();
-        stmt->new_column.type_name = type_tok.value;
-        if (check_keyword(TokenType::KW_DEFAULT)) {
-            lexer_.consume_token();
-            Token def = peek();
-            lexer_.consume_token();
-            stmt->new_column.default_value = def.value;
+        if (match_keyword(TokenType::KW_INT)) {
+            stmt->new_column.type_name = "INT";
+        } else if (match_keyword(TokenType::KW_INT64)) {
+            stmt->new_column.type_name = "BIGINT";
+        } else if (match_keyword(TokenType::KW_BOOL)) {
+            stmt->new_column.type_name = "BOOL";
+        } else if (match_keyword(TokenType::KW_FLOAT)) {
+            stmt->new_column.type_name = "FLOAT";
+        } else if (match_keyword(TokenType::KW_DOUBLE)) {
+            stmt->new_column.type_name = "DOUBLE";
+        } else if (match_keyword(TokenType::KW_TEXT)) {
+            stmt->new_column.type_name = "TEXT";
+        } else if (match_keyword(TokenType::KW_VARCHAR)) {
+            stmt->new_column.type_name = "VARCHAR";
+            if (match(TokenType::LPAREN)) {
+                stmt->new_column.varchar_length =
+                    atoi(expect(TokenType::INT_LITERAL).value.c_str());
+                expect(TokenType::RPAREN);
+            }
+        } else {
+            stmt->new_column.type_name = upper_ascii(expect_identifier().value);
+            if (match(TokenType::LPAREN)) {
+                expect(TokenType::INT_LITERAL);
+                if (match(TokenType::COMMA)) expect(TokenType::INT_LITERAL);
+                expect(TokenType::RPAREN);
+            }
+        }
+        while (true) {
+            if (match_keyword(TokenType::KW_NOT)) {
+                expect_keyword(TokenType::KW_NULL);
+                stmt->new_column.not_null = true;
+            } else if (match_keyword(TokenType::KW_DEFAULT)) {
+                Token def = peek();
+                lexer_.consume_token();
+                stmt->new_column.default_value = def.value;
+            } else if (match_keyword(TokenType::KW_UNIQUE)) {
+                stmt->new_column.is_unique = true;
+            } else {
+                break;
+            }
         }
     } else if (check_keyword(TokenType::KW_DROP)) {
         lexer_.consume_token();

@@ -600,38 +600,36 @@ String Server::execute_sql(const String& sql) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
-                table->schema.add_column(col);
-                db_.save_catalog();
-                clear_prepared_cache();
-                snprintf(buf, sizeof(buf), "Column '%s' added to table '%s'.\n",
-                         alt->new_column.name.c_str(), alt->table_name.c_str());
+                String error;
+                if (db_.alter_table_add_column(alt->table_name, col, &error)) {
+                    clear_prepared_cache();
+                    snprintf(buf, sizeof(buf), "Column '%s' added to table '%s'.\n",
+                             alt->new_column.name.c_str(), alt->table_name.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
+                }
                 break;
             }
             case AlterType::kDropColumn: {
-                int idx = table->schema.get_column_index(alt->drop_column_name);
-                if (idx < 0) {
-                    snprintf(buf, sizeof(buf), "Error: column '%s' not found.\n",
-                             alt->drop_column_name.c_str());
-                } else {
-                    table->schema.remove_column(static_cast<u32>(idx));
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_drop_column(alt->table_name, alt->drop_column_name, &error)) {
                     clear_prepared_cache();
                     snprintf(buf, sizeof(buf), "Column '%s' dropped from table '%s'.\n",
                              alt->drop_column_name.c_str(), alt->table_name.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
                 }
                 break;
             }
             case AlterType::kRenameColumn: {
-                int idx = table->schema.get_column_index(alt->rename_from);
-                if (idx < 0) {
-                    snprintf(buf, sizeof(buf), "Error: column '%s' not found.\n",
-                             alt->rename_from.c_str());
-                } else {
-                    table->schema.rename_column(static_cast<u32>(idx), alt->rename_to);
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_rename_column(alt->table_name, alt->rename_from,
+                                                  alt->rename_to, &error)) {
                     clear_prepared_cache();
                     snprintf(buf, sizeof(buf), "Column '%s' renamed to '%s'.\n",
                              alt->rename_from.c_str(), alt->rename_to.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
                 }
                 break;
             }
@@ -916,30 +914,30 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
-                table->schema.add_column(col);
-                db_.save_catalog();
-                snprintf(buf, sizeof(buf), "Column '%s' added.\n", alt->new_column.name.c_str());
+                String error;
+                if (db_.alter_table_add_column(alt->table_name, col, &error)) {
+                    snprintf(buf, sizeof(buf), "Column '%s' added.\n", alt->new_column.name.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
+                }
                 break;
             }
             case AlterType::kDropColumn: {
-                int idx = table->schema.get_column_index(alt->drop_column_name);
-                if (idx < 0) {
-                    snprintf(buf, sizeof(buf), "Error: column '%s' not found.\n", alt->drop_column_name.c_str());
-                } else {
-                    table->schema.remove_column(static_cast<u32>(idx));
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_drop_column(alt->table_name, alt->drop_column_name, &error)) {
                     snprintf(buf, sizeof(buf), "Column '%s' dropped.\n", alt->drop_column_name.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
                 }
                 break;
             }
             case AlterType::kRenameColumn: {
-                int idx = table->schema.get_column_index(alt->rename_from);
-                if (idx < 0) {
-                    snprintf(buf, sizeof(buf), "Error: column '%s' not found.\n", alt->rename_from.c_str());
-                } else {
-                    table->schema.rename_column(static_cast<u32>(idx), alt->rename_to);
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_rename_column(alt->table_name, alt->rename_from,
+                                                  alt->rename_to, &error)) {
                     snprintf(buf, sizeof(buf), "Column '%s' renamed to '%s'.\n", alt->rename_from.c_str(), alt->rename_to.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Error: %s.\n", error.c_str());
                 }
                 break;
             }

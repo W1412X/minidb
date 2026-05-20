@@ -39,6 +39,12 @@ public:
     bool drop_index(const String& name);
     bool create_index(const String& name, const String& table_name,
                       const Vector<String>& columns, bool unique);
+    bool alter_table_add_column(const String& table_name, const Column& column,
+                                String* error = nullptr);
+    bool alter_table_drop_column(const String& table_name, const String& column_name,
+                                 String* error = nullptr);
+    bool alter_table_rename_column(const String& table_name, const String& old_name,
+                                   const String& new_name, String* error = nullptr);
     HeapFile* get_heap_file(u32 table_id);
     BPlusTree* get_index_tree(u32 index_id);
     void insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);

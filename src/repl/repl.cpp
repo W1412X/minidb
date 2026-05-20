@@ -376,30 +376,30 @@ void REPL::execute_sql(const String& sql) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
-                table->schema.add_column(col);
-                db_.save_catalog();
-                printf("Column '%s' added.\n\n", alt->new_column.name.c_str());
+                String error;
+                if (db_.alter_table_add_column(alt->table_name, col, &error)) {
+                    printf("Column '%s' added.\n\n", alt->new_column.name.c_str());
+                } else {
+                    printf("Error: %s\n\n", error.c_str());
+                }
                 break;
             }
             case AlterType::kDropColumn: {
-                int idx = table->schema.get_column_index(alt->drop_column_name);
-                if (idx < 0) {
-                    printf("Error: column '%s' not found\n\n", alt->drop_column_name.c_str());
-                } else {
-                    table->schema.remove_column(static_cast<u32>(idx));
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_drop_column(alt->table_name, alt->drop_column_name, &error)) {
                     printf("Column '%s' dropped.\n\n", alt->drop_column_name.c_str());
+                } else {
+                    printf("Error: %s\n\n", error.c_str());
                 }
                 break;
             }
             case AlterType::kRenameColumn: {
-                int idx = table->schema.get_column_index(alt->rename_from);
-                if (idx < 0) {
-                    printf("Error: column '%s' not found\n\n", alt->rename_from.c_str());
-                } else {
-                    table->schema.rename_column(static_cast<u32>(idx), alt->rename_to);
-                    db_.save_catalog();
+                String error;
+                if (db_.alter_table_rename_column(alt->table_name, alt->rename_from,
+                                                  alt->rename_to, &error)) {
                     printf("Column '%s' renamed to '%s'.\n\n", alt->rename_from.c_str(), alt->rename_to.c_str());
+                } else {
+                    printf("Error: %s\n\n", error.c_str());
                 }
                 break;
             }

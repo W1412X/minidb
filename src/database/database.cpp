@@ -402,6 +402,171 @@ bool Database::create_index(const String& name, const String& table_name,
     return true;
 }
 
+static void set_alter_error(String* error, const char* msg) {
+    if (error) *error = String(msg);
+}
+
+static bool table_has_live_rows(BufferPool* pool, HeapFile* heap, const Schema& schema) {
+    if (!pool || !heap) return false;
+    PageId first_page = heap->first_data_page_id();
+    if (first_page == kNullPageId) return false;
+    u32 file_id = file_id_from_page(first_page);
+    u32 page_num = page_num_from_page(first_page);
+    u32 pages = heap->meta().num_data_pages;
+    for (u32 p = 0; p < pages; p++, page_num++) {
+        PageId page_id = make_page_id(file_id, page_num);
+        auto result = pool->fetch_page(page_id, true);
+        if (!result.ok()) continue;
+        Page* page = result.value();
+        u16 num_tuples = page->header()->num_tuples;
+        for (u16 slot = 0; slot < num_tuples; slot++) {
+            const LinePointer* lp = page->line_pointer(slot);
+            if (!lp || !lp->is_valid()) continue;
+            Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
+                                                       schema, lp->length);
+            if (tuple.xmax() == kInvalidTxnId) {
+                pool->unpin_page(page_id);
+                return true;
+            }
+        }
+        pool->unpin_page(page_id);
+    }
+    return false;
+}
+
+bool Database::alter_table_add_column(const String& table_name, const Column& column,
+                                      String* error) {
+    TableEntry* table = catalog_.get_table(table_name);
+    if (!table) {
+        set_alter_error(error, "table not found");
+        return false;
+    }
+    if (table->schema.get_column_index(column.name) >= 0) {
+        set_alter_error(error, "column already exists");
+        return false;
+    }
+    if (column.not_null && column.default_value.empty()) {
+        HeapFile* heap = get_heap_file(table->table_id);
+        if (table_has_live_rows(pool_.get(), heap, table->schema)) {
+            set_alter_error(error, "cannot add NOT NULL column without DEFAULT to non-empty table");
+            return false;
+        }
+    }
+
+    table->schema.add_column(column);
+    save_catalog();
+    checkpoint();
+    return true;
+}
+
+bool Database::alter_table_drop_column(const String& table_name, const String& column_name,
+                                       String* error) {
+    TableEntry* table = catalog_.get_table(table_name);
+    if (!table) {
+        set_alter_error(error, "table not found");
+        return false;
+    }
+    int col_idx_raw = table->schema.get_column_index(column_name);
+    if (col_idx_raw < 0) {
+        set_alter_error(error, "column not found");
+        return false;
+    }
+    u32 col_idx = static_cast<u32>(col_idx_raw);
+    Vector<IndexEntry*> indexes = catalog_.get_indexes(table->table_id);
+    for (u32 i = 0; i < indexes.size(); i++) {
+        IndexEntry* index = indexes[i];
+        if (!index) continue;
+        for (u32 k = 0; k < index->key_columns.size(); k++) {
+            if (index->key_columns[k] == col_idx) {
+                set_alter_error(error, "cannot drop indexed column");
+                return false;
+            }
+        }
+    }
+
+    Schema old_schema = table->schema;
+    HeapFile* heap = get_heap_file(table->table_id);
+    PageId first_page = heap->first_data_page_id();
+    if (first_page != kNullPageId) {
+        u32 file_id = file_id_from_page(first_page);
+        u32 page_num = page_num_from_page(first_page);
+        u32 pages = heap->meta().num_data_pages;
+        for (u32 p = 0; p < pages; p++, page_num++) {
+            PageId page_id = make_page_id(file_id, page_num);
+            auto result = pool_->fetch_page(page_id, true);
+            if (!result.ok()) continue;
+            Page* page = result.value();
+            u16 num_tuples = page->header()->num_tuples;
+            for (u16 slot = 0; slot < num_tuples; slot++) {
+                LinePointer* lp = page->line_pointer(slot);
+                if (!lp || !lp->is_valid()) continue;
+                Tuple old_tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
+                                                               old_schema, lp->length);
+                Vector<Value> values;
+                for (u32 c = 0; c < old_tuple.column_count(); c++) {
+                    if (c == col_idx) continue;
+                    values.push_back(old_tuple.get_value(c));
+                }
+                Tuple new_tuple;
+                Schema new_schema = old_schema;
+                new_schema.remove_column(col_idx);
+                new_tuple = Tuple(new_schema, values);
+                new_tuple.set_xmin(old_tuple.xmin());
+                new_tuple.set_xmax(old_tuple.xmax());
+                new_tuple.set_next_version(old_tuple.next_version_page(),
+                                           old_tuple.next_version_slot());
+                u32 serialized_size = new_tuple.serialized_size();
+                if (serialized_size > lp->length || serialized_size > kPageSize) {
+                    pool_->unpin_page(page_id);
+                    set_alter_error(error, "failed to rewrite tuple layout");
+                    return false;
+                }
+                byte buffer[kPageSize];
+                byte* end = new_tuple.serialize_to_page(buffer);
+                u16 len = static_cast<u16>(end - buffer);
+                std::memcpy(page->data() + lp->offset, buffer, len);
+                lp->length = len;
+            }
+            pool_->mark_dirty(page_id);
+            pool_->unpin_page(page_id);
+        }
+    }
+
+    table->schema.remove_column(col_idx);
+    for (u32 i = 0; i < indexes.size(); i++) {
+        IndexEntry* index = indexes[i];
+        if (!index) continue;
+        for (u32 k = 0; k < index->key_columns.size(); k++) {
+            if (index->key_columns[k] > col_idx) index->key_columns[k]--;
+        }
+    }
+    save_catalog();
+    checkpoint();
+    return true;
+}
+
+bool Database::alter_table_rename_column(const String& table_name, const String& old_name,
+                                         const String& new_name, String* error) {
+    TableEntry* table = catalog_.get_table(table_name);
+    if (!table) {
+        set_alter_error(error, "table not found");
+        return false;
+    }
+    int old_idx = table->schema.get_column_index(old_name);
+    if (old_idx < 0) {
+        set_alter_error(error, "column not found");
+        return false;
+    }
+    if (table->schema.get_column_index(new_name) >= 0) {
+        set_alter_error(error, "target column already exists");
+        return false;
+    }
+    table->schema.rename_column(static_cast<u32>(old_idx), new_name);
+    save_catalog();
+    checkpoint();
+    return true;
+}
+
 HeapFile* Database::get_heap_file(u32 table_id) {
     UniquePtr<HeapFile>* hf = heap_files_.find(table_id);
     if (hf) return hf->get();
