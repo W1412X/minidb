@@ -160,10 +160,10 @@ The main distinction used here:
   - [ ] Coalesce concurrent read misses for the same page.
   - [ ] Ensure WAL-first durable LSN check remains mandatory before dirty flush.
 
-- [ ] Split PageServer global locking:
-  - [ ] Partition metadata/log-index/version locks by page shard.
-  - [ ] Avoid holding metadata locks while performing disk IO.
-  - [ ] Add read/write contention tests for hot page and many-page workloads.
+- [x] Split PageServer global locking:
+  - [x] Partition metadata/log-index/version locks by page shard.
+  - [x] Avoid holding metadata locks while performing disk IO.
+  - [x] Add read/write contention tests for hot page and many-page workloads.
 
 - [ ] Harden PageServer metadata and WAL-image files:
   - [ ] Add length/checksum/trailer records for metadata.

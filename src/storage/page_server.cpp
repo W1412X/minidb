@@ -120,11 +120,16 @@ void PageServer::load_wal_index() {
         if (std::fread(wal_buf.data(), 1, kPageSize, wal) != kPageSize) break;
         if (hdr.checksum != image_checksum(wal_buf.data())) break;
 
-        insert_log_entry_locked(hdr.page_id, PageLogIndexEntry(hdr.lsn, static_cast<u64>(offset)));
-        PageMetadata& meta_entry = page_metadata_[hdr.page_id];
-        if (hdr.lsn >= meta_entry.latest_lsn) {
-            meta_entry.latest_lsn = hdr.lsn;
-            meta_entry.latest_wal_offset = static_cast<u64>(offset);
+        PageServerShard& shard = shard_for(hdr.page_id);
+        {
+            LockGuard guard(shard.latch);
+            insert_log_entry_locked(shard, hdr.page_id,
+                                    PageLogIndexEntry(hdr.lsn, static_cast<u64>(offset)));
+            PageMetadata& meta_entry = shard.page_metadata[hdr.page_id];
+            if (hdr.lsn >= meta_entry.latest_lsn) {
+                meta_entry.latest_lsn = hdr.lsn;
+                meta_entry.latest_wal_offset = static_cast<u64>(offset);
+            }
         }
         wal_image_bytes_ = static_cast<u64>(std::ftell(wal));
     }
@@ -187,8 +192,17 @@ bool PageServer::read_wal_image(u64 offset, byte* page_data) const {
     return ok;
 }
 
-void PageServer::insert_log_entry_locked(PageId page_id, const PageLogIndexEntry& entry) {
-    Vector<PageLogIndexEntry>& list = log_index_[page_id];
+PageServerShard& PageServer::shard_for(PageId page_id) {
+    return shards_[static_cast<u32>(page_id % kShardCount)];
+}
+
+const PageServerShard& PageServer::shard_for(PageId page_id) const {
+    return shards_[static_cast<u32>(page_id % kShardCount)];
+}
+
+void PageServer::insert_log_entry_locked(PageServerShard& shard, PageId page_id,
+                                         const PageLogIndexEntry& entry) {
+    Vector<PageLogIndexEntry>& list = shard.log_index[page_id];
     if (list.empty() || list.back().lsn <= entry.lsn) {
         list.push_back(entry);
         return;
@@ -201,29 +215,32 @@ void PageServer::insert_log_entry_locked(PageId page_id, const PageLogIndexEntry
     list[pos] = entry;
 }
 
-const PageLogIndexEntry* PageServer::find_log_entry_locked(PageId page_id, LSN read_lsn) const {
+bool PageServer::find_log_entry_locked(const PageServerShard& shard, PageId page_id,
+                                       LSN read_lsn, PageLogIndexEntry* out) const {
     const Vector<PageLogIndexEntry>* list =
-        const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(log_index_).find(page_id);
-    if (!list || list->empty()) return nullptr;
+        const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(shard.log_index).find(page_id);
+    if (!list || list->empty()) return false;
 
     u32 pos = upper_bound_lsn(*list, read_lsn);
-    if (pos == 0) return nullptr;
-    return &(*list)[pos - 1];
+    if (pos == 0) return false;
+    if (out) *out = (*list)[pos - 1];
+    return true;
 }
 
-void PageServer::remember_version_locked(PageId page_id, const byte* page_data,
+void PageServer::remember_version_locked(PageServerShard& shard, PageId page_id,
+                                         const byte* page_data,
                                          LSN page_lsn, u64 wal_offset) {
     PageVersion version;
     version.lsn = page_lsn;
     version.wal_offset = wal_offset;
     std::memcpy(version.data.data(), page_data, kPageSize);
-    Vector<PageVersion>& page_versions = versions_[page_id];
+    Vector<PageVersion>& page_versions = shard.versions[page_id];
     page_versions.push_back(version);
     while (page_versions.size() > cached_versions_per_page_) {
         page_versions.erase(page_versions.begin());
     }
-    insert_log_entry_locked(page_id, PageLogIndexEntry(page_lsn, wal_offset));
-    PageMetadata& meta = page_metadata_[page_id];
+    insert_log_entry_locked(shard, page_id, PageLogIndexEntry(page_lsn, wal_offset));
+    PageMetadata& meta = shard.page_metadata[page_id];
     if (page_lsn >= meta.latest_lsn) {
         meta.latest_lsn = page_lsn;
         meta.latest_wal_offset = wal_offset;
@@ -246,16 +263,18 @@ void PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
     bool need_wal = false;
     bool future_without_base = false;
     {
-        LockGuard guard(latch_);
-        const PageLogIndexEntry* entry = find_log_entry_locked(page_id, read_lsn);
-        if (entry && entry->lsn > current) {
-            wal_offset = entry->wal_offset;
-            wal_lsn = entry->lsn;
+        const PageServerShard& shard = shard_for(page_id);
+        LockGuard guard(shard.latch);
+        PageLogIndexEntry entry;
+        bool has_entry = find_log_entry_locked(shard, page_id, read_lsn, &entry);
+        if (has_entry && entry.lsn > current) {
+            wal_offset = entry.wal_offset;
+            wal_lsn = entry.lsn;
             need_wal = true;
         } else if (current > read_lsn) {
-            if (entry) {
-                wal_offset = entry->wal_offset;
-                wal_lsn = entry->lsn;
+            if (has_entry) {
+                wal_offset = entry.wal_offset;
+                wal_lsn = entry.lsn;
                 need_wal = true;
             } else {
                 future_without_base = true;
@@ -285,8 +304,12 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
             return false;
         }
         wal_offset = append_wal_image_locked(page_id, page_data, lsn);
-        remember_version_locked(page_id, page_data, lsn, wal_offset);
         save_metadata_locked();
+    }
+    {
+        PageServerShard& shard = shard_for(page_id);
+        LockGuard guard(shard.latch);
+        remember_version_locked(shard, page_id, page_data, lsn, wal_offset);
     }
     primary_.write_page(page_id, page_data);
     for (u32 i = 0; i < replicas_.size(); i++) {
@@ -356,23 +379,26 @@ void PageServer::set_durable_lsn(LSN durable_lsn) {
 }
 
 LSN PageServer::latest_page_lsn(PageId page_id) const {
-    LockGuard guard(latch_);
+    const PageServerShard& shard = shard_for(page_id);
+    LockGuard guard(shard.latch);
     const PageMetadata* meta =
-        const_cast<HashMap<PageId, PageMetadata>&>(page_metadata_).find(page_id);
+        const_cast<HashMap<PageId, PageMetadata>&>(shard.page_metadata).find(page_id);
     return meta ? meta->latest_lsn : 0;
 }
 
 u32 PageServer::log_index_size(PageId page_id) const {
-    LockGuard guard(latch_);
+    const PageServerShard& shard = shard_for(page_id);
+    LockGuard guard(shard.latch);
     const Vector<PageLogIndexEntry>* list =
-        const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(log_index_).find(page_id);
+        const_cast<HashMap<PageId, Vector<PageLogIndexEntry>>&>(shard.log_index).find(page_id);
     return list ? list->size() : 0;
 }
 
 u32 PageServer::cached_version_count(PageId page_id) const {
-    LockGuard guard(latch_);
+    const PageServerShard& shard = shard_for(page_id);
+    LockGuard guard(shard.latch);
     const Vector<PageVersion>* list =
-        const_cast<HashMap<PageId, Vector<PageVersion>>&>(versions_).find(page_id);
+        const_cast<HashMap<PageId, Vector<PageVersion>>&>(shard.versions).find(page_id);
     return list ? list->size() : 0;
 }
 

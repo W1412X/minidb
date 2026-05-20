@@ -48,6 +48,13 @@ struct PageServerStats {
     u64 rejected_writes = 0;
 };
 
+struct PageServerShard {
+    mutable Mutex latch;
+    HashMap<PageId, Vector<PageVersion>> versions;
+    HashMap<PageId, Vector<PageLogIndexEntry>> log_index;
+    HashMap<PageId, PageMetadata> page_metadata;
+};
+
 class PageServer : NonCopyable {
 public:
     PageServer(const String& storage_dir, bool doublewrite_enabled,
@@ -77,10 +84,14 @@ private:
     void save_metadata_locked();
     u64 append_wal_image_locked(PageId page_id, const byte* page_data, LSN page_lsn);
     bool read_wal_image(u64 offset, byte* page_data) const;
-    const PageLogIndexEntry* find_log_entry_locked(PageId page_id, LSN read_lsn) const;
-    void insert_log_entry_locked(PageId page_id, const PageLogIndexEntry& entry);
-    void remember_version_locked(PageId page_id, const byte* page_data,
-                                 LSN page_lsn, u64 wal_offset);
+    PageServerShard& shard_for(PageId page_id);
+    const PageServerShard& shard_for(PageId page_id) const;
+    bool find_log_entry_locked(const PageServerShard& shard, PageId page_id,
+                               LSN read_lsn, PageLogIndexEntry* out) const;
+    void insert_log_entry_locked(PageServerShard& shard, PageId page_id,
+                                 const PageLogIndexEntry& entry);
+    void remember_version_locked(PageServerShard& shard, PageId page_id,
+                                 const byte* page_data, LSN page_lsn, u64 wal_offset);
 
     String storage_dir_;
     String wal_image_path_;
@@ -91,9 +102,8 @@ private:
     LSN durable_lsn_;
     u32 cached_versions_per_page_;
     u64 wal_image_bytes_;
-    HashMap<PageId, Vector<PageVersion>> versions_;
-    HashMap<PageId, Vector<PageLogIndexEntry>> log_index_;
-    HashMap<PageId, PageMetadata> page_metadata_;
+    static constexpr u32 kShardCount = 64;
+    std::array<PageServerShard, kShardCount> shards_;
     std::atomic<u64> read_ops_;
     std::atomic<u64> write_ops_;
     std::atomic<u64> batch_read_ops_;
