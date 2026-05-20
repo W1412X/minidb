@@ -16,7 +16,7 @@ The project currently includes MVCC snapshot isolation, WAL-based crash recovery
 
 | Area | Implemented support |
 | --- | --- |
-| DDL | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE ADD/DROP/RENAME COLUMN`, `CREATE INDEX`, `CREATE UNIQUE INDEX`, composite indexes, `DROP INDEX` |
+| DDL | `CREATE TABLE`, `DROP TABLE`, basic `ALTER TABLE ADD/DROP/RENAME COLUMN`, `CREATE INDEX`, `CREATE UNIQUE INDEX`, experimental composite-index paths, `DROP INDEX` |
 | DML | Multi-row `INSERT`, `UPDATE ... WHERE`, `DELETE ... WHERE` |
 | Queries | `SELECT`, `WHERE`, `INNER JOIN`, `LEFT JOIN`, `GROUP BY`, `HAVING`, `ORDER BY ASC/DESC`, `LIMIT/OFFSET`, `DISTINCT`, `UNION/UNION ALL` |
 | Expressions | Arithmetic, boolean expressions, `CASE WHEN`, `LIKE`, `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN`, `NOT IN`, `CAST`, `COALESCE`, `NULLIF` |
@@ -31,14 +31,15 @@ The project currently includes MVCC snapshot isolation, WAL-based crash recovery
 
 `BOOL`/`BOOLEAN`, `INT`/`INTEGER`, `BIGINT`, `FLOAT`/`REAL`, `DOUBLE`/`DECIMAL`/`NUMERIC`, `VARCHAR(n)`, `TEXT`, and `NULL`.
 
-Column constraints include `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, and `DEFAULT`. Primary key and unique columns create unique indexes automatically.
+Column constraints include `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, and `DEFAULT`. Primary key and single-column unique constraints create unique indexes automatically. Composite unique paths are experimental until the physical index key model is upgraded.
 
 ### Storage
 
 - 8KB pages with a compact page header and line pointer array.
 - Heap files for table storage.
-- B+ tree indexes for single-column and composite keys.
-- Index equality scan, range scan, index-only scan, and index order optimization.
+- B+ tree indexes for native single-column numeric and boolean keys.
+- Experimental composite and non-native key paths that may use encoded/hash keys depending on the access path.
+- Index equality scan, range scan, covering-index scan path, and index order optimization. Full MVCC-safe index-only scan requires visibility-map validation and is tracked separately.
 - Buffer pool with configurable size, partitioned page table/LRU locks, LRU replacement, and sequential-scan anti-pollution behavior.
 - Double-write buffer and page checksums.
 - File descriptor cache with configurable limit.
@@ -77,7 +78,7 @@ Current distributed limitations:
 
 - Snapshot isolation.
 - Tuple `xmin`/`xmax` metadata and version-chain traversal.
-- HOT-style same-page update chains.
+- HOT-style same-page version-chain infrastructure. Full PostgreSQL-style HOT semantics are still under validation.
 - Per-transaction undo records for rollback.
 - Configurable transaction-slot admission.
 - Garbage collection based on active transaction watermarks.
@@ -92,14 +93,14 @@ Current distributed limitations:
 - Group commit with configurable delay.
 - Time-based and WAL-size-based checkpoints.
 - Crash recovery from WAL.
-- Lazy index rebuild after recovery.
+- Lazy index rebuild after recovery. Full physical index redo semantics remain under development.
 
 ### Query Execution
 
 MiniDB uses a Volcano iterator model. Implemented executor paths include:
 
 - `SeqScan`, including MVCC visibility, version-chain traversal, RID skip-list, projected-column late materialization, and optional parallel scan for larger tables.
-- `IndexScan` and `IndexOnlyScan`.
+- `IndexScan` and a covering-index scan path. MVCC-safe index-only scan is not yet claimed without visibility-map validation.
 - `Filter` with compiled fast paths for common expression shapes and fallback expression evaluation.
 - `Project`.
 - `NestedLoopJoin`.
@@ -112,16 +113,16 @@ MiniDB uses a Volcano iterator model. Implemented executor paths include:
 
 ### Optimizer
 
-- Cost-based scan and join path selection.
+- Rule-assisted cost-based scan and join path selection.
 - NDV/statistics-based selectivity estimates from `ANALYZE`.
 - Predicate pushdown through inner joins when predicates can be evaluated on one side.
 - Projection pushdown for scan and count-join paths.
 - Hash join build-side selection.
 - Index lookup join selection when the inner side has a usable index.
 - Index range and equality path selection.
-- Index-only scan selection when projection is covered by the index key.
+- Covering-index scan selection when projection is covered by the index key, subject to current MVCC visibility limitations.
 - Index order scan optimization for compatible ascending `ORDER BY`.
-- Remote-storage cost model that makes random remote index lookups more expensive than local page reads.
+- Initial remote-storage cost model that makes random remote index lookups more expensive than local page reads.
 - `EXPLAIN` includes cost/row estimates and optimizer notes.
 - `EXPLAIN ANALYZE` executes read-only statements and reports actual output rows and execution time.
 
@@ -343,7 +344,7 @@ bash tests/recovery_smoke.sh ./build/minidb
 bash tests/resource_limits.sh ./build/minidb
 ```
 
-The PageServer tests cover local PageStore compatibility, TCP remote reads/writes, batch IO, PageServer restart recovery, persistent LogIndex/WAL image files, read-only snapshot reads, future-page handling, and replica directory writes.
+The PageServer tests cover local PageStore compatibility, TCP remote reads/writes, batch IO, PageServer restart recovery, persistent LogIndex/WAL image files, read-only snapshot reads, future-page handling, and replica directory writes. PageServer remains an experimental shared-storage mode; per-page error propagation, production-grade metadata durability, and real replica/failover protocols are tracked as follow-up work.
 
 ## Production Notes
 
@@ -351,6 +352,7 @@ The PageServer tests cover local PageStore compatibility, TCP remote reads/write
 - [Concurrency control](docs/CONCURRENCY_CONTROL.md)
 - [Optimizer cost model](docs/OPTIMIZER_COST_MODEL.md)
 - [Known limitations](docs/KNOWN_LIMITATIONS.md)
+- [README capability gap checklist](docs/CAPABILITY_GAP_CHECKLIST.md)
 
 ## Architecture
 
