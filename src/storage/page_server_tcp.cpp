@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <array>
 #include <chrono>
 #include <thread>
 #include <unistd.h>
@@ -189,12 +190,21 @@ void PageServerTcpService::handle_client(int fd) {
             for (u32 i = 0; i < hdr.count; i++) {
                 if (!read_full(fd, &refs[i], sizeof(PageRpcPageRef))) return;
             }
-            if (!write_full(fd, &resp, sizeof(resp))) return;
-            byte page[kPageSize];
+            Vector<std::array<byte, kPageSize>> pages;
+            pages.resize(hdr.count);
             for (u32 i = 0; i < hdr.count; i++) {
-                if (hdr.read_lsn != 0) server_->read_page(refs[i].page_id, hdr.read_lsn, page);
-                else server_->read_page(refs[i].page_id, page);
-                if (!write_full(fd, page, kPageSize)) return;
+                bool ok = true;
+                if (hdr.read_lsn != 0) {
+                    ok = server_->read_page(refs[i].page_id, hdr.read_lsn, pages[i].data());
+                } else {
+                    server_->read_page(refs[i].page_id, pages[i].data());
+                }
+                if (!ok) resp.status = static_cast<u16>(PageRpcStatus::kError);
+            }
+            if (!write_full(fd, &resp, sizeof(resp))) return;
+            if (resp.status != static_cast<u16>(PageRpcStatus::kOk)) return;
+            for (u32 i = 0; i < hdr.count; i++) {
+                if (!write_full(fd, pages[i].data(), kPageSize)) return;
             }
         } else if (hdr.op == static_cast<u16>(PageRpcOp::kWriteBatch)) {
             server_->set_durable_lsn(hdr.durable_lsn);

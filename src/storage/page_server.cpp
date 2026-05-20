@@ -252,10 +252,10 @@ void PageServer::read_page(PageId page_id, byte* page_data) {
     primary_.read_page(page_id, page_data);
 }
 
-void PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
+bool PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
     read_ops_.fetch_add(1, std::memory_order_relaxed);
     primary_.read_page(page_id, page_data);
-    if (read_lsn == 0) return;
+    if (read_lsn == 0) return true;
 
     LSN current = page_lsn_from_bytes(page_data);
     u64 wal_offset = 0;
@@ -286,11 +286,13 @@ void PageServer::read_page(PageId page_id, LSN read_lsn, byte* page_data) {
     if (need_wal && read_wal_image(wal_offset, page_data)) {
         (void)wal_lsn;
         lazy_apply_hits_.fetch_add(1, std::memory_order_relaxed);
-        return;
+        return true;
     }
+    if (need_wal) return false;
     if (future_without_base) {
-        std::memset(page_data, 0, kPageSize);
+        return false;
     }
+    return true;
 }
 
 bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn) {
@@ -417,8 +419,13 @@ PageServerStats PageServer::stats() const {
 
 Result<void> RemotePageStore::read_page(PageId page_id, byte* page_data) {
     if (!page_data) return Status(ErrorCode::kInvalidArgument, "null page buffer");
-    if (read_only_ && read_lsn_ != 0) server_->read_page(page_id, read_lsn_, page_data);
-    else server_->read_page(page_id, page_data);
+    if (read_only_ && read_lsn_ != 0) {
+        if (!server_->read_page(page_id, read_lsn_, page_data)) {
+            return Status(ErrorCode::kNotFound, "read_lsn cannot be satisfied");
+        }
+    } else {
+        server_->read_page(page_id, page_data);
+    }
     return Status::ok_status();
 }
 
@@ -454,8 +461,11 @@ Vector<PageIOResult> RemotePageStore::read_pages(const Vector<PageReadRequest>& 
         }
         for (u32 i = 0; i < pages.size(); i++) {
             if (pages[i].data) {
-                server_->read_page(pages[i].page_id, read_lsn_, pages[i].data);
-                results.push_back(PageIOResult(pages[i].page_id, Status::ok_status()));
+                bool ok = server_->read_page(pages[i].page_id, read_lsn_, pages[i].data);
+                results.push_back(PageIOResult(
+                    pages[i].page_id,
+                    ok ? Status::ok_status()
+                       : Status(ErrorCode::kNotFound, "read_lsn cannot be satisfied")));
             } else {
                 results.push_back(PageIOResult(pages[i].page_id,
                                                Status(ErrorCode::kInvalidArgument,

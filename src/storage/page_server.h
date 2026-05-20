@@ -63,7 +63,7 @@ public:
     ~PageServer();
 
     void read_page(PageId page_id, byte* page_data);
-    void read_page(PageId page_id, LSN read_lsn, byte* page_data);
+    bool read_page(PageId page_id, LSN read_lsn, byte* page_data);
     bool write_page(PageId page_id, const byte* page_data, LSN page_lsn);
     Vector<PageIOResult> read_pages(const Vector<PageReadRequest>& pages);
     Vector<PageIOResult> write_pages(const Vector<PageWriteRequest>& pages);

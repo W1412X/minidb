@@ -171,7 +171,7 @@ The main distinction used here:
   - [ ] Detect partial WAL-image writes.
   - [ ] Make restart reconstruction fail loudly on corruption unless a safe
     repair path exists.
-  - [ ] Return explicit error when a requested `read_lsn` cannot be satisfied.
+  - [x] Return explicit error when a requested `read_lsn` cannot be satisfied.
 
 ## P1: Correctness Hardening For Existing Features
 

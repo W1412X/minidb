@@ -193,7 +193,7 @@ static void assert_log_index_survives_restart() {
         assert(server.latest_page_lsn(pid) == 20);
         byte snapshot[kPageSize];
         std::memset(snapshot, 0, sizeof(snapshot));
-        server.read_page(pid, 5, snapshot);
+        assert(server.read_page(pid, 5, snapshot));
         assert(reinterpret_cast<PageHeader*>(snapshot)->lsn == 5);
         assert(snapshot[sizeof(PageHeader)] == 0x05);
     }
@@ -222,30 +222,29 @@ static void assert_log_index_binary_search_boundaries() {
 
     byte before_first[kPageSize];
     std::memset(before_first, 0x7f, sizeof(before_first));
-    server.read_page(pid, 5, before_first);
-    assert(reinterpret_cast<const PageHeader*>(before_first)->lsn == 0);
+    assert(!server.read_page(pid, 5, before_first));
 
     byte exact[kPageSize];
     std::memset(exact, 0, sizeof(exact));
-    server.read_page(pid, 10, exact);
+    assert(server.read_page(pid, 10, exact));
     assert(reinterpret_cast<PageHeader*>(exact)->lsn == 10);
     assert(exact[sizeof(PageHeader)] == 0x10);
 
     byte between[kPageSize];
     std::memset(between, 0, sizeof(between));
-    server.read_page(pid, 25, between);
+    assert(server.read_page(pid, 25, between));
     assert(reinterpret_cast<PageHeader*>(between)->lsn == 20);
     assert(between[sizeof(PageHeader)] == 0x20);
 
     byte after_last[kPageSize];
     std::memset(after_last, 0, sizeof(after_last));
-    server.read_page(pid, 35, after_last);
+    assert(server.read_page(pid, 35, after_last));
     assert(reinterpret_cast<PageHeader*>(after_last)->lsn == 30);
     assert(after_last[sizeof(PageHeader)] == 0x30);
 
     byte evicted_but_reconstructable[kPageSize];
     std::memset(evicted_but_reconstructable, 0, sizeof(evicted_but_reconstructable));
-    server.read_page(pid, 10, evicted_but_reconstructable);
+    assert(server.read_page(pid, 10, evicted_but_reconstructable));
     assert(reinterpret_cast<PageHeader*>(evicted_but_reconstructable)->lsn == 10);
     assert(evicted_but_reconstructable[sizeof(PageHeader)] == 0x10);
 }
