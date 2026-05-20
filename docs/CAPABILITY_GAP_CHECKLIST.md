@@ -145,7 +145,7 @@ The main distinction used here:
   - [x] Make `remove(key)` valid only for unique indexes or remove the method.
   - [x] Use `remove(key, rid)` for non-unique indexes.
   - [x] Add duplicate-key deletion tests.
-  - [ ] Add invariant checks after delete, borrow, merge, and root shrink.
+  - [x] Add invariant checks after delete, borrow, merge, and root shrink.
 
 - [ ] Remove `collect_all_entries` / `rebuild_from_entries` from normal B+ tree
   mutation paths:

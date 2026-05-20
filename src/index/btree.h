@@ -14,6 +14,7 @@
 #include "common/config.h"
 #include "common/status.h"
 #include "common/mutex.h"
+#include "container/string.h"
 #include "container/vector.h"
 #include "record/value.h"
 #include "storage/buffer_pool.h"
@@ -65,9 +66,12 @@ public:
     bool scan_next_entry(const Value& low, const Value& high,
                          PageId* leaf_id, u16* slot_idx,
                          const RecordId* skip_rid, Value* key, RecordId* rid);
+    bool validate_structure(String* error = nullptr) const;
     PageId root_page_id() const { return root_page_id_; }
 
 private:
+    bool validate_node(PageId page_id, u32 depth, u32* leaf_depth,
+                       HashMap<PageId, bool>* visited, String* error) const;
     PageId find_leaf(const Value& key) const;
     PageId find_leaf_with_parent(const Value& key, PageId* parent_id) const;
     bool insert_into_leaf(PageId leaf_id, const Value& key, const RecordId& rid,

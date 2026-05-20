@@ -76,6 +76,13 @@ static void assert_rids_equal(const Vector<RecordId>& actual, std::vector<Record
 }
 
 static void validate_tree(BPlusTree& tree, const std::multimap<i64, RecordId>& model, u64 seed) {
+    String structure_error;
+    if (!tree.validate_structure(&structure_error)) {
+        std::fprintf(stderr, "btree_property_test FAIL seed=%llu structure: %s\n",
+                     static_cast<unsigned long long>(seed), structure_error.c_str());
+        std::abort();
+    }
+
     for (i64 key = -64; key <= 64; key++) {
         Vector<RecordId> actual = tree.search(Value(key));
         assert_rids_equal(actual, model_search(model, key), seed, "point-search");

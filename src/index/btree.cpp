@@ -761,6 +761,103 @@ bool BPlusTree::scan_next_entry(const Value& low, const Value& high,
     return false;
 }
 
+static bool btree_validation_error(String* error, const char* msg) {
+    if (error && error->empty()) *error = String(msg);
+    return false;
+}
+
+bool BPlusTree::validate_node(PageId page_id, u32 depth, u32* leaf_depth,
+                              HashMap<PageId, bool>* visited, String* error) const {
+    if (page_id == kNullPageId) return btree_validation_error(error, "null child page");
+    if (visited->find(page_id)) return btree_validation_error(error, "cycle in btree");
+    visited->insert(page_id, true);
+
+    auto result = const_cast<BufferPool*>(pool_)->fetch_page(page_id);
+    if (!result.ok()) return btree_validation_error(error, "failed to fetch btree page");
+    Page* page = result.value();
+    bool is_leaf = page->data()[kPageHeaderSize] == 1;
+    u16 n = is_leaf ? leaf_num_keys(page) : internal_num_keys(page);
+    if (n > kIndexMaxKeys) {
+        const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+        return btree_validation_error(error, "btree node has too many keys");
+    }
+    for (u16 i = 1; i < n; i++) {
+        Value prev = is_leaf ? leaf_key(page, i - 1) : internal_key(page, i - 1);
+        Value cur = is_leaf ? leaf_key(page, i) : internal_key(page, i);
+        if (cur < prev) {
+            const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+            return btree_validation_error(error, "btree keys out of order");
+        }
+    }
+
+    if (is_leaf) {
+        if (*leaf_depth == static_cast<u32>(-1)) {
+            *leaf_depth = depth;
+        } else if (*leaf_depth != depth) {
+            const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+            return btree_validation_error(error, "btree leaves at different depths");
+        }
+        const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+        return true;
+    }
+
+    Vector<PageId> children;
+    children.reserve(static_cast<u32>(n) + 1);
+    for (u16 i = 0; i <= n; i++) {
+        PageId child = internal_child(page, i);
+        if (child == kNullPageId) {
+            const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+            return btree_validation_error(error, "btree internal node has null child");
+        }
+        children.push_back(child);
+    }
+    const_cast<BufferPool*>(pool_)->unpin_page(page_id);
+
+    for (u32 i = 0; i < children.size(); i++) {
+        if (!validate_node(children[i], depth + 1, leaf_depth, visited, error)) return false;
+    }
+    return true;
+}
+
+bool BPlusTree::validate_structure(String* error) const {
+    ReadGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) return true;
+
+    HashMap<PageId, bool> visited;
+    u32 leaf_depth = static_cast<u32>(-1);
+    if (!validate_node(root_page_id_, 0, &leaf_depth, &visited, error)) return false;
+
+    PageId leaf_id = leftmost_leaf();
+    HashMap<PageId, bool> leaf_seen;
+    bool have_last = false;
+    Value last_key;
+    while (leaf_id != kNullPageId) {
+        if (leaf_seen.find(leaf_id)) return btree_validation_error(error, "cycle in leaf chain");
+        leaf_seen.insert(leaf_id, true);
+        auto result = const_cast<BufferPool*>(pool_)->fetch_page(leaf_id, true);
+        if (!result.ok()) return btree_validation_error(error, "failed to fetch leaf chain page");
+        Page* page = result.value();
+        if (page->data()[kPageHeaderSize] != 1) {
+            const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
+            return btree_validation_error(error, "leaf chain points to internal page");
+        }
+        u16 n = leaf_num_keys(page);
+        for (u16 i = 0; i < n; i++) {
+            Value cur = leaf_key(page, i);
+            if (have_last && cur < last_key) {
+                const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
+                return btree_validation_error(error, "leaf chain keys out of order");
+            }
+            last_key = cur;
+            have_last = true;
+        }
+        PageId next = leaf_next(page);
+        const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
+        leaf_id = next;
+    }
+    return true;
+}
+
 // ============================================================
 // find_leaf — top-down traversal, unpin all internal nodes, caller responsible for leaf unpin
 // ============================================================
