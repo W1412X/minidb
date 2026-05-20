@@ -17,6 +17,7 @@ from minidb_testlib import (  # noqa: E402
     minidb_query,
     run_minidb,
     seeded_rng,
+    select_rows_from_output,
     temp_db,
 )
 
@@ -77,7 +78,7 @@ def main() -> int:
             raise AssertionError(f"concurrent worker errors seed={seed}: {errors[:3]}")
 
         expected = 1 + workers * per_worker
-        rows = minidb_query(args.bin, db_dir, "SELECT COUNT(*) FROM tx;", seed)
+        rows = select_rows_from_output(server.execute(["SELECT COUNT(*) FROM tx;"], read_timeout=2.0))
         if rows != [(str(expected),)]:
             raise AssertionError(f"count mismatch seed={seed}: {rows} expected={expected}")
 
