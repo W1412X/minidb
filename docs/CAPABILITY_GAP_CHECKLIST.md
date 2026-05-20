@@ -142,8 +142,8 @@ The main distinction used here:
   - [ ] Keep the current covering-index path only when it is semantically safe.
 
 - [ ] Tighten B+ tree deletion APIs:
-  - [ ] Make `remove(key)` valid only for unique indexes or remove the method.
-  - [ ] Use `remove(key, rid)` for non-unique indexes.
+  - [x] Make `remove(key)` valid only for unique indexes or remove the method.
+  - [x] Use `remove(key, rid)` for non-unique indexes.
   - [x] Add duplicate-key deletion tests.
   - [ ] Add invariant checks after delete, borrow, merge, and root shrink.
 

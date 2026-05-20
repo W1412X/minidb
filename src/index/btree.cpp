@@ -153,10 +153,6 @@ void BPlusTree::insert(const Value& key, const RecordId& rid) {
 // remove
 // ============================================================
 
-bool BPlusTree::remove(const Value& key) {
-    return remove(key, RecordId());
-}
-
 bool BPlusTree::remove(const Value& key, const RecordId& rid) {
     WriteGuard guard(tree_latch_);
     if (root_page_id_ == kNullPageId) return false;

@@ -56,7 +56,6 @@ public:
     void create();
     bool open();
     void insert(const Value& key, const RecordId& rid);
-    bool remove(const Value& key);
     bool remove(const Value& key, const RecordId& rid);
     Vector<RecordId> search(const Value& key);
     Vector<RecordId> range_search(const Value& low, const Value& high);
