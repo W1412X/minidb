@@ -33,6 +33,9 @@ if [[ -z "$BIN" ]]; then usage >&2; exit 2; fi
 PASS=0
 FAIL=0
 mkdir -p "$(dirname "$REPORT")"
+LOG_DIR="$(dirname "$REPORT")/test-logs"
+rm -rf "$LOG_DIR"
+mkdir -p "$LOG_DIR"
 {
     echo "# MiniDB Test Report"
     echo
@@ -42,8 +45,8 @@ mkdir -p "$(dirname "$REPORT")"
     echo "- binary: $BIN"
     echo "- started_at: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     echo
-    echo "| Group | Test | Result | Duration ms |"
-    echo "|---|---|---:|---:|"
+    echo "| Group | Test | Result | Duration ms | Log |"
+    echo "|---|---|---:|---:|---|"
 } > "$REPORT"
 
 CURRENT_GROUP=""
@@ -52,21 +55,27 @@ run_test() {
     local name="$1"
     local cmd="$2"
     local group="${CURRENT_GROUP:-General}"
+    local log_name
+    log_name="$(printf '%s_%s' "$group" "$name" | tr ' /' '__' | tr -cd '[:alnum:]_.-')"
+    local log_file="$LOG_DIR/${log_name}.log"
     echo -n "  [$name] ... "
     local start=$(date +%s%N)
-    if eval "$cmd" > /dev/null 2>&1; then
+    if eval "$cmd" > "$log_file" 2>&1; then
         local end=$(date +%s%N)
         local ms=$(( (end - start) / 1000000 ))
         echo "PASS (${ms}ms)"
-        echo "| $group | $name | PASS | $ms |" >> "$REPORT"
+        echo "| $group | $name | PASS | $ms | $log_file |" >> "$REPORT"
         PASS=$((PASS + 1))
     else
         local end=$(date +%s%N)
         local ms=$(( (end - start) / 1000000 ))
         echo "FAIL"
-        echo "| $group | $name | FAIL | $ms |" >> "$REPORT"
+        echo "| $group | $name | FAIL | $ms | $log_file |" >> "$REPORT"
         echo "    command: $cmd" >&2
         echo "    seed: $SEED" >&2
+        echo "    log: $log_file" >&2
+        echo "    log tail:" >&2
+        tail -80 "$log_file" >&2 || true
         FAIL=$((FAIL + 1))
     fi
 }
