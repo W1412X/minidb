@@ -27,12 +27,12 @@ public:
                           u32 retry_count = 2, u32 max_connections = 8);
     ~RemotePageStoreClient();
 
-    void read_page(PageId page_id, byte* page_data) override;
-    void write_page(PageId page_id, const byte* page_data, LSN page_lsn) override;
-    void flush() override;
-    void delete_file(const String& filename) override;
-    void read_pages(const Vector<PageReadRequest>& pages) override;
-    void write_pages(const Vector<PageWriteRequest>& pages) override;
+    Result<void> read_page(PageId page_id, byte* page_data) override;
+    Result<void> write_page(PageId page_id, const byte* page_data, LSN page_lsn) override;
+    Result<void> flush() override;
+    Result<void> delete_file(const String& filename) override;
+    Vector<PageIOResult> read_pages(const Vector<PageReadRequest>& pages) override;
+    Vector<PageIOResult> write_pages(const Vector<PageWriteRequest>& pages) override;
     void set_durable_lsn(LSN durable_lsn) override;
     LSN durable_lsn() const override { return durable_lsn_; }
     bool is_remote() const override { return true; }

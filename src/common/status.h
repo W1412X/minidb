@@ -85,4 +85,17 @@ private:
     bool ok_;
 };
 
+template<>
+class Result<void> {
+public:
+    Result() : err_(Status::ok_status()) {}
+    Result(Status status) : err_(status) {}
+
+    bool ok() const { return err_.ok(); }
+    Status error() const { return err_; }
+
+private:
+    Status err_;
+};
+
 } // namespace minidb

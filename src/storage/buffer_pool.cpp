@@ -129,11 +129,27 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                     notify_buffer_available();
                     return Status(ErrorCode::kIOError, "failed to flush WAL before dirty page eviction");
                 }
-                page_store_->write_page(evict_page_id, victim_frame.page.data(),
-                                        victim_frame.page.header()->lsn);
+                Result<void> write_result = page_store_->write_page(
+                    evict_page_id, victim_frame.page.data(), victim_frame.page.header()->lsn);
+                if (!write_result.ok()) {
+                    WriteGuard guard(partition.latch);
+                    restore_evicted_frame(partition, victim, evict_page_id);
+                    notify_buffer_available();
+                    return write_result.error();
+                }
             }
         }
-        page_store_->read_page(page_id, victim_frame.page.data());
+        Result<void> read_result = page_store_->read_page(page_id, victim_frame.page.data());
+        if (!read_result.ok()) {
+            WriteGuard guard(partition.latch);
+            erase_page_mapping(partition, page_id);
+            victim_frame.page_id = kNullPageId;
+            victim_frame.pin_count.store(0, std::memory_order_release);
+            victim_frame.is_dirty = false;
+            victim_frame.is_io_in_progress = false;
+            notify_buffer_available();
+            return read_result.error();
+        }
 
         // Phase 3: Update metadata (holding write lock)
         {
@@ -205,8 +221,14 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
                     notify_buffer_available();
                     return Status(ErrorCode::kIOError, "failed to flush WAL before dirty page eviction");
                 }
-                page_store_->write_page(evict_page_id, frames_[victim].page.data(),
-                                        frames_[victim].page.header()->lsn);
+                Result<void> write_result = page_store_->write_page(
+                    evict_page_id, frames_[victim].page.data(), frames_[victim].page.header()->lsn);
+                if (!write_result.ok()) {
+                    WriteGuard guard(partition.latch);
+                    restore_evicted_frame(partition, victim, evict_page_id);
+                    notify_buffer_available();
+                    return write_result.error();
+                }
             }
         }
 
@@ -292,14 +314,17 @@ void BufferPool::flush_page(PageId page_id) {
     Frame& f = frames_[*frame_idx];
     if (f.is_dirty) {
         if (!flush_frame_wal_first(f)) return;
-        page_store_->write_page(f.page_id, f.page.data(), f.page.header()->lsn);
-        f.is_dirty = false;
+        Result<void> write_result = page_store_->write_page(f.page_id, f.page.data(),
+                                                            f.page.header()->lsn);
+        if (write_result.ok()) f.is_dirty = false;
     }
 }
 
 void BufferPool::flush_all() {
     Vector<PageWriteRequest> batch;
+    Vector<FrameIdx> batch_frames;
     batch.reserve(flush_batch_size_);
+    batch_frames.reserve(flush_batch_size_);
     for (u32 p = 0; p < partition_count_; p++) {
         WriteGuard guard(partitions_[p].latch);
         for (u32 i = 0; i < pool_size_; i++) {
@@ -309,16 +334,24 @@ void BufferPool::flush_all() {
                 batch.push_back(PageWriteRequest(frames_[i].page_id,
                                                  frames_[i].page.data(),
                                                  frames_[i].page.header()->lsn));
+                batch_frames.push_back(static_cast<FrameIdx>(i));
                 if (batch.size() >= flush_batch_size_) {
-                    page_store_->write_pages(batch);
+                    Vector<PageIOResult> results = page_store_->write_pages(batch);
+                    for (u32 r = 0; r < results.size() && r < batch_frames.size(); r++) {
+                        if (results[r].ok()) frames_[batch_frames[r]].is_dirty = false;
+                    }
                     batch.clear();
+                    batch_frames.clear();
                 }
-                frames_[i].is_dirty = false;
             }
         }
         if (!batch.empty()) {
-            page_store_->write_pages(batch);
+            Vector<PageIOResult> results = page_store_->write_pages(batch);
+            for (u32 r = 0; r < results.size() && r < batch_frames.size(); r++) {
+                if (results[r].ok()) frames_[batch_frames[r]].is_dirty = false;
+            }
             batch.clear();
+            batch_frames.clear();
         }
     }
 }

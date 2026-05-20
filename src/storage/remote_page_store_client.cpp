@@ -236,60 +236,114 @@ bool RemotePageStoreClient::with_retry(bool (RemotePageStoreClient::*fn)(const V
     return false;
 }
 
-void RemotePageStoreClient::read_page(PageId page_id, byte* page_data) {
+Result<void> RemotePageStoreClient::read_page(PageId page_id, byte* page_data) {
     Vector<PageReadRequest> pages;
     pages.push_back(PageReadRequest(page_id, page_data));
-    read_pages(pages);
+    Vector<PageIOResult> results = read_pages(pages);
+    if (results.empty()) return Status(ErrorCode::kIOError, "remote read returned no status");
+    return results[0].status;
 }
 
-void RemotePageStoreClient::write_page(PageId page_id, const byte* page_data, LSN page_lsn) {
+Result<void> RemotePageStoreClient::write_page(PageId page_id, const byte* page_data, LSN page_lsn) {
     Vector<PageWriteRequest> pages;
     pages.push_back(PageWriteRequest(page_id, page_data, page_lsn));
-    write_pages(pages);
+    Vector<PageIOResult> results = write_pages(pages);
+    if (results.empty()) return Status(ErrorCode::kIOError, "remote write returned no status");
+    return results[0].status;
 }
 
-void RemotePageStoreClient::flush() {
-    (void)rpc_simple(static_cast<u16>(PageRpcOp::kFlush), nullptr, durable_lsn_);
+Result<void> RemotePageStoreClient::flush() {
+    if (!rpc_simple(static_cast<u16>(PageRpcOp::kFlush), nullptr, durable_lsn_)) {
+        return Status(ErrorCode::kIOError, "remote flush failed");
+    }
+    return Status::ok_status();
 }
 
-void RemotePageStoreClient::delete_file(const String& filename) {
-    if (read_only_) return;
-    (void)rpc_simple(static_cast<u16>(PageRpcOp::kDeleteFile), &filename, durable_lsn_);
+Result<void> RemotePageStoreClient::delete_file(const String& filename) {
+    if (read_only_) {
+        return Status(ErrorCode::kInvalidArgument, "read-only remote page store cannot delete files");
+    }
+    if (!rpc_simple(static_cast<u16>(PageRpcOp::kDeleteFile), &filename, durable_lsn_)) {
+        return Status(ErrorCode::kIOError, "remote delete_file failed");
+    }
+    return Status::ok_status();
 }
 
-void RemotePageStoreClient::read_pages(const Vector<PageReadRequest>& pages) {
+Vector<PageIOResult> RemotePageStoreClient::read_pages(const Vector<PageReadRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
+    auto append_status = [&results](const Vector<PageReadRequest>& batch, const Status& st) {
+        for (u32 i = 0; i < batch.size(); i++) {
+            results.push_back(PageIOResult(batch[i].page_id, st));
+        }
+    };
     if (pages.size() <= batch_size_) {
-        (void)with_retry(&RemotePageStoreClient::rpc_read_batch, pages);
-        return;
+        Status st = with_retry(&RemotePageStoreClient::rpc_read_batch, pages)
+            ? Status::ok_status()
+            : Status(ErrorCode::kIOError, "remote batch read failed");
+        append_status(pages, st);
+        return results;
     }
     Vector<PageReadRequest> batch;
     batch.reserve(batch_size_);
     for (u32 i = 0; i < pages.size(); i++) {
         batch.push_back(pages[i]);
         if (batch.size() >= batch_size_) {
-            (void)with_retry(&RemotePageStoreClient::rpc_read_batch, batch);
+            Status st = with_retry(&RemotePageStoreClient::rpc_read_batch, batch)
+                ? Status::ok_status()
+                : Status(ErrorCode::kIOError, "remote batch read failed");
+            append_status(batch, st);
             batch.clear();
         }
     }
-    if (!batch.empty()) (void)with_retry(&RemotePageStoreClient::rpc_read_batch, batch);
+    if (!batch.empty()) {
+        Status st = with_retry(&RemotePageStoreClient::rpc_read_batch, batch)
+            ? Status::ok_status()
+            : Status(ErrorCode::kIOError, "remote batch read failed");
+        append_status(batch, st);
+    }
+    return results;
 }
 
-void RemotePageStoreClient::write_pages(const Vector<PageWriteRequest>& pages) {
-    if (read_only_) return;
+Vector<PageIOResult> RemotePageStoreClient::write_pages(const Vector<PageWriteRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
+    auto append_status = [&results](const Vector<PageWriteRequest>& batch, const Status& st) {
+        for (u32 i = 0; i < batch.size(); i++) {
+            results.push_back(PageIOResult(batch[i].page_id, st));
+        }
+    };
+    if (read_only_) {
+        append_status(pages, Status(ErrorCode::kInvalidArgument,
+                                    "read-only remote page store cannot write pages"));
+        return results;
+    }
     if (pages.size() <= batch_size_) {
-        (void)with_retry(&RemotePageStoreClient::rpc_write_batch, pages);
-        return;
+        Status st = with_retry(&RemotePageStoreClient::rpc_write_batch, pages)
+            ? Status::ok_status()
+            : Status(ErrorCode::kIOError, "remote batch write failed");
+        append_status(pages, st);
+        return results;
     }
     Vector<PageWriteRequest> batch;
     batch.reserve(batch_size_);
     for (u32 i = 0; i < pages.size(); i++) {
         batch.push_back(pages[i]);
         if (batch.size() >= batch_size_) {
-            (void)with_retry(&RemotePageStoreClient::rpc_write_batch, batch);
+            Status st = with_retry(&RemotePageStoreClient::rpc_write_batch, batch)
+                ? Status::ok_status()
+                : Status(ErrorCode::kIOError, "remote batch write failed");
+            append_status(batch, st);
             batch.clear();
         }
     }
-    if (!batch.empty()) (void)with_retry(&RemotePageStoreClient::rpc_write_batch, batch);
+    if (!batch.empty()) {
+        Status st = with_retry(&RemotePageStoreClient::rpc_write_batch, batch)
+            ? Status::ok_status()
+            : Status(ErrorCode::kIOError, "remote batch write failed");
+        append_status(batch, st);
+    }
+    return results;
 }
 
 void RemotePageStoreClient::set_durable_lsn(LSN durable_lsn) {

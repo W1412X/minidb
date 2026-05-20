@@ -70,12 +70,12 @@ static void assert_local_page_store_roundtrip() {
     Page page;
     PageId pid = make_page_id(11, 1);
     fill_page(&page, pid, 0, 0x11);
-    store.write_page(pid, page.data(), page.header()->lsn);
-    store.flush();
+    assert(store.write_page(pid, page.data(), page.header()->lsn).ok());
+    assert(store.flush().ok());
 
     byte out[kPageSize];
     std::memset(out, 0, sizeof(out));
-    store.read_page(pid, out);
+    assert(store.read_page(pid, out).ok());
     assert(reinterpret_cast<const PageHeader*>(out)->page_id == pid);
     assert(out[sizeof(PageHeader)] == 0x11);
 }
@@ -89,8 +89,8 @@ static void assert_remote_page_store_features() {
     Page v5;
     fill_page(&v5, pid, 5, 0x55);
     server.set_durable_lsn(5);
-    rw.write_page(pid, v5.data(), v5.header()->lsn);
-    rw.flush();
+    assert(rw.write_page(pid, v5.data(), v5.header()->lsn).ok());
+    assert(rw.flush().ok());
     assert(server.latest_page_lsn(pid) == 5);
     assert(server.log_index_size(pid) == 1);
 
@@ -100,26 +100,26 @@ static void assert_remote_page_store_features() {
     assert(server.latest_page_lsn(pid) == 5);
 
     server.set_durable_lsn(10);
-    rw.write_page(pid, v10.data(), v10.header()->lsn);
+    assert(rw.write_page(pid, v10.data(), v10.header()->lsn).ok());
     assert(server.latest_page_lsn(pid) == 10);
     assert(server.log_index_size(pid) == 2);
 
     byte latest[kPageSize];
     std::memset(latest, 0, sizeof(latest));
-    rw.read_page(pid, latest);
+    assert(rw.read_page(pid, latest).ok());
     assert(reinterpret_cast<PageHeader*>(latest)->lsn == 10);
     assert(latest[sizeof(PageHeader)] == 0xaa);
 
     RemotePageStore ro_at_5(&server, true, 5);
     byte snapshot[kPageSize];
     std::memset(snapshot, 0, sizeof(snapshot));
-    ro_at_5.read_page(pid, snapshot);
+    assert(ro_at_5.read_page(pid, snapshot).ok());
     assert(reinterpret_cast<PageHeader*>(snapshot)->lsn == 5);
     assert(snapshot[sizeof(PageHeader)] == 0x55);
 
     Page ignored;
     fill_page(&ignored, pid, 15, 0x15);
-    ro_at_5.write_page(pid, ignored.data(), ignored.header()->lsn);
+    assert(!ro_at_5.write_page(pid, ignored.data(), ignored.header()->lsn).ok());
     assert(server.latest_page_lsn(pid) == 10);
     assert(server.replica_count() == 2);
 }
@@ -140,7 +140,10 @@ static void assert_batch_io() {
     Vector<PageWriteRequest> writes;
     writes.push_back(PageWriteRequest(id1, p1.data(), p1.header()->lsn));
     writes.push_back(PageWriteRequest(id2, p2.data(), p2.header()->lsn));
-    store.write_pages(writes);
+    Vector<PageIOResult> write_results = store.write_pages(writes);
+    assert(write_results.size() == 2);
+    assert(write_results[0].ok());
+    assert(write_results[1].ok());
 
     byte out1[kPageSize];
     byte out2[kPageSize];
@@ -149,11 +152,24 @@ static void assert_batch_io() {
     Vector<PageReadRequest> reads;
     reads.push_back(PageReadRequest(id1, out1));
     reads.push_back(PageReadRequest(id2, out2));
-    store.read_pages(reads);
+    Vector<PageIOResult> read_results = store.read_pages(reads);
+    assert(read_results.size() == 2);
+    assert(read_results[0].ok());
+    assert(read_results[1].ok());
     assert(reinterpret_cast<PageHeader*>(out1)->lsn == 20);
     assert(reinterpret_cast<PageHeader*>(out2)->lsn == 30);
     assert(out1[sizeof(PageHeader)] == 0x20);
     assert(out2[sizeof(PageHeader)] == 0x30);
+
+    Page rejected;
+    PageId id3 = make_page_id(13, 3);
+    fill_page(&rejected, id3, 200, 0xee);
+    Vector<PageWriteRequest> rejected_writes;
+    rejected_writes.push_back(PageWriteRequest(id3, rejected.data(), rejected.header()->lsn));
+    Vector<PageIOResult> rejected_results = store.write_pages(rejected_writes);
+    assert(rejected_results.size() == 1);
+    assert(!rejected_results[0].ok());
+    assert(server.latest_page_lsn(id3) == 0);
 }
 
 static void assert_log_index_survives_restart() {
@@ -246,12 +262,12 @@ static void assert_tcp_remote_page_store_client() {
     Page page;
     fill_page(&page, pid, 7, 0x77);
     client.set_durable_lsn(7);
-    client.write_page(pid, page.data(), 7);
-    client.flush();
+    assert(client.write_page(pid, page.data(), 7).ok());
+    assert(client.flush().ok());
 
     byte out[kPageSize];
     std::memset(out, 0, sizeof(out));
-    client.read_page(pid, out);
+    assert(client.read_page(pid, out).ok());
     assert(reinterpret_cast<PageHeader*>(out)->lsn == 7);
     assert(out[sizeof(PageHeader)] == 0x77);
     assert(server.latest_page_lsn(pid) == 7);

@@ -23,22 +23,27 @@ static String make_temp_dir(const char* pattern) {
 
 class RecordingPageStore : public PageStore {
 public:
-    void read_page(PageId page_id, byte* page_data) override {
+    Result<void> read_page(PageId page_id, byte* page_data) override {
         Page page;
         page.init(page_id, PageType::kHeapData);
         std::memcpy(page_data, page.data(), kPageSize);
+        return Status::ok_status();
     }
 
-    void write_page(PageId page_id, const byte* page_data, LSN page_lsn) override {
+    Result<void> write_page(PageId page_id, const byte* page_data, LSN page_lsn) override {
         (void)page_data;
         last_write_page_id = page_id;
         last_write_lsn = page_lsn;
         durable_lsn_at_write = durable_lsn_;
         write_count++;
+        return Status::ok_status();
     }
 
-    void flush() override {}
-    void delete_file(const String& filename) override { unlink(filename.c_str()); }
+    Result<void> flush() override { return Status::ok_status(); }
+    Result<void> delete_file(const String& filename) override {
+        unlink(filename.c_str());
+        return Status::ok_status();
+    }
     void set_durable_lsn(LSN durable_lsn) override { durable_lsn_ = durable_lsn; }
     LSN durable_lsn() const override { return durable_lsn_; }
 

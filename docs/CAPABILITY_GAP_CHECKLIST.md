@@ -89,21 +89,21 @@ The main distinction used here:
 
 ## P0: Interface And Storage Correctness
 
-- [ ] Replace `PageStore` void methods with result-returning APIs:
-  - [ ] `Result<void> read_page(PageId, byte*)`
-  - [ ] `Result<void> write_page(PageId, const byte*, LSN)`
-  - [ ] `Result<void> flush()`
-  - [ ] `Result<void> delete_file(const String&)`
-  - [ ] Convert callers in `BufferPool`, recovery, `RemotePageStore`, and
+- [x] Replace `PageStore` void methods with result-returning APIs:
+  - [x] `Result<void> read_page(PageId, byte*)`
+  - [x] `Result<void> write_page(PageId, const byte*, LSN)`
+  - [x] `Result<void> flush()`
+  - [x] `Result<void> delete_file(const String&)`
+  - [x] Convert callers in `BufferPool`, recovery, `RemotePageStore`, and
     `RemotePageStoreClient`.
-  - [ ] Treat retryable remote failures, checksum mismatch, ENOSPC, fsync
+  - [x] Treat retryable remote failures, checksum mismatch, ENOSPC, fsync
     failure, and fatal corruption as separate error classes.
 
-- [ ] Return per-page status from batch page IO:
-  - [ ] `read_pages` reports individual read failures.
-  - [ ] `write_pages` reports individual write/fdatasync/checksum failures.
-  - [ ] Batch write must clearly define partial-success semantics.
-  - [ ] BufferPool and checkpoint code must stop treating failed writes as
+- [x] Return per-page status from batch page IO:
+  - [x] `read_pages` reports individual read failures.
+  - [x] `write_pages` reports individual write/fdatasync/checksum failures.
+  - [x] Batch write must clearly define partial-success semantics.
+  - [x] BufferPool and checkpoint code must stop treating failed writes as
     successful flushes.
 
 - [ ] Introduce real physical index keys:
@@ -374,7 +374,7 @@ The main distinction used here:
 ## Recommended Execution Order
 
 1. Downgrade README claims and link this checklist. (done)
-2. Convert `PageStore` to result-returning APIs and propagate errors.
+2. Convert `PageStore` to result-returning APIs and propagate errors. (done)
 3. Add table/index consistency checker and B+ tree property tests.
 4. Introduce `IndexKey` / `IndexKeySchema`.
 5. Rebuild composite and text/varchar index support on top of `IndexKey`.

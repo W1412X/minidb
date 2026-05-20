@@ -58,8 +58,8 @@ public:
     void read_page(PageId page_id, byte* page_data);
     void read_page(PageId page_id, LSN read_lsn, byte* page_data);
     bool write_page(PageId page_id, const byte* page_data, LSN page_lsn);
-    void read_pages(const Vector<PageReadRequest>& pages);
-    void write_pages(const Vector<PageWriteRequest>& pages);
+    Vector<PageIOResult> read_pages(const Vector<PageReadRequest>& pages);
+    Vector<PageIOResult> write_pages(const Vector<PageWriteRequest>& pages);
     void flush();
     void delete_file(const String& filename);
 
@@ -111,12 +111,12 @@ public:
         : server_(server), read_only_(read_only), read_lsn_(read_lsn),
           batch_size_(batch_size == 0 ? 1 : batch_size) {}
 
-    void read_page(PageId page_id, byte* page_data) override;
-    void write_page(PageId page_id, const byte* page_data, LSN page_lsn) override;
-    void flush() override;
-    void delete_file(const String& filename) override;
-    void read_pages(const Vector<PageReadRequest>& pages) override;
-    void write_pages(const Vector<PageWriteRequest>& pages) override;
+    Result<void> read_page(PageId page_id, byte* page_data) override;
+    Result<void> write_page(PageId page_id, const byte* page_data, LSN page_lsn) override;
+    Result<void> flush() override;
+    Result<void> delete_file(const String& filename) override;
+    Vector<PageIOResult> read_pages(const Vector<PageReadRequest>& pages) override;
+    Vector<PageIOResult> write_pages(const Vector<PageWriteRequest>& pages) override;
     void set_durable_lsn(LSN durable_lsn) override;
     LSN durable_lsn() const override;
     bool is_remote() const override { return true; }

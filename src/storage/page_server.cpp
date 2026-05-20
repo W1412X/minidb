@@ -296,18 +296,41 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
     return true;
 }
 
-void PageServer::read_pages(const Vector<PageReadRequest>& pages) {
+Vector<PageIOResult> PageServer::read_pages(const Vector<PageReadRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
     batch_read_ops_.fetch_add(1, std::memory_order_relaxed);
     for (u32 i = 0; i < pages.size(); i++) {
-        if (pages[i].data) read_page(pages[i].page_id, pages[i].data);
+        if (pages[i].data) {
+            read_page(pages[i].page_id, pages[i].data);
+            results.push_back(PageIOResult(pages[i].page_id, Status::ok_status()));
+        } else {
+            results.push_back(PageIOResult(pages[i].page_id,
+                                           Status(ErrorCode::kInvalidArgument,
+                                                  "null page buffer")));
+        }
     }
+    return results;
 }
 
-void PageServer::write_pages(const Vector<PageWriteRequest>& pages) {
+Vector<PageIOResult> PageServer::write_pages(const Vector<PageWriteRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
     batch_write_ops_.fetch_add(1, std::memory_order_relaxed);
     for (u32 i = 0; i < pages.size(); i++) {
-        if (pages[i].data) write_page(pages[i].page_id, pages[i].data, pages[i].page_lsn);
+        if (pages[i].data) {
+            bool ok = write_page(pages[i].page_id, pages[i].data, pages[i].page_lsn);
+            results.push_back(PageIOResult(
+                pages[i].page_id,
+                ok ? Status::ok_status()
+                   : Status(ErrorCode::kIOError, "PageServer rejected page write")));
+        } else {
+            results.push_back(PageIOResult(pages[i].page_id,
+                                           Status(ErrorCode::kInvalidArgument,
+                                                  "null page buffer")));
+        }
     }
+    return results;
 }
 
 void PageServer::flush() {
@@ -366,32 +389,54 @@ PageServerStats PageServer::stats() const {
     return out;
 }
 
-void RemotePageStore::read_page(PageId page_id, byte* page_data) {
+Result<void> RemotePageStore::read_page(PageId page_id, byte* page_data) {
+    if (!page_data) return Status(ErrorCode::kInvalidArgument, "null page buffer");
     if (read_only_ && read_lsn_ != 0) server_->read_page(page_id, read_lsn_, page_data);
     else server_->read_page(page_id, page_data);
+    return Status::ok_status();
 }
 
-void RemotePageStore::write_page(PageId page_id, const byte* page_data, LSN page_lsn) {
-    if (read_only_) return;
-    (void)server_->write_page(page_id, page_data, page_lsn);
+Result<void> RemotePageStore::write_page(PageId page_id, const byte* page_data, LSN page_lsn) {
+    if (read_only_) {
+        return Status(ErrorCode::kInvalidArgument, "read-only remote page store cannot write pages");
+    }
+    if (!server_->write_page(page_id, page_data, page_lsn)) {
+        return Status(ErrorCode::kIOError, "PageServer rejected page write");
+    }
+    return Status::ok_status();
 }
 
-void RemotePageStore::flush() { server_->flush(); }
-
-void RemotePageStore::delete_file(const String& filename) {
-    if (!read_only_) server_->delete_file(filename);
+Result<void> RemotePageStore::flush() {
+    server_->flush();
+    return Status::ok_status();
 }
 
-void RemotePageStore::read_pages(const Vector<PageReadRequest>& pages) {
+Result<void> RemotePageStore::delete_file(const String& filename) {
+    if (read_only_) {
+        return Status(ErrorCode::kInvalidArgument, "read-only remote page store cannot delete files");
+    }
+    server_->delete_file(filename);
+    return Status::ok_status();
+}
+
+Vector<PageIOResult> RemotePageStore::read_pages(const Vector<PageReadRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
     if (pages.size() <= batch_size_) {
         if (!read_only_ || read_lsn_ == 0) {
-            server_->read_pages(pages);
-            return;
+            return server_->read_pages(pages);
         }
         for (u32 i = 0; i < pages.size(); i++) {
-            if (pages[i].data) server_->read_page(pages[i].page_id, read_lsn_, pages[i].data);
+            if (pages[i].data) {
+                server_->read_page(pages[i].page_id, read_lsn_, pages[i].data);
+                results.push_back(PageIOResult(pages[i].page_id, Status::ok_status()));
+            } else {
+                results.push_back(PageIOResult(pages[i].page_id,
+                                               Status(ErrorCode::kInvalidArgument,
+                                                      "null page buffer")));
+            }
         }
-        return;
+        return results;
     }
 
     Vector<PageReadRequest> batch;
@@ -399,20 +444,33 @@ void RemotePageStore::read_pages(const Vector<PageReadRequest>& pages) {
     for (u32 i = 0; i < pages.size(); i++) {
         batch.push_back(pages[i]);
         if (batch.size() >= batch_size_) {
-            read_pages(batch);
+            Vector<PageIOResult> batch_results = read_pages(batch);
+            for (u32 j = 0; j < batch_results.size(); j++) results.push_back(batch_results[j]);
             batch.clear();
         }
     }
     if (!batch.empty()) {
-        read_pages(batch);
+        Vector<PageIOResult> batch_results = read_pages(batch);
+        for (u32 j = 0; j < batch_results.size(); j++) results.push_back(batch_results[j]);
     }
+    return results;
 }
 
-void RemotePageStore::write_pages(const Vector<PageWriteRequest>& pages) {
-    if (read_only_) return;
+Vector<PageIOResult> RemotePageStore::write_pages(const Vector<PageWriteRequest>& pages) {
+    Vector<PageIOResult> results;
+    results.reserve(pages.size());
+    auto append_status = [&results](const Vector<PageWriteRequest>& batch, const Status& st) {
+        for (u32 i = 0; i < batch.size(); i++) {
+            results.push_back(PageIOResult(batch[i].page_id, st));
+        }
+    };
+    if (read_only_) {
+        append_status(pages, Status(ErrorCode::kInvalidArgument,
+                                    "read-only remote page store cannot write pages"));
+        return results;
+    }
     if (pages.size() <= batch_size_) {
-        server_->write_pages(pages);
-        return;
+        return server_->write_pages(pages);
     }
 
     Vector<PageWriteRequest> batch;
@@ -420,13 +478,16 @@ void RemotePageStore::write_pages(const Vector<PageWriteRequest>& pages) {
     for (u32 i = 0; i < pages.size(); i++) {
         batch.push_back(pages[i]);
         if (batch.size() >= batch_size_) {
-            server_->write_pages(batch);
+            Vector<PageIOResult> batch_results = server_->write_pages(batch);
+            for (u32 j = 0; j < batch_results.size(); j++) results.push_back(batch_results[j]);
             batch.clear();
         }
     }
     if (!batch.empty()) {
-        server_->write_pages(batch);
+        Vector<PageIOResult> batch_results = server_->write_pages(batch);
+        for (u32 j = 0; j < batch_results.size(); j++) results.push_back(batch_results[j]);
     }
+    return results;
 }
 
 void RemotePageStore::set_durable_lsn(LSN durable_lsn) {
