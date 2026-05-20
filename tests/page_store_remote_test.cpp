@@ -249,6 +249,53 @@ static void assert_log_index_binary_search_boundaries() {
     assert(evicted_but_reconstructable[sizeof(PageHeader)] == 0x10);
 }
 
+static void assert_pageserver_rejects_partial_persistent_records() {
+    String dir = make_temp_dir("minidb-page-corrupt.XXXXXX");
+    PageId pid = make_page_id(17, 1);
+    {
+        PageServer server(dir, true, true, 32, 0);
+        server.set_durable_lsn(20);
+        Page p5;
+        Page p20;
+        fill_page(&p5, pid, 5, 0x05);
+        fill_page(&p20, pid, 20, 0x20);
+        assert(server.write_page(pid, p5.data(), 5));
+        assert(server.write_page(pid, p20.data(), 20));
+        server.flush();
+        assert(server.log_index_size(pid) == 2);
+    }
+
+    String wal_path = dir + "/remote_wal_images.bin";
+    struct stat st;
+    assert(::stat(wal_path.c_str(), &st) == 0);
+    assert(st.st_size > 4);
+    assert(::truncate(wal_path.c_str(), st.st_size - 4) == 0);
+
+    {
+        PageServer server(dir, true, true, 32, 0);
+        assert(server.log_index_size(pid) == 1);
+        assert(server.latest_page_lsn(pid) == 5);
+        byte snapshot[kPageSize];
+        std::memset(snapshot, 0, sizeof(snapshot));
+        assert(server.read_page(pid, 5, snapshot));
+        assert(reinterpret_cast<PageHeader*>(snapshot)->lsn == 5);
+    }
+
+    String meta_path = dir + "/page_server.meta";
+    FILE* f = std::fopen(meta_path.c_str(), "w");
+    assert(f != nullptr);
+    std::fprintf(f, "version=2\n");
+    std::fprintf(f, "durable_lsn=999\n");
+    std::fprintf(f, "wal_image_bytes=999\n");
+    std::fprintf(f, "checksum=1\n");
+    std::fclose(f);
+
+    {
+        PageServer server(dir, true, true, 32, 0);
+        assert(server.durable_lsn() == 0);
+    }
+}
+
 static void assert_tcp_remote_page_store_client() {
     String dir = make_temp_dir("minidb-page-tcp.XXXXXX");
     PageServer server(dir, true, true, 32, 1);
@@ -337,6 +384,7 @@ int main() {
     assert_batch_io();
     assert_log_index_survives_restart();
     assert_log_index_binary_search_boundaries();
+    assert_pageserver_rejects_partial_persistent_records();
     assert_tcp_remote_page_store_client();
     assert_page_server_stats_are_thread_safe();
     assert_tcp_stop_joins_active_handlers();

@@ -1,12 +1,13 @@
 #include "sql/executor/index_scan_executor.h"
 #include "transaction/transaction.h"
+#include <cstring>
 
 namespace minidb {
 
 IndexScanExecutor::IndexScanExecutor(
     BufferPool* pool, HeapFile*, BPlusTree* index,
-    const Value& search_key, bool is_range,
-    const Value& range_high, const Schema& output_schema,
+    const IndexKey& search_key, bool is_range,
+    const IndexKey& range_high, const Schema& output_schema,
     TransactionManager* txn_mgr)
     : pool_(pool), index_(index),
       search_key_(search_key), is_range_(is_range),
@@ -83,7 +84,7 @@ static VersionResult follow_version_chain(BufferPool* pool, TransactionManager* 
 }
 
 ExecResult IndexScanExecutor::next() {
-    Value high = is_range_ ? range_high_ : search_key_;
+    IndexKey high = is_range_ ? range_high_ : search_key_;
     while (true) {
         RecordId rid;
         const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
@@ -127,13 +128,15 @@ bool IndexScanExecutor::last_record_id(RecordId* rid) const {
     return last_rid_.page_id != kNullPageId;
 }
 
-IndexOnlyScanExecutor::IndexOnlyScanExecutor(BPlusTree* index, const Value& search_key,
-                                             bool is_range, const Value& range_high,
-                                             const Schema& output_schema)
-    : index_(index), search_key_(search_key), is_range_(is_range),
+IndexOnlyScanExecutor::IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index,
+                                             const IndexKey& search_key,
+                                             bool is_range, const IndexKey& range_high,
+                                             const Schema& output_schema,
+                                             TransactionManager* txn_mgr)
+    : pool_(pool), index_(index), search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
-      has_last_index_rid_(false) {}
+      has_last_index_rid_(false), txn_mgr_(txn_mgr) {}
 
 void IndexOnlyScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -143,9 +146,9 @@ void IndexOnlyScanExecutor::init() {
 }
 
 ExecResult IndexOnlyScanExecutor::next() {
-    Value high = is_range_ ? range_high_ : search_key_;
+    IndexKey high = is_range_ ? range_high_ : search_key_;
     while (true) {
-        Value key;
+        IndexKey key;
         RecordId rid;
         const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
         if (!index_->scan_next_entry(search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
@@ -154,8 +157,34 @@ ExecResult IndexOnlyScanExecutor::next() {
         }
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
+        if (pool_) {
+            auto page_result = pool_->fetch_page(rid.page_id, true);
+            if (!page_result.ok()) continue;
+            Page* page = page_result.value();
+            SlotIdx visible_slot = rid.slot_idx;
+            const LinePointer* lp = page->line_pointer(visible_slot);
+            if (lp && lp->is_redirect()) {
+                SlotIdx target = page->redirect_target(visible_slot);
+                if (target != kNullSlot) visible_slot = target;
+                lp = page->line_pointer(visible_slot);
+            }
+            bool visible = false;
+            if (lp && lp->is_valid()) {
+                u64 xmin = 0;
+                u64 xmax = 0;
+                std::memcpy(&xmin, page->data() + lp->offset, 8);
+                std::memcpy(&xmax, page->data() + lp->offset + 8, 8);
+                if (!txn_mgr_ || !txn_mgr_->current()) {
+                    visible = xmax == kInvalidTxnId;
+                } else {
+                    visible = txn_mgr_->is_visible(xmin, xmax, *txn_mgr_->current());
+                }
+            }
+            pool_->unpin_page(rid.page_id);
+            if (!visible) continue;
+        }
         Vector<Value> values;
-        values.push_back(key);
+        values.push_back(key.first_value());
         return ExecResult::ok(Tuple(output_schema_, values));
     }
     return ExecResult::empty();

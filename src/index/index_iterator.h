@@ -14,8 +14,8 @@ class IndexIterator {
 public:
     IndexIterator(BPlusTree* tree, BufferPool* pool);
 
-    void seek(const Value& key);
-    void seek_range(const Value& low, const Value& high);
+    void seek(const IndexKey& key);
+    void seek_range(const IndexKey& low, const IndexKey& high);
 
     bool has_next();
     RecordId next();

@@ -9,6 +9,7 @@
 #include "container/vector.h"
 #include "container/unique_ptr.h"
 #include "container/utility.h"
+#include "index/index_key.h"
 #include "record/schema.h"
 #include "record/value.h"
 
@@ -53,9 +54,9 @@ struct IndexScanPlan : PlanNode {
     u32 table_id;
     u32 index_id;
     String table_name;
-    Value search_key;
+    IndexKey search_key;
     bool is_range;
-    Value range_high;
+    IndexKey range_high;
     IndexScanPlan() : table_id(0), index_id(0), is_range(false) {
         type = PlanNodeType::kIndexScan;
     }
@@ -65,9 +66,9 @@ struct IndexOnlyScanPlan : PlanNode {
     u32 table_id;
     u32 index_id;
     String table_name;
-    Value search_key;
+    IndexKey search_key;
     bool is_range;
-    Value range_high;
+    IndexKey range_high;
     IndexOnlyScanPlan() : table_id(0), index_id(0), is_range(false) {
         type = PlanNodeType::kIndexOnlyScan;
     }

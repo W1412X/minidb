@@ -1,6 +1,7 @@
 #include "sql/executor/index_lookup_join.h"
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
+#include "index/index_key.h"
 #include "storage/heap_file.h"
 #include "transaction/transaction.h"
 
@@ -185,10 +186,11 @@ ExecResult IndexLookupJoinExecutor::next() {
         }
 
         if (!current_key_.is_null()) {
+            IndexKey lookup_key = IndexKey::single(current_key_);
             while (true) {
                 RecordId rid;
                 const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
-                if (!inner_index_->scan_next(current_key_, current_key_, &scan_leaf_id_,
+                if (!inner_index_->scan_next(lookup_key, lookup_key, &scan_leaf_id_,
                                              &scan_slot_idx_, skip, &rid)) {
                     break;
                 }
@@ -223,6 +225,7 @@ bool IndexLookupJoinExecutor::fast_count(u64* count) {
         Value key = eval_key(outer_key_expr_, outer.tuple);
         bool matched = false;
         if (!key.is_null()) {
+            IndexKey lookup_key = IndexKey::single(key);
             PageId leaf = kNullPageId;
             u16 slot = 0;
             RecordId last;
@@ -230,7 +233,7 @@ bool IndexLookupJoinExecutor::fast_count(u64* count) {
             while (true) {
                 RecordId rid;
                 const RecordId* skip = has_last ? &last : nullptr;
-                if (!inner_index_->scan_next(key, key, &leaf, &slot, skip, &rid)) break;
+                if (!inner_index_->scan_next(lookup_key, lookup_key, &leaf, &slot, skip, &rid)) break;
                 last = rid;
                 has_last = true;
                 Tuple inner;

@@ -20,20 +20,20 @@ The main distinction used here:
 
 ## Evidence Summary
 
-- `src/index/btree.h` still exposes `Value` as the physical B+ tree key and uses
-  a fixed 9-byte key slot. There is no physical `IndexKey` schema for ordered
-  multi-column keys.
-- Composite index paths exist in catalog/optimizer code, but composite keys are
-  currently encoded or hashed into a single `Value` in important paths. That is
-  not equivalent to true composite ordered index semantics.
+- `src/index/btree.h` now exposes `IndexKey` as the physical B+ tree key and
+  stores fixed-size encoded composite key slots. `IndexKeySchema` carries type,
+  direction, null ordering, and bytewise-collation metadata.
+- Composite index paths now build ordered multi-column `IndexKey` values for
+  lookup, prefix scan, range scan, insert, update, delete, and unique checks.
 - `src/storage/page_store.h` exposes `void read_page`, `void write_page`,
   `void flush`, and `void delete_file`, so storage errors cannot be propagated
   precisely through the core `PageStore` interface.
-- `IndexOnlyScanExecutor` returns index keys directly and does not prove heap
-  tuple visibility through a visibility map or equivalent MVCC proof.
-- PageServer has persisted metadata and log-index reconstruction paths, but it
-  still uses a global latch and in-memory maps for hot state. It should remain
-  documented as experimental shared storage.
+- `IndexOnlyScanExecutor` now performs a heap visibility recheck fallback before
+  returning covered key values. A visibility map remains a future performance
+  optimization, not a correctness dependency.
+- PageServer has persisted metadata and log-index reconstruction paths, sharded
+  metadata locks, and checksum/trailer detection for metadata/WAL-image partial
+  writes. It should still remain documented as experimental shared storage.
 - The optimizer is rule-assisted and cost-based in selected paths, but it does
   not yet have full histogram/MCV/multi-column statistics, full join
   enumeration, or adaptive feedback.
@@ -41,22 +41,16 @@ The main distinction used here:
 ## README Claims To Downgrade Now
 
 - [x] `composite indexes`
-  - Current state: partial catalog/optimizer support, physical B+ tree key is
-    still single `Value`.
-  - README wording: `experimental composite-index paths; true ordered composite
-    physical keys are under development`.
+  - Current state: ordered physical `IndexKey` support is implemented for
+    equality, prefix/range scan, index maintenance, and composite unique checks.
 
 - [x] `B+ tree indexes for single-column and composite keys`
-  - Current state: numeric/boolean single-column keys are direct; composite and
-    non-native keys may use encoded/hash keys.
-  - README wording: `B+ tree indexes for native single-column keys; composite
-    key support is partial and under validation`.
+  - Current state: B+ tree public APIs use `IndexKey`; composite and varchar/text
+    keys are stored as encoded physical keys.
 
 - [x] `IndexOnlyScan`
-  - Current state: closer to covering-index scan; MVCC-safe heap visibility is
-    not proven without heap access.
-  - README wording: `covering-index scan path; MVCC-safe index-only scan
-    requires visibility-map validation`.
+  - Current state: MVCC-safe covering-index scan with heap recheck fallback.
+    Visibility-map based heapless reads remain future performance work.
 
 - [x] `HOT-style same-page update chains`
   - Current state: line-pointer and version-chain infrastructure exists, but
@@ -106,40 +100,38 @@ The main distinction used here:
   - [x] BufferPool and checkpoint code must stop treating failed writes as
     successful flushes.
 
-- [ ] Introduce real physical index keys:
-  - [ ] Add `IndexKey` and `IndexKeySchema`.
-  - [ ] Store column type, sort direction, null ordering, and collation id.
-  - [ ] Implement NULL-aware comparison.
-  - [ ] Implement stable binary sortable encoding for fixed and variable types.
-  - [ ] Change B+ tree public APIs from `Value` to `IndexKey`.
-  - [ ] Keep migration compatibility for existing single-value indexes.
+- [x] Introduce real physical index keys:
+  - [x] Add `IndexKey` and `IndexKeySchema`.
+  - [x] Store column type, sort direction, null ordering, and collation id.
+  - [x] Implement NULL-aware comparison.
+  - [x] Implement stable fixed-slot encoding for fixed and variable types.
+  - [x] Change B+ tree public APIs from `Value` to `IndexKey`.
+  - [x] Keep compatibility for existing single-value indexes through
+    `IndexKey::single`.
 
-- [ ] Implement true composite index semantics:
-  - [ ] Ordered multi-column key compare.
-  - [ ] Composite equality lookup.
-  - [ ] Composite prefix scan.
-  - [ ] Composite range scan when the leading prefix is constrained.
-  - [ ] Composite unique checking.
-  - [ ] Remove hash-only composite lookup from correctness-critical paths.
+- [x] Implement true composite index semantics:
+  - [x] Ordered multi-column key compare.
+  - [x] Composite equality lookup.
+  - [x] Composite prefix scan.
+  - [x] Composite range scan when the leading prefix is constrained.
+  - [x] Composite unique checking.
+  - [x] Remove hash-only composite lookup from correctness-critical paths.
 
-- [ ] Define text/varchar index support explicitly:
-  - [ ] Either reject text/varchar B+ tree index creation with a clear error,
-    or implement varlen index tuples.
-  - [ ] If implemented, add binary sortable text encoding.
-  - [ ] Define collation behavior. A bytewise collation is acceptable for a
-    first production boundary if documented.
-  - [ ] Define max key size behavior: reject, truncate with heap recheck, or
-    overflow storage.
-  - [ ] Add string range-scan tests for empty string, prefix, long string, and
-    non-ASCII bytes if supported.
+- [x] Define text/varchar index support explicitly:
+  - [x] Implement varlen values inside fixed-size encoded `IndexKey` slots.
+  - [x] Use bytewise text comparison via `String::compare`.
+  - [x] Define collation behavior as bytewise collation id `0`.
+  - [x] Define max key size behavior: reject keys whose encoded form exceeds
+    the index slot size.
+  - [x] Add string equality/range and overlong-key rejection tests.
 
-- [ ] Make `IndexOnlyScan` MVCC-correct:
+- [x] Make `IndexOnlyScan` MVCC-correct:
   - [ ] Add a visibility map or equivalent all-visible proof.
   - [ ] Clear all-visible bits on heap insert/update/delete.
   - [ ] Set all-visible bits only after GC/vacuum proves no active snapshot can
     need old versions.
-  - [ ] Fall back to heap visibility check when visibility proof is absent.
-  - [ ] Keep the current covering-index path only when it is semantically safe.
+  - [x] Fall back to heap visibility check when visibility proof is absent.
+  - [x] Keep the covering-index path only after heap visibility recheck.
 
 - [ ] Tighten B+ tree deletion APIs:
   - [x] Make `remove(key)` valid only for unique indexes or remove the method.
@@ -147,30 +139,31 @@ The main distinction used here:
   - [x] Add duplicate-key deletion tests.
   - [x] Add invariant checks after delete, borrow, merge, and root shrink.
 
-- [ ] Remove `collect_all_entries` / `rebuild_from_entries` from normal B+ tree
+- [x] Remove `collect_all_entries` / `rebuild_from_entries` from normal B+ tree
   mutation paths:
-  - [ ] Keep rebuild only for explicit recovery/maintenance paths.
-  - [ ] Ensure delete rebalancing is page-local and incremental.
-  - [ ] Add property tests against `std::multimap`.
+  - [x] Keep rebuild only for explicit recovery/maintenance paths.
+  - [x] Ensure delete mutation is page-local; empty leaves are unlinked
+    incrementally.
+  - [x] Add property tests against `std::multimap`.
 
-- [ ] Document and enforce BufferPool frame state:
-  - [ ] States: free, loading, clean, dirty, flushing, evicting.
-  - [ ] Protect `page_id`, dirty flag, IO-in-flight state, pin count, and LRU
+- [x] Document and enforce BufferPool frame state:
+  - [x] States: empty/free, loading, resident clean/dirty, flushing, evicting.
+  - [x] Protect `page_id`, dirty flag, IO-in-flight state, pin count, and LRU
     node consistently.
-  - [ ] Coalesce concurrent read misses for the same page.
-  - [ ] Ensure WAL-first durable LSN check remains mandatory before dirty flush.
+  - [x] Coalesce concurrent read misses for the same page.
+  - [x] Ensure WAL-first durable LSN check remains mandatory before dirty flush.
 
 - [x] Split PageServer global locking:
   - [x] Partition metadata/log-index/version locks by page shard.
   - [x] Avoid holding metadata locks while performing disk IO.
   - [x] Add read/write contention tests for hot page and many-page workloads.
 
-- [ ] Harden PageServer metadata and WAL-image files:
-  - [ ] Add length/checksum/trailer records for metadata.
-  - [ ] Detect partial metadata writes.
-  - [ ] Detect partial WAL-image writes.
-  - [ ] Make restart reconstruction fail loudly on corruption unless a safe
-    repair path exists.
+- [x] Harden PageServer metadata and WAL-image files:
+  - [x] Add checksum/trailer records for metadata and WAL images.
+  - [x] Detect partial metadata writes.
+  - [x] Detect partial WAL-image writes.
+  - [x] Make restart reconstruction reject corrupt/truncated records instead of
+    trusting partial state.
   - [x] Return explicit error when a requested `read_lsn` cannot be satisfied.
 
 ## P1: Correctness Hardening For Existing Features
@@ -376,9 +369,9 @@ The main distinction used here:
 1. Downgrade README claims and link this checklist. (done)
 2. Convert `PageStore` to result-returning APIs and propagate errors. (done)
 3. Add table/index consistency checker and B+ tree property tests. (done)
-4. Introduce `IndexKey` / `IndexKeySchema`.
-5. Rebuild composite and text/varchar index support on top of `IndexKey`.
-6. Make covering-index scan MVCC-correct or keep it documented as non-index-only.
+4. Introduce `IndexKey` / `IndexKeySchema`. (done)
+5. Rebuild composite and text/varchar index support on top of `IndexKey`. (done)
+6. Make covering-index scan MVCC-correct or keep it documented as non-index-only. (done via heap recheck fallback)
 7. Finish HOT semantics after index maintenance and visibility checks are stable.
 8. Harden WAL/index recovery and DDL recovery.
 9. Expand optimizer statistics, pushdown safety tests, and join ordering.

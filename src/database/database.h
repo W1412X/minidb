@@ -43,6 +43,7 @@ public:
     BPlusTree* get_index_tree(u32 index_id);
     void insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);
     void delete_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);
+    bool validate_index_keys(u32 table_id, const Tuple& tuple) const;
     void rebuild_indexes_for_table(u32 table_id);
     bool read_tuple(u32 table_id, const Schema& schema, const RecordId& rid, Tuple* out);
     TableEntry* get_table(const String& name) { return catalog_.get_table(name); }

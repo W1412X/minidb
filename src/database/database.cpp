@@ -1,5 +1,6 @@
 #include "database/database.h"
 #include "common/tuple_key.h"
+#include "index/index_key.h"
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -11,22 +12,16 @@ namespace minidb {
 
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
-           type == TypeId::kFloat || type == TypeId::kDouble;
+           type == TypeId::kFloat || type == TypeId::kDouble ||
+           type == TypeId::kVarchar || type == TypeId::kNull;
 }
 
-static Value index_key_from_tuple(const IndexEntry& index, const Tuple& tuple) {
-    if (index.key_columns.size() == 1) {
-        const Column& col = tuple.schema().get_column(index.key_columns[0]);
-        if (btree_supports_type(col.type)) {
-            return tuple.get_value(index.key_columns[0]);
-        }
+static IndexKey index_key_from_tuple(const IndexEntry& index, const Tuple& tuple) {
+    Vector<Value> values;
+    for (u32 i = 0; i < index.key_columns.size(); i++) {
+        values.push_back(tuple.get_value(index.key_columns[i]));
     }
-
-    String key;
-    if (!make_projected_tuple_key(tuple, index.key_columns, true, &key)) {
-        return Value();
-    }
-    return Value(static_cast<i64>(Hash<String>()(key)));
+    return IndexKey::from_values(values);
 }
 
 static u32 pool_frames_from_config(const DbConfig& config) {
@@ -330,7 +325,39 @@ bool Database::create_index(const String& name, const String& table_name,
     for (u32 i = 0; i < columns.size(); i++) {
         int idx = table->schema.get_column_index(columns[i]);
         if (idx < 0) return false;
+        if (!btree_supports_type(table->schema.get_column(static_cast<u32>(idx)).type)) {
+            return false;
+        }
         key_cols.push_back(static_cast<u32>(idx));
+    }
+
+    IndexEntry probe;
+    probe.key_columns = key_cols;
+    {
+        HeapFile* heap = get_heap_file(table->table_id);
+        PageId first_page = heap->first_data_page_id();
+        u32 file_id = file_id_from_page(first_page);
+        u32 page_num = page_num_from_page(first_page);
+        u32 pages = heap->meta().num_data_pages;
+        for (u32 p = 0; p < pages; p++, page_num++) {
+            PageId page_id = make_page_id(file_id, page_num);
+            auto result = pool_->fetch_page(page_id, true);
+            if (!result.ok()) continue;
+            Page* page = result.value();
+            u16 num_tuples = page->header()->num_tuples;
+            for (u16 slot = 0; slot < num_tuples; slot++) {
+                const LinePointer* lp = page->line_pointer(slot);
+                if (!lp || !lp->is_valid()) continue;
+                Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
+                                                           table->schema, lp->length);
+                if (tuple.xmax() != kInvalidTxnId) continue;
+                if (!index_key_from_tuple(probe, tuple).fits()) {
+                    pool_->unpin_page(page_id);
+                    return false;
+                }
+            }
+            pool_->unpin_page(page_id);
+        }
     }
 
     if (unique) {
@@ -404,6 +431,17 @@ BPlusTree* Database::get_index_tree(u32 index_id) {
     return tree ? tree->get() : nullptr;
 }
 
+bool Database::validate_index_keys(u32 table_id, const Tuple& tuple) const {
+    Vector<IndexEntry*> indexes = const_cast<Catalog&>(catalog_).get_indexes(table_id);
+    for (u32 i = 0; i < indexes.size(); i++) {
+        IndexEntry* index = indexes[i];
+        if (!index) continue;
+        IndexKey key = index_key_from_tuple(*index, tuple);
+        if (!key.fits()) return false;
+    }
+    return true;
+}
+
 bool Database::read_tuple(u32 table_id, const Schema& schema, const RecordId& rid, Tuple* out) {
     HeapFile* heap = get_heap_file(table_id);
     if (!heap || !out) return false;
@@ -430,11 +468,11 @@ void Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
         if (!index) continue;
-        Value key = index_key_from_tuple(*index, tuple);
-        if (key.is_null()) continue;
+        IndexKey key = index_key_from_tuple(*index, tuple);
+        if (!key.fits()) continue;
         BPlusTree* tree = get_index_tree(index->index_id);
         if (tree) {
-            wal_->log_index_insert(txn_id, index->index_id, key, rid);
+            wal_->log_index_insert(txn_id, index->index_id, key.first_value(), rid);
             tree->insert(key, rid);
         }
     }
@@ -446,11 +484,11 @@ void Database::delete_index_entries(u32 table_id, const Tuple& tuple, const Reco
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
         if (!index) continue;
-        Value key = index_key_from_tuple(*index, tuple);
-        if (key.is_null()) continue;
+        IndexKey key = index_key_from_tuple(*index, tuple);
+        if (!key.fits()) continue;
         BPlusTree* tree = get_index_tree(index->index_id);
         if (tree) {
-            wal_->log_index_delete(txn_id, index->index_id, key, rid);
+            wal_->log_index_delete(txn_id, index->index_id, key.first_value(), rid);
             tree->remove(key, rid);
         }
     }
@@ -492,8 +530,8 @@ void Database::rebuild_index(IndexEntry* index) {
             if (!lp || !lp->is_valid()) continue;
             Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset, table->schema, lp->length);
             if (tuple.xmax() != kInvalidTxnId) continue;
-            Value key = index_key_from_tuple(*index, tuple);
-            if (!key.is_null()) {
+            IndexKey key = index_key_from_tuple(*index, tuple);
+            if (key.fits()) {
                 tree_ptr->insert(key, RecordId(page_id, slot));
             }
         }
@@ -568,7 +606,7 @@ bool Database::check_table_index_consistency(String* error) {
                         }
                         break;
                     }
-                    Value key = index_key_from_tuple(*index, tuple);
+                    IndexKey key = index_key_from_tuple(*index, tuple);
                     if (key.is_null()) continue;
                     Vector<RecordId> found = tree->search(key);
                     bool matched = false;

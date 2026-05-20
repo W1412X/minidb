@@ -186,26 +186,39 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
         FrameIdx victim = kNullFrame;
         PageId evict_page_id = kNullPageId;
         bool need_wal_flush = false;
+        bool should_wait = false;
         {
             WriteGuard guard(partition.latch);
 
-            victim = find_victim_frame(partition, part_idx);
-            if (victim == kNullFrame) {
-                victim = kNullFrame;
+            auto* existing = find_page_mapping(partition, page_id);
+            if (existing) {
+                Frame& f = frames_[*existing];
+                if (f.is_io_in_progress) {
+                    should_wait = true;
+                } else {
+                    f.pin_count.fetch_add(1u, std::memory_order_acquire);
+                    move_to_lru_head(partition, *existing);
+                    return &f.page;
+                }
             } else {
-                Frame& victim_frame = frames_[victim];
-                evict_page_id = victim_frame.page_id;
-                need_wal_flush = victim_frame.is_dirty && evict_page_id != kNullPageId &&
-                                 wal_mgr_ && victim_frame.page.header()->lsn > wal_mgr_->durable_lsn();
-                victim_frame.pin_count.store(1, std::memory_order_release);
-                victim_frame.is_io_in_progress = true;
-                if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
-                victim_frame.page_id = page_id;
-                insert_page_mapping(partition, page_id, victim);
+                victim = find_victim_frame(partition, part_idx);
+                if (victim == kNullFrame) {
+                    should_wait = true;
+                } else {
+                    Frame& victim_frame = frames_[victim];
+                    evict_page_id = victim_frame.page_id;
+                    need_wal_flush = victim_frame.is_dirty && evict_page_id != kNullPageId &&
+                                     wal_mgr_ && victim_frame.page.header()->lsn > wal_mgr_->durable_lsn();
+                    victim_frame.pin_count.store(1, std::memory_order_release);
+                    victim_frame.is_io_in_progress = true;
+                    if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
+                    victim_frame.page_id = page_id;
+                    insert_page_mapping(partition, page_id, victim);
+                }
             }
         }
 
-        if (victim == kNullFrame) {
+        if (should_wait || victim == kNullFrame) {
             if (!wait_for_buffer_slot()) {
                 return Status(ErrorCode::kBufferFull, "buffer pool busy");
             }

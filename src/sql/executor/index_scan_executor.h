@@ -17,8 +17,8 @@ class TransactionManager;
 class IndexScanExecutor : public Executor {
 public:
     IndexScanExecutor(BufferPool* pool, HeapFile* heap, BPlusTree* index,
-                      const Value& search_key, bool is_range,
-                      const Value& range_high, const Schema& output_schema,
+                      const IndexKey& search_key, bool is_range,
+                      const IndexKey& range_high, const Schema& output_schema,
                       TransactionManager* txn_mgr = nullptr);
     void init() override;
     ExecResult next() override;
@@ -28,9 +28,9 @@ public:
 private:
     BufferPool* pool_;
     BPlusTree* index_;
-    Value search_key_;
+    IndexKey search_key_;
     bool is_range_;
-    Value range_high_;
+    IndexKey range_high_;
     Schema output_schema_;
     PageId scan_leaf_id_;
     u16 scan_slot_idx_;
@@ -42,23 +42,26 @@ private:
 
 class IndexOnlyScanExecutor : public Executor {
 public:
-    IndexOnlyScanExecutor(BPlusTree* index, const Value& search_key, bool is_range,
-                          const Value& range_high, const Schema& output_schema);
+    IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index, const IndexKey& search_key,
+                          bool is_range, const IndexKey& range_high,
+                          const Schema& output_schema, TransactionManager* txn_mgr = nullptr);
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
     bool last_record_id(RecordId* rid) const override;
 
 private:
+    BufferPool* pool_;
     BPlusTree* index_;
-    Value search_key_;
+    IndexKey search_key_;
     bool is_range_;
-    Value range_high_;
+    IndexKey range_high_;
     Schema output_schema_;
     PageId scan_leaf_id_;
     u16 scan_slot_idx_;
     RecordId last_index_rid_;
     bool has_last_index_rid_;
+    TransactionManager* txn_mgr_;
 };
 
 } // namespace minidb

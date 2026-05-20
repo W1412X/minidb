@@ -6,7 +6,8 @@ namespace minidb {
 
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
-           type == TypeId::kFloat || type == TypeId::kDouble;
+           type == TypeId::kFloat || type == TypeId::kDouble ||
+           type == TypeId::kVarchar || type == TypeId::kNull;
 }
 
 static bool table_stats_fresh(const TableEntry* table) {
@@ -80,8 +81,9 @@ static void collect_eq_literals(const Expression* expr, const Schema& schema,
     }
 }
 
-static bool build_composite_index_key(const Expression* expr, const Schema& schema,
-                                      const IndexEntry& index, Value* search_key) {
+static bool build_composite_prefix_key(const Expression* expr, const Schema& schema,
+                                       const IndexEntry& index, IndexKey* search_key,
+                                       bool* covers_full_index) {
     if (!expr || !search_key || index.key_columns.size() <= 1) return false;
 
     HashMap<u32, Value> eq_values;
@@ -90,12 +92,12 @@ static bool build_composite_index_key(const Expression* expr, const Schema& sche
     Vector<Value> values;
     for (u32 i = 0; i < index.key_columns.size(); i++) {
         Value* value = eq_values.find(index.key_columns[i]);
-        if (!value) return false;
+        if (!value) break;
         values.push_back(*value);
     }
-
-    String composite = make_values_key(values);
-    *search_key = Value(static_cast<i64>(Hash<String>()(composite)));
+    if (values.empty()) return false;
+    *search_key = IndexKey::from_values(values);
+    if (covers_full_index) *covers_full_index = values.size() == index.key_columns.size();
     return true;
 }
 
@@ -188,6 +190,7 @@ static Value min_key_for_type(TypeId type) {
         case TypeId::kFloat: return Value(-3.402823466e+38F);
         case TypeId::kDouble: return Value(-1.7976931348623157e+308);
         case TypeId::kBool: return Value(false);
+        case TypeId::kVarchar: return Value(String(""));
         default: return Value();
     }
 }
@@ -199,6 +202,7 @@ static Value max_key_for_type(TypeId type) {
         case TypeId::kFloat: return Value(3.402823466e+38F);
         case TypeId::kDouble: return Value(1.7976931348623157e+308);
         case TypeId::kBool: return Value(true);
+        case TypeId::kVarchar: return Value(String("\xff\xff\xff\xff", 4));
         default: return Value();
     }
 }
@@ -847,7 +851,22 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
 
         case PlanNodeType::kUpdate: {
             auto* p = static_cast<UpdatePlan*>(plan.get());
-            p->child = optimize_node(static_cast<UniquePtr<PlanNode>&&>(p->child));
+            bool modifies_indexed_column = false;
+            TableEntry* table = catalog_ ? catalog_->get_table(p->table_id) : nullptr;
+            if (table) {
+                Vector<u32> modified_cols;
+                for (u32 i = 0; i < p->set_clauses.size(); i++) {
+                    int idx = table->schema.get_column_index(p->set_clauses[i].first);
+                    if (idx >= 0) modified_cols.push_back(static_cast<u32>(idx));
+                }
+                modifies_indexed_column = catalog_->any_column_indexed(p->table_id, modified_cols);
+            }
+            bool point_update = p->where_clause &&
+                                p->where_clause->type == ExprType::kBinaryOp &&
+                                p->where_clause->op == "=";
+            if (!modifies_indexed_column || point_update) {
+                p->child = optimize_node(static_cast<UniquePtr<PlanNode>&&>(p->child));
+            }
             estimate_unary(p, p->child.get(), 1.0, 0.03);
             p->optimizer_note = "update";
             return plan;
@@ -1159,9 +1178,10 @@ UniquePtr<PlanNode> Optimizer::choose_index_path(const SeqScanPlan* scan,
                                            : Vector<IndexEntry*>();
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
-        Value search_key;
-        if (!index || !build_composite_index_key(predicate, scan->output_schema,
-                                                 *index, &search_key)) {
+        IndexKey search_key;
+        bool covers_full_index = false;
+        if (!index || !build_composite_prefix_key(predicate, scan->output_schema,
+                                                  *index, &search_key, &covers_full_index)) {
             continue;
         }
 
@@ -1172,6 +1192,7 @@ UniquePtr<PlanNode> Optimizer::choose_index_path(const SeqScanPlan* scan,
         idx_scan->search_key = search_key;
         idx_scan->is_range = false;
         idx_scan->output_schema = scan->output_schema;
+        (void)covers_full_index;
         if (predicate_satisfied) *predicate_satisfied = false;
         return UniquePtr<PlanNode>(idx_scan.release());
     }
@@ -1219,9 +1240,9 @@ UniquePtr<PlanNode> Optimizer::choose_index_path(const SeqScanPlan* scan,
     idx_scan->table_id = scan->table_id;
     idx_scan->index_id = index_id;
     idx_scan->table_name = scan->table_name;
-    idx_scan->search_key = low_key;
+    idx_scan->search_key = IndexKey::single(low_key);
     idx_scan->is_range = use_range;
-    idx_scan->range_high = high_key;
+    idx_scan->range_high = IndexKey::single(high_key);
     idx_scan->output_schema = scan->output_schema;
     if (predicate_satisfied) *predicate_satisfied = whole_predicate && covers_predicate;
     return UniquePtr<PlanNode>(idx_scan.release());

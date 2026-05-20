@@ -37,7 +37,18 @@ struct BufferPoolPartition {
     mutable RwLock latch;
 };
 
-// Buffer pool frame
+// Buffer pool frame state machine:
+//   Empty:       page_id == kNullPageId, pin_count == 0, !is_io_in_progress
+//   Loading:     page_id is reserved in the partition page_table,
+//                pin_count == 1, is_io_in_progress == true
+//   Resident:    page_id is mapped, !is_io_in_progress, pin_count may be 0..N
+//   Evicting:    old mapping removed, new page_id reserved, is_io_in_progress == true
+//
+// State transitions that touch page_id/page_table/lru_node/is_dirty/io flag are
+// protected by the owning BufferPoolPartition::latch in write mode. Readers may
+// observe mapped Resident/Loading state under the partition read latch. The
+// pin_count field is atomic so unpin can complete under a read latch without
+// promoting to a write lock.
 struct Frame {
     Page    page;
     PageId  page_id;

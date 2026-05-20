@@ -13,7 +13,8 @@ namespace minidb {
 
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
-           type == TypeId::kFloat || type == TypeId::kDouble;
+           type == TypeId::kFloat || type == TypeId::kDouble ||
+           type == TypeId::kVarchar || type == TypeId::kNull;
 }
 
 static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) {
@@ -22,6 +23,23 @@ static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) 
         if (left[i] != right[i]) return false;
     }
     return true;
+}
+
+static bool build_unique_index_key(const Schema& schema, const Vector<Value>& row,
+                                   const Vector<u32>& columns, IndexKey* key) {
+    if (!key || columns.empty()) return false;
+    Vector<Value> values;
+    for (u32 i = 0; i < columns.size(); i++) {
+        u32 col = columns[i];
+        if (col >= schema.column_count() || col >= row.size() ||
+            !btree_supports_type(schema.get_column(col).type) ||
+            row[col].is_null()) {
+            return false;
+        }
+        values.push_back(row[col]);
+    }
+    *key = IndexKey::from_values(values);
+    return key->fits();
 }
 
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
@@ -35,6 +53,13 @@ static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* 
         return state != TxnState::kCommitted;
     }
     return tuple.xmax() >= current->snapshot_id();
+}
+
+static String record_id_key(const RecordId& rid) {
+    String key(static_cast<u64>(rid.page_id));
+    key += ':';
+    key += String(static_cast<u64>(rid.slot_idx));
+    return key;
 }
 
 UpdateExecutor::UpdateExecutor(BufferPool* pool, HeapFile* heap, const Schema& schema,
@@ -99,9 +124,8 @@ bool UpdateExecutor::violates_unique_constraints(const Vector<Value>& row,
         const Vector<u32>& group = unique_groups[g];
         bool checked_by_index = false;
 
-        if (db_ && group.size() == 1 && group[0] < schema_.column_count() &&
-            !row[group[0]].is_null() &&
-            btree_supports_type(schema_.get_column(group[0]).type)) {
+        IndexKey lookup_key;
+        if (db_ && build_unique_index_key(schema_, row, group, &lookup_key)) {
             for (u32 i = 0; i < indexes.size(); i++) {
                 IndexEntry* index = indexes[i];
                 if (!index || !index->is_unique || !same_key_columns(index->key_columns, group)) {
@@ -111,14 +135,12 @@ bool UpdateExecutor::violates_unique_constraints(const Vector<Value>& row,
                 BPlusTree* tree = db_->get_index_tree(index->index_id);
                 if (!tree) break;
 
-                Vector<RecordId> matches = tree->search(row[group[0]]);
+                Vector<RecordId> matches = tree->search(lookup_key);
                 for (u32 m = 0; m < matches.size(); m++) {
                     if (matches[m] == self_rid) continue;
                     Tuple existing;
                     if (!db_->read_tuple(table_id_, schema_, matches[m], &existing)) continue;
-                    if (tuple_live_for_unique_check(existing, txn_mgr_) &&
-                        !existing.get_value(group[0]).is_null() &&
-                        existing.get_value(group[0]) == row[group[0]]) {
+                    if (tuple_live_for_unique_check(existing, txn_mgr_)) {
                         return true;
                     }
                 }
@@ -213,17 +235,41 @@ ExecResult UpdateExecutor::next() {
         }
     }
     HashMap<String, bool> pending_unique_keys;
+    Vector<RecordId> materialized_targets;
+
+    if (!hot_eligible) {
+        HashMap<String, bool> seen_targets;
+        while (true) {
+            if (executor_cancelled()) break;
+            ExecResult result = child_->next();
+            if (!result.ok()) break;
+
+            RecordId rid;
+            if (!child_->last_record_id(&rid)) continue;
+            String rid_key = record_id_key(rid);
+            if (seen_targets.find(rid_key)) continue;
+            seen_targets.insert(rid_key, true);
+            materialized_targets.push_back(rid);
+        }
+    }
 
     u32 count = 0;
-    // W12: Streaming — process each row as it comes, no materialization
+    u32 materialized_pos = 0;
     while (true) {
         if (executor_cancelled()) break;
-        ExecResult result = child_->next();
-        if (!result.ok()) break;
-
-        Tuple old_tuple = static_cast<Tuple&&>(result.tuple);
         RecordId old_rid;
-        if (!child_->last_record_id(&old_rid)) continue;
+        Tuple old_tuple;
+        if (hot_eligible) {
+            ExecResult result = child_->next();
+            if (!result.ok()) break;
+            old_tuple = static_cast<Tuple&&>(result.tuple);
+            if (!child_->last_record_id(&old_rid)) continue;
+        } else {
+            if (materialized_pos >= materialized_targets.size()) break;
+            old_rid = materialized_targets[materialized_pos++];
+            if (!db_ || !db_->read_tuple(table_id_, schema_, old_rid, &old_tuple)) continue;
+            if (old_tuple.xmax() != kInvalidTxnId) continue;
+        }
 
         Vector<Value> new_values;
         for (u32 i = 0; i < old_tuple.column_count(); i++) {
@@ -291,6 +337,7 @@ ExecResult UpdateExecutor::next() {
         new_tuple.set_xmin(txn_id);
         new_tuple.set_xmax(0);
         new_tuple.set_next_version(kNullPageId, 0);  // 链尾
+        if (db_ && !db_->validate_index_keys(table_id_, new_tuple)) continue;
 
         u32 serialized_size = new_tuple.serialized_size();
         if (serialized_size > kPageSize) continue;
@@ -378,7 +425,7 @@ ExecResult UpdateExecutor::next() {
                         txn_mgr_->record_delete(table_id_, old_rid);
                         txn_mgr_->record_insert(table_id_, new_record_id);
                     }
-                    if (db_) {
+                    if (db_ && hot_eligible) {
                         db_->delete_index_entries(table_id_, old_tuple, old_rid);
                         db_->insert_index_entries(table_id_, new_tuple, new_record_id);
                     }
@@ -391,6 +438,9 @@ ExecResult UpdateExecutor::next() {
         for (u32 i = 0; i < autocommit_record_locks.size(); i++) {
             db_->lock_manager().unlock_record(txn_id, table_id_, autocommit_record_locks[i]);
         }
+    }
+    if (db_ && count > 0 && !hot_eligible) {
+        db_->rebuild_indexes_for_table(table_id_);
     }
 
     Vector<Value> rv;

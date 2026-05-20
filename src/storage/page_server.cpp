@@ -11,6 +11,7 @@
 namespace minidb {
 
 static constexpr u64 kRemoteWalMagic = 0x4D44425057414C31ULL; // "MDBPWAL1"
+static constexpr u64 kRemoteWalTrailerMagic = 0x4D444250574C5431ULL; // "MDBPWLT1"
 
 #pragma pack(push, 1)
 struct RemoteWalImageHeader {
@@ -19,6 +20,14 @@ struct RemoteWalImageHeader {
     LSN lsn;
     u32 page_size;
     u32 checksum;
+};
+
+struct RemoteWalImageTrailer {
+    u64 magic;
+    PageId page_id;
+    LSN lsn;
+    u32 checksum;
+    u32 record_size;
 };
 #pragma pack(pop)
 
@@ -35,6 +44,19 @@ static u32 image_checksum(const byte* data) {
         sum *= 16777619u;
     }
     return sum == 0 ? 1 : sum;
+}
+
+static u64 metadata_checksum(LSN durable_lsn, u64 wal_image_bytes) {
+    u64 h = 1469598103934665603ULL;
+    auto mix = [&h](u64 v) {
+        for (u32 i = 0; i < 8; i++) {
+            h ^= static_cast<byte>((v >> (i * 8)) & 0xff);
+            h *= 1099511628211ULL;
+        }
+    };
+    mix(static_cast<u64>(durable_lsn));
+    mix(wal_image_bytes);
+    return h == 0 ? 1 : h;
 }
 
 class WalImageBuffer {
@@ -99,12 +121,29 @@ void PageServer::load_wal_index() {
     if (meta) {
         char key[64];
         unsigned long long value = 0;
+        u64 loaded_checksum = 0;
+        bool has_checksum = false;
+        bool has_end = false;
+        LSN loaded_durable_lsn = 0;
+        u64 loaded_wal_image_bytes = 0;
         while (std::fscanf(meta, "%63[^=]=%llu\n", key, &value) == 2) {
             if (std::strcmp(key, "durable_lsn") == 0) {
-                durable_lsn_ = static_cast<LSN>(value);
+                loaded_durable_lsn = static_cast<LSN>(value);
+            } else if (std::strcmp(key, "wal_image_bytes") == 0) {
+                loaded_wal_image_bytes = static_cast<u64>(value);
+            } else if (std::strcmp(key, "checksum") == 0) {
+                loaded_checksum = static_cast<u64>(value);
+                has_checksum = true;
+            } else if (std::strcmp(key, "end") == 0) {
+                has_end = value == 1;
             }
         }
         std::fclose(meta);
+        if (!has_checksum ||
+            (has_end && loaded_checksum == metadata_checksum(loaded_durable_lsn,
+                                                             loaded_wal_image_bytes))) {
+            durable_lsn_ = loaded_durable_lsn;
+        }
     }
 
     FILE* wal = std::fopen(wal_image_path_.c_str(), "rb");
@@ -119,6 +158,19 @@ void PageServer::load_wal_index() {
         if (n != sizeof(hdr) || hdr.magic != kRemoteWalMagic || hdr.page_size != kPageSize) break;
         if (std::fread(wal_buf.data(), 1, kPageSize, wal) != kPageSize) break;
         if (hdr.checksum != image_checksum(wal_buf.data())) break;
+        RemoteWalImageTrailer trailer;
+        size_t tn = std::fread(&trailer, 1, sizeof(trailer), wal);
+        if (tn == sizeof(trailer)) {
+            if (trailer.magic != kRemoteWalTrailerMagic ||
+                trailer.page_id != hdr.page_id ||
+                trailer.lsn != hdr.lsn ||
+                trailer.checksum != hdr.checksum ||
+                trailer.record_size != sizeof(hdr) + kPageSize + sizeof(trailer)) {
+                break;
+            }
+        } else if (tn != 0) {
+            break;
+        }
 
         PageServerShard& shard = shard_for(hdr.page_id);
         {
@@ -132,6 +184,10 @@ void PageServer::load_wal_index() {
             }
         }
         wal_image_bytes_ = static_cast<u64>(std::ftell(wal));
+        if (tn == 0) {
+            wal_image_bytes_ = static_cast<u64>(offset) + sizeof(hdr) + kPageSize;
+            break;
+        }
     }
     std::fclose(wal);
     wal_image_bytes_stat_.store(wal_image_bytes_, std::memory_order_relaxed);
@@ -141,11 +197,14 @@ void PageServer::save_metadata_locked() {
     String tmp = metadata_path_ + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "w");
     if (!f) return;
-    std::fprintf(f, "version=1\n");
+    u64 checksum = metadata_checksum(durable_lsn_, wal_image_bytes_);
+    std::fprintf(f, "version=2\n");
     std::fprintf(f, "durable_lsn=%llu\n",
                  static_cast<unsigned long long>(durable_lsn_));
     std::fprintf(f, "wal_image_bytes=%llu\n",
                  static_cast<unsigned long long>(wal_image_bytes_));
+    std::fprintf(f, "checksum=%llu\n", static_cast<unsigned long long>(checksum));
+    std::fprintf(f, "end=1\n");
     std::fflush(f);
     int fd = fileno(f);
     if (fd >= 0) fsync(fd);
@@ -164,14 +223,21 @@ u64 PageServer::append_wal_image_locked(PageId page_id, const byte* page_data, L
     hdr.lsn = page_lsn;
     hdr.page_size = kPageSize;
     hdr.checksum = image_checksum(page_data);
+    RemoteWalImageTrailer trailer;
+    trailer.magic = kRemoteWalTrailerMagic;
+    trailer.page_id = page_id;
+    trailer.lsn = page_lsn;
+    trailer.checksum = hdr.checksum;
+    trailer.record_size = sizeof(hdr) + kPageSize + sizeof(trailer);
     bool ok = std::fwrite(&hdr, 1, sizeof(hdr), f) == sizeof(hdr) &&
-              std::fwrite(page_data, 1, kPageSize, f) == kPageSize;
+              std::fwrite(page_data, 1, kPageSize, f) == kPageSize &&
+              std::fwrite(&trailer, 1, sizeof(trailer), f) == sizeof(trailer);
     std::fflush(f);
     int fd = fileno(f);
     if (fd >= 0) fsync(fd);
     std::fclose(f);
     if (!ok || offset < 0) return 0;
-    wal_image_bytes_ = static_cast<u64>(offset) + sizeof(hdr) + kPageSize;
+    wal_image_bytes_ = static_cast<u64>(offset) + sizeof(hdr) + kPageSize + sizeof(trailer);
     wal_image_bytes_stat_.store(wal_image_bytes_, std::memory_order_relaxed);
     return static_cast<u64>(offset);
 }
@@ -188,6 +254,19 @@ bool PageServer::read_wal_image(u64 offset, byte* page_data) const {
               hdr.magic == kRemoteWalMagic && hdr.page_size == kPageSize &&
               std::fread(page_data, 1, kPageSize, f) == kPageSize &&
               hdr.checksum == image_checksum(page_data);
+    if (ok) {
+        RemoteWalImageTrailer trailer;
+        size_t tn = std::fread(&trailer, 1, sizeof(trailer), f);
+        if (tn == sizeof(trailer)) {
+            ok = trailer.magic == kRemoteWalTrailerMagic &&
+                 trailer.page_id == hdr.page_id &&
+                 trailer.lsn == hdr.lsn &&
+                 trailer.checksum == hdr.checksum &&
+                 trailer.record_size == sizeof(hdr) + kPageSize + sizeof(trailer);
+        } else if (tn != 0) {
+            ok = false;
+        }
+    }
     std::fclose(f);
     return ok;
 }

@@ -68,7 +68,7 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
             page->data() + target_lp->offset, storage_schema_, output_schema_,
             projected_columns_, target_lp->length);
         if (!txn_mgr_ || !txn_mgr_->current()) {
-            if (tuple.xmax() != kInvalidTxnId) return ExecResult::empty();
+            if (tuple.xmax() != kInvalidTxnId) return follow_latest_committed(page, target);
             return ExecResult::ok(static_cast<Tuple&&>(tuple));
         }
         if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
@@ -86,7 +86,7 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
     // No transaction manager → use autocommit visibility, hide deleted/expired versions.
     if (!txn_mgr_ || !txn_mgr_->current()) {
         if (tuple.xmax() != kInvalidTxnId) {
-            return ExecResult::empty();
+            return follow_latest_committed(page, slot);
         }
         last_rid_ = RecordId(current_page_id_, slot);
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
@@ -135,6 +135,49 @@ ExecResult SeqScanExecutor::follow_version_chain(Page* page, u16 slot) {
             Tuple projected = Tuple::deserialize_projected_from_page(
                 prev_page->data() + prev_lp->offset, storage_schema_, output_schema_,
                 projected_columns_, prev_lp->length);
+            pool_->unpin_page(ver_page);
+            return ExecResult::ok(static_cast<Tuple&&>(projected));
+        }
+        pool_->unpin_page(ver_page);
+        depth++;
+    }
+
+    return ExecResult::empty();
+}
+
+ExecResult SeqScanExecutor::follow_latest_committed(Page* page, u16 slot) {
+    const LinePointer* start_lp = page->line_pointer(slot);
+    if (!start_lp || !start_lp->is_valid()) return ExecResult::empty();
+    Tuple tuple = Tuple::deserialize_from_page(
+        page->data() + start_lp->offset, storage_schema_, start_lp->length);
+
+    u32 depth = 0;
+    static constexpr u32 kMaxChainDepth = 64;
+    while (tuple.has_next_version() && depth < kMaxChainDepth) {
+        PageId ver_page = tuple.next_version_page();
+        SlotIdx ver_slot = tuple.next_version_slot();
+        if (ver_page == kNullPageId || ver_slot == kNullSlot ||
+            should_skip_rid(ver_page, ver_slot)) {
+            return ExecResult::empty();
+        }
+
+        auto result = pool_->fetch_page(ver_page, true);
+        if (!result.ok()) return ExecResult::empty();
+        Page* version_page = result.value();
+        const LinePointer* version_lp = version_page->line_pointer(ver_slot);
+        if (!version_lp || !version_lp->is_valid()) {
+            pool_->unpin_page(ver_page);
+            return ExecResult::empty();
+        }
+
+        tuple = Tuple::deserialize_from_page(
+            version_page->data() + version_lp->offset, storage_schema_, version_lp->length);
+        if (tuple.xmax() == kInvalidTxnId) {
+            mark_skip_rid(ver_page, ver_slot);
+            last_rid_ = RecordId(ver_page, ver_slot);
+            Tuple projected = Tuple::deserialize_projected_from_page(
+                version_page->data() + version_lp->offset, storage_schema_, output_schema_,
+                projected_columns_, version_lp->length);
             pool_->unpin_page(ver_page);
             return ExecResult::ok(static_cast<Tuple&&>(projected));
         }

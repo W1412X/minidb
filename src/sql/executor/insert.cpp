@@ -12,7 +12,8 @@ namespace minidb {
 
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
-           type == TypeId::kFloat || type == TypeId::kDouble;
+           type == TypeId::kFloat || type == TypeId::kDouble ||
+           type == TypeId::kVarchar || type == TypeId::kNull;
 }
 
 static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) {
@@ -21,6 +22,23 @@ static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) 
         if (left[i] != right[i]) return false;
     }
     return true;
+}
+
+static bool build_unique_index_key(const Schema& schema, const Vector<Value>& row,
+                                   const Vector<u32>& columns, IndexKey* key) {
+    if (!key || columns.empty()) return false;
+    Vector<Value> values;
+    for (u32 i = 0; i < columns.size(); i++) {
+        u32 col = columns[i];
+        if (col >= schema.column_count() || col >= row.size() ||
+            !btree_supports_type(schema.get_column(col).type) ||
+            row[col].is_null()) {
+            return false;
+        }
+        values.push_back(row[col]);
+    }
+    *key = IndexKey::from_values(values);
+    return key->fits();
 }
 
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
@@ -94,9 +112,8 @@ bool InsertExecutor::violates_unique_constraints(const Vector<Value>& row) const
         const Vector<u32>& group = unique_groups[g];
         bool checked_by_index = false;
 
-        if (db_ && group.size() == 1 && group[0] < schema_.column_count() &&
-            !row[group[0]].is_null() &&
-            btree_supports_type(schema_.get_column(group[0]).type)) {
+        IndexKey lookup_key;
+        if (db_ && build_unique_index_key(schema_, row, group, &lookup_key)) {
             for (u32 i = 0; i < indexes.size(); i++) {
                 IndexEntry* index = indexes[i];
                 if (!index || !index->is_unique || !same_key_columns(index->key_columns, group)) {
@@ -106,13 +123,11 @@ bool InsertExecutor::violates_unique_constraints(const Vector<Value>& row) const
                 BPlusTree* tree = db_->get_index_tree(index->index_id);
                 if (!tree) break;
 
-                Vector<RecordId> matches = tree->search(row[group[0]]);
+                Vector<RecordId> matches = tree->search(lookup_key);
                 for (u32 m = 0; m < matches.size(); m++) {
                     Tuple existing;
                     if (!db_->read_tuple(table_id_, schema_, matches[m], &existing)) continue;
-                    if (tuple_live_for_unique_check(existing, txn_mgr_) &&
-                        !existing.get_value(group[0]).is_null() &&
-                        existing.get_value(group[0]) == row[group[0]]) {
+                    if (tuple_live_for_unique_check(existing, txn_mgr_)) {
                         return true;
                     }
                 }
@@ -256,6 +271,7 @@ ExecResult InsertExecutor::next() {
         Tuple tuple(schema_, values_[i]);
         tuple.set_xmin(txn_id);
         tuple.set_xmax(0);
+        if (db_ && !db_->validate_index_keys(table_id_, tuple)) continue;
 
         u32 serialized_size = tuple.serialized_size();
         if (serialized_size > kPageSize) continue;

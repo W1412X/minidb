@@ -37,6 +37,7 @@ public:
 private:
     ExecResult try_tuple(Page* page, u16 slot);
     ExecResult follow_version_chain(Page* page, u16 slot);
+    ExecResult follow_latest_committed(Page* page, u16 slot);
     bool is_redirect_target(const Page* page, SlotIdx slot_idx) const;
     bool should_skip_rid(PageId page_id, SlotIdx slot_idx) const;
     void mark_skip_rid(PageId page_id, SlotIdx slot_idx);

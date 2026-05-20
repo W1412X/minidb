@@ -75,16 +75,17 @@ static void assert_rids_equal(const Vector<RecordId>& actual, std::vector<Record
     }
 }
 
-static void validate_tree(BPlusTree& tree, const std::multimap<i64, RecordId>& model, u64 seed) {
+static void validate_tree(BPlusTree& tree, const std::multimap<i64, RecordId>& model,
+                          u64 seed, u32 op) {
     String structure_error;
     if (!tree.validate_structure(&structure_error)) {
-        std::fprintf(stderr, "btree_property_test FAIL seed=%llu structure: %s\n",
-                     static_cast<unsigned long long>(seed), structure_error.c_str());
+        std::fprintf(stderr, "btree_property_test FAIL seed=%llu op=%u structure: %s\n",
+                     static_cast<unsigned long long>(seed), op, structure_error.c_str());
         std::abort();
     }
 
     for (i64 key = -64; key <= 64; key++) {
-        Vector<RecordId> actual = tree.search(Value(key));
+        Vector<RecordId> actual = tree.search(IndexKey::single(Value(key)));
         assert_rids_equal(actual, model_search(model, key), seed, "point-search");
     }
 
@@ -98,14 +99,15 @@ static void validate_tree(BPlusTree& tree, const std::multimap<i64, RecordId>& m
     RecordId last;
     bool has_last = false;
     while (true) {
-        Value key;
+        IndexKey key;
         RecordId rid;
         const RecordId* skip = has_last ? &last : nullptr;
-        if (!tree.scan_next_entry(Value(static_cast<i64>(-128)), Value(static_cast<i64>(128)),
+        if (!tree.scan_next_entry(IndexKey::single(Value(static_cast<i64>(-128))),
+                                  IndexKey::single(Value(static_cast<i64>(128))),
                                   &leaf, &slot, skip, &key, &rid)) {
             break;
         }
-        actual_entries.push_back(Entry{key.get_int64(), rid});
+        actual_entries.push_back(Entry{key.first_value().get_int64(), rid});
         last = rid;
         has_last = true;
     }
@@ -150,13 +152,13 @@ int main(int argc, char** argv) {
         if (do_insert) {
             i64 key = static_cast<i64>(rng() % 129) - 64;
             RecordId rid(make_page_id(901, next_rid++), static_cast<SlotIdx>(rng() % 128));
-            tree.insert(Value(key), rid);
+            tree.insert(IndexKey::single(Value(key)), rid);
             entries.push_back(Entry{key, rid});
             model.insert(std::make_pair(key, rid));
         } else {
             size_t idx = static_cast<size_t>(rng() % entries.size());
             Entry victim = entries[idx];
-            bool removed = tree.remove(Value(victim.key), victim.rid);
+            bool removed = tree.remove(IndexKey::single(Value(victim.key)), victim.rid);
             if (!removed) {
                 std::fprintf(stderr, "btree_property_test FAIL seed=%llu remove missed\n",
                              static_cast<unsigned long long>(seed));
@@ -172,10 +174,10 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (op % 25 == 0) validate_tree(tree, model, seed);
+        if (op % 25 == 0) validate_tree(tree, model, seed, op);
     }
 
-    validate_tree(tree, model, seed);
+    validate_tree(tree, model, seed, 2500);
     pool.flush_all();
     return 0;
 }

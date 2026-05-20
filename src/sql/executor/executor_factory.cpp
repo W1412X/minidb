@@ -101,9 +101,10 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto* scan_plan = static_cast<IndexOnlyScanPlan*>(plan);
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!index) return UniquePtr<Executor>();
+            TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
             return UniquePtr<Executor>(new IndexOnlyScanExecutor(
-                index, scan_plan->search_key, scan_plan->is_range,
-                scan_plan->range_high, scan_plan->output_schema));
+                &db_.pool(), index, scan_plan->search_key, scan_plan->is_range,
+                scan_plan->range_high, scan_plan->output_schema, tm));
         }
 
         case PlanNodeType::kFilter: {

@@ -8,13 +8,13 @@ namespace minidb {
 IndexIterator::IndexIterator(BPlusTree* tree, BufferPool*)
     : tree_(tree), current_idx_(0), initialized_(false) {}
 
-void IndexIterator::seek(const Value& key) {
+void IndexIterator::seek(const IndexKey& key) {
     results_ = tree_->search(key);
     current_idx_ = 0;
     initialized_ = true;
 }
 
-void IndexIterator::seek_range(const Value& low, const Value& high) {
+void IndexIterator::seek_range(const IndexKey& low, const IndexKey& high) {
     results_ = tree_->range_search(low, high);
     current_idx_ = 0;
     initialized_ = true;
