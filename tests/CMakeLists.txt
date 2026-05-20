@@ -147,6 +147,11 @@ add_test(
 )
 
 add_test(
+    NAME hot_index_semantics
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/hot_index_semantics.sh $<TARGET_FILE:minidb>
+)
+
+add_test(
     NAME bulk_update_delete_perf
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/bulk_update_delete_perf.sh $<TARGET_FILE:minidb>
 )

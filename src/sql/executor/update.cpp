@@ -375,16 +375,9 @@ ExecResult UpdateExecutor::next() {
                                             new_rid.first, new_rid.second, txn_id, lsn);
 
                     if (txn_mgr_ && txn_mgr_->current()) {
-                        txn_mgr_->record_delete(table_id_, old_rid);
                         RecordId new_record_id(new_rid.first, new_rid.second);
-                        txn_mgr_->record_insert(table_id_, new_record_id);
-                    }
-                    // W10: HOT 路径也需要更新索引
-                    if (db_) {
-                        db_->delete_index_entries(table_id_, old_tuple, old_rid);
-                        Tuple new_tuple_for_idx(schema_, new_values);
-                        RecordId new_rid_for_idx(new_rid.first, new_rid.second);
-                        db_->insert_index_entries(table_id_, new_tuple_for_idx, new_rid_for_idx);
+                        txn_mgr_->record_hot_delete(table_id_, old_rid);
+                        txn_mgr_->record_hot_insert(table_id_, new_record_id);
                     }
                     hot_used = true;
                     count++;

@@ -555,20 +555,12 @@ bool HeapFile::prune_obsolete_version(PageId page_id, SlotIdx slot_idx,
 
     bool pruned = false;
     if (next_page == page_id && next_slot != kNullSlot) {
-        u16 num_tuples = page->header()->num_tuples;
-        for (u16 i = 0; i < num_tuples; i++) {
-            if (i == slot_idx) continue;
-            const LinePointer* other = page->line_pointer(i);
-            if (other && other->is_redirect() && page->redirect_target(i) == slot_idx) {
-                page->mark_dead(i);
-            }
-        }
-        pruned = page->mark_dead(slot_idx);
+        pruned = page->redirect_slot(slot_idx, next_slot);
     } else {
         pruned = page->mark_dead(slot_idx);
     }
     if (pruned) {
-        page->prune();
+        if (next_page != page_id) page->prune();
         if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
         pool_->mark_dirty(page_id);
     }

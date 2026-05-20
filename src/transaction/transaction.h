@@ -14,7 +14,12 @@ namespace minidb {
 
 class Database;
 
-enum class UndoType : u8 { kInsert = 0, kDelete = 1 };
+enum class UndoType : u8 {
+    kInsert = 0,
+    kDelete = 1,
+    kHotInsert = 2,
+    kHotDelete = 3
+};
 
 struct UndoRecord {
     UndoType type;
@@ -52,6 +57,8 @@ public:
     bool resource_acquired() const { return resource_acquired_; }
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
+    void record_hot_insert(u32 table_id, const RecordId& rid);
+    void record_hot_delete(u32 table_id, const RecordId& rid);
 
 private:
     u64 txn_id_;
@@ -74,6 +81,8 @@ public:
     bool rollback(Transaction* txn);
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
+    void record_hot_insert(u32 table_id, const RecordId& rid);
+    void record_hot_delete(u32 table_id, const RecordId& rid);
 
     // Snapshot query
     Transaction* current() const;

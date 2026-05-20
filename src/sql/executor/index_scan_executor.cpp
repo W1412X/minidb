@@ -83,6 +83,68 @@ static VersionResult follow_version_chain(BufferPool* pool, TransactionManager* 
     return result;
 }
 
+static bool visible_header(BufferPool* pool, TransactionManager* txn_mgr,
+                           Page* start_page, SlotIdx start_slot) {
+    const LinePointer* lp = start_page->line_pointer(start_slot);
+    if (!lp || !lp->is_valid() || lp->length < 26 ||
+        static_cast<u32>(lp->offset) + 26 > kPageSize) {
+        return false;
+    }
+
+    PageId page_id = start_page->header()->page_id;
+    SlotIdx slot = start_slot;
+    Page* page = start_page;
+    bool pinned_current = false;
+    u32 depth = 0;
+    static constexpr u32 kMaxChainDepth = 64;
+
+    while (depth < kMaxChainDepth) {
+        lp = page->line_pointer(slot);
+        if (!lp || !lp->is_valid() || lp->length < 26 ||
+            static_cast<u32>(lp->offset) + 26 > kPageSize) {
+            if (pinned_current) pool->unpin_page(page_id);
+            return false;
+        }
+
+        u64 xmin = 0;
+        u64 xmax = 0;
+        PageId next_page = kNullPageId;
+        SlotIdx next_slot = kNullSlot;
+        const byte* base = page->data() + lp->offset;
+        std::memcpy(&xmin, base, 8);
+        std::memcpy(&xmax, base + 8, 8);
+        std::memcpy(&next_page, base + 16, 8);
+        std::memcpy(&next_slot, base + 24, 2);
+
+        bool visible = false;
+        if (!txn_mgr || !txn_mgr->current()) {
+            visible = xmax == kInvalidTxnId;
+        } else {
+            visible = txn_mgr->is_visible(xmin, xmax, *txn_mgr->current());
+        }
+        if (visible) {
+            if (pinned_current) pool->unpin_page(page_id);
+            return true;
+        }
+        if (next_page == kNullPageId || next_slot == kNullSlot) {
+            if (pinned_current) pool->unpin_page(page_id);
+            return false;
+        }
+
+        if (pinned_current) pool->unpin_page(page_id);
+        page_id = next_page;
+        slot = next_slot;
+        auto next = pool->fetch_page(page_id, true);
+        if (!next.ok()) return false;
+        page = next.value();
+        pinned_current = true;
+        depth++;
+    }
+
+    if (pinned_current) pool->unpin_page(page_id);
+    return false;
+}
+
 ExecResult IndexScanExecutor::next() {
     IndexKey high = is_range_ ? range_high_ : search_key_;
     while (true) {
@@ -170,15 +232,7 @@ ExecResult IndexOnlyScanExecutor::next() {
             }
             bool visible = false;
             if (lp && lp->is_valid()) {
-                u64 xmin = 0;
-                u64 xmax = 0;
-                std::memcpy(&xmin, page->data() + lp->offset, 8);
-                std::memcpy(&xmax, page->data() + lp->offset + 8, 8);
-                if (!txn_mgr_ || !txn_mgr_->current()) {
-                    visible = xmax == kInvalidTxnId;
-                } else {
-                    visible = txn_mgr_->is_visible(xmin, xmax, *txn_mgr_->current());
-                }
+                visible = visible_header(pool_, txn_mgr_, page, visible_slot);
             }
             pool_->unpin_page(rid.page_id);
             if (!visible) continue;

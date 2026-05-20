@@ -32,6 +32,22 @@ void Transaction::record_delete(u32 table_id, const RecordId& rid) {
     undo_records_.push_back(rec);
 }
 
+void Transaction::record_hot_insert(u32 table_id, const RecordId& rid) {
+    UndoRecord rec;
+    rec.type = UndoType::kHotInsert;
+    rec.table_id = table_id;
+    rec.rid = rid;
+    undo_records_.push_back(rec);
+}
+
+void Transaction::record_hot_delete(u32 table_id, const RecordId& rid) {
+    UndoRecord rec;
+    rec.type = UndoType::kHotDelete;
+    rec.table_id = table_id;
+    rec.rid = rid;
+    undo_records_.push_back(rec);
+}
+
 TransactionManager::TransactionManager(Database* db)
     : db_(db), next_txn_id_(1) {
     u32 slots = db ? db->config().max_active_transactions : 256;
@@ -160,7 +176,7 @@ bool TransactionManager::commit(Transaction* txn) {
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (u32 i = 0; i < undo_records.size(); i++) {
         const UndoRecord& rec = undo_records[i];
-        if (rec.type != UndoType::kDelete) continue;
+        if (rec.type != UndoType::kDelete && rec.type != UndoType::kHotDelete) continue;
         HeapFile* heap = db_->get_heap_file(rec.table_id);
         if (heap) {
             heap->prune_obsolete_version(rec.rid.page_id, rec.rid.slot_idx,
@@ -207,11 +223,15 @@ bool TransactionManager::rollback(Transaction* txn) {
                 db_->delete_index_entries(rec.table_id, tuple, rec.rid);
             }
             heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
+        } else if (rec.type == UndoType::kHotInsert) {
+            heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
         } else if (rec.type == UndoType::kDelete) {
             heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
             if (has_tuple) {
                 db_->insert_index_entries(rec.table_id, tuple, rec.rid);
             }
+        } else if (rec.type == UndoType::kHotDelete) {
+            heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
         }
     }
 
@@ -234,6 +254,20 @@ void TransactionManager::record_delete(u32 table_id, const RecordId& rid) {
     LockGuard guard(latch_);
     if (g_current_txn) {
         g_current_txn->record_delete(table_id, rid);
+    }
+}
+
+void TransactionManager::record_hot_insert(u32 table_id, const RecordId& rid) {
+    LockGuard guard(latch_);
+    if (g_current_txn) {
+        g_current_txn->record_hot_insert(table_id, rid);
+    }
+}
+
+void TransactionManager::record_hot_delete(u32 table_id, const RecordId& rid) {
+    LockGuard guard(latch_);
+    if (g_current_txn) {
+        g_current_txn->record_hot_delete(table_id, rid);
     }
 }
 
