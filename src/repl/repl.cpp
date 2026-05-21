@@ -11,6 +11,7 @@
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
+#include <unistd.h>
 #include <unordered_map>
 
 namespace minidb {
@@ -107,70 +108,182 @@ static bool is_write_statement_type(StmtType type) {
            type == StmtType::kRollback;
 }
 
-REPL::REPL(Database& db) : db_(db) {}
+REPL::REPL(Database& db) : db_(db) {
+    interactive_ = isatty(fileno(stdin)) != 0;
+}
 
-void REPL::run() {
-    printf("MiniADB v0.3.0 — Interactive SQL Shell\n");
-    printf("Type 'exit' to quit, 'help' for commands.\n\n");
+namespace {
 
-    char line[4096];
-    while (true) {
-        printf("minidb> ");
-        fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) break;
+// Walk `text` and track per-character quote state. Returns the index of the
+// first ';' that sits outside quotes, or text.size() if none.
+struct ScanState {
+    bool in_single = false;   // inside '...'
+    bool in_double = false;   // inside "..."
+    bool in_line_comment = false;
+};
 
-        u32 len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
-            line[--len] = '\0';
-        }
-
-        if (len == 0) continue;
-        char* p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (p[0] == '-' && p[1] == '-') continue;
-        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) break;
-
-        if (strcmp(line, "help") == 0) {
-            printf("Commands:\n");
-            printf("  SQL statement ending with ;\n");
-            printf("  SHOW TABLES          — list all tables\n");
-            printf("  DESC <table>         — describe table schema\n");
-            printf("  EXPLAIN <statement>  — show query plan\n");
-            printf("  BEGIN / COMMIT / ROLLBACK — transactions\n");
-            printf("  exit / quit          — exit shell\n\n");
+u32 find_unquoted_semicolon(const String& text, u32 from, ScanState* state) {
+    for (u32 i = from; i < text.size(); i++) {
+        char c = text[i];
+        if (state->in_line_comment) {
+            if (c == '\n') state->in_line_comment = false;
             continue;
         }
+        if (state->in_single) {
+            if (c == '\'') state->in_single = false;
+            continue;
+        }
+        if (state->in_double) {
+            if (c == '"') state->in_double = false;
+            continue;
+        }
+        if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+            state->in_line_comment = true;
+            i++;
+            continue;
+        }
+        if (c == '\'') { state->in_single = true; continue; }
+        if (c == '"')  { state->in_double = true; continue; }
+        if (c == ';')  return i;
+    }
+    return text.size();
+}
 
-        // W25: Split multiple statements on one line by semicolons
-        bool in_sq = false, in_dq = false;
-        String line_str(line);
-        u32 stmt_start = 0;
-        for (u32 i = 0; i < line_str.size(); i++) {
-            if (line_str[i] == '\'' && !in_dq) in_sq = !in_sq;
-            else if (line_str[i] == '"' && !in_sq) in_dq = !in_dq;
-            else if (line_str[i] == ';' && !in_sq && !in_dq) {
-                String stmt = line_str.substr(stmt_start, i - stmt_start);
-                execute_sql(stmt);
-                stmt_start = i + 1;
-                while (stmt_start < line_str.size() &&
-                       (line_str[stmt_start] == ' ' || line_str[stmt_start] == '\t'))
-                    stmt_start++;
+bool statement_is_complete(const String& text) {
+    ScanState s;
+    u32 pos = find_unquoted_semicolon(text, 0, &s);
+    return pos < text.size();
+}
+
+String strip_leading_ws(const String& s) {
+    u32 i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+    return s.substr(i);
+}
+
+bool is_blank_or_comment(const String& s) {
+    String t = strip_leading_ws(s);
+    if (t.empty()) return true;
+    if (t.size() >= 2 && t[0] == '-' && t[1] == '-') return true;
+    return false;
+}
+
+bool starts_with_word_ci(const String& s, const char* word) {
+    String t = strip_leading_ws(s);
+    u32 n = static_cast<u32>(std::strlen(word));
+    if (t.size() < n) return false;
+    for (u32 i = 0; i < n; i++) {
+        char a = t[i];
+        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
+        if (a != word[i]) return false;
+    }
+    // word must be followed by end / ws / ';' so "exits" does not match "exit"
+    if (t.size() == n) return true;
+    char c = t[n];
+    return c == ' ' || c == '\t' || c == ';' || c == '\n';
+}
+
+}  // namespace
+
+void REPL::run() {
+    if (interactive_) {
+        printf("MiniDB v0.3.0 — Interactive SQL Shell\n");
+        printf("Type 'help' for commands, 'exit' to quit. Statements end with ';'.\n\n");
+    }
+
+    String buffer;
+    char line[4096];
+    while (true) {
+        const bool partial = !buffer.empty();
+        if (interactive_) {
+            const char* tail = ">";
+            if (partial) {
+                tail = "->";
+            } else if (db_.txn_manager().current()) {
+                tail = "*>";
+            }
+            printf("minidb%s ", tail);
+            fflush(stdout);
+        }
+        if (!fgets(line, sizeof(line), stdin)) break;
+
+        // Top-level meta commands only apply when a fresh statement is starting.
+        if (!partial) {
+            String trimmed(line);
+            // Strip trailing newline for the meta-command check.
+            while (!trimmed.empty() &&
+                   (trimmed[trimmed.size() - 1] == '\n' ||
+                    trimmed[trimmed.size() - 1] == '\r')) {
+                trimmed = trimmed.substr(0, trimmed.size() - 1);
+            }
+            if (starts_with_word_ci(trimmed, "exit") ||
+                starts_with_word_ci(trimmed, "quit")) {
+                break;
+            }
+            if (starts_with_word_ci(trimmed, "help")) {
+                if (interactive_) {
+                    printf("Commands:\n");
+                    printf("  <SQL>;             one or more SQL statements terminated by ';'.\n");
+                    printf("                     Statements may span multiple lines.\n");
+                    printf("  SHOW TABLES;       list every table in the current database.\n");
+                    printf("  DESC <table>;      describe a table's schema.\n");
+                    printf("  EXPLAIN <stmt>;    show the query plan (read-only statements).\n");
+                    printf("  EXPLAIN ANALYZE <stmt>;  run the read-only statement and report timing.\n");
+                    printf("  BEGIN; COMMIT; ROLLBACK;   transaction control.\n");
+                    printf("  \\timing [on|off]   toggle per-statement timing.\n");
+                    printf("  help               this list.\n");
+                    printf("  exit | quit        leave the shell.\n\n");
+                }
+                continue;
+            }
+            if (interactive_ && trimmed.size() > 0 && trimmed[0] == '\\') {
+                String cmd = strip_leading_ws(trimmed.substr(1));
+                if (starts_with_word_ci(cmd, "timing")) {
+                    String arg = strip_leading_ws(cmd.substr(6));
+                    if (arg.empty()) {
+                        show_timing_ = !show_timing_;
+                    } else if (arg == "on" || arg == "ON") {
+                        show_timing_ = true;
+                    } else if (arg == "off" || arg == "OFF") {
+                        show_timing_ = false;
+                    } else {
+                        printf("Error: usage: \\timing [on|off]\n\n");
+                        continue;
+                    }
+                    printf("Timing is %s.\n\n", show_timing_ ? "on" : "off");
+                    continue;
+                }
+                printf("Error: unknown meta-command. Try '\\timing'.\n\n");
+                continue;
+            }
+            if (is_blank_or_comment(trimmed)) {
+                continue;
             }
         }
-        if (stmt_start < line_str.size()) {
-            String stmt = line_str.substr(stmt_start);
-            u32 s = 0;
-            while (s < stmt.size() && (stmt[s] == ' ' || stmt[s] == '\t')) s++;
-            if (s > 0) stmt = stmt.substr(s);
-            u32 e = stmt.size();
-            while (e > 0 && (stmt[e-1] == ' ' || stmt[e-1] == '\t')) e--;
-            if (e < stmt.size()) stmt = stmt.substr(0, e);
-            if (!stmt.empty()) {
-                execute_sql(stmt);
+
+        // Accumulate raw lines into the statement buffer.
+        buffer += line;
+
+        // Drain every complete statement (terminated by an unquoted ';').
+        while (true) {
+            ScanState scan;
+            u32 sc = find_unquoted_semicolon(buffer, 0, &scan);
+            if (sc >= buffer.size()) break;     // need more input
+            String stmt = buffer.substr(0, sc);
+            buffer = buffer.substr(sc + 1);
+            String trimmed_stmt = strip_leading_ws(stmt);
+            if (!trimmed_stmt.empty()) {
+                execute_sql(trimmed_stmt);
             }
+        }
+
+        // If the buffer is now just whitespace / line comments, clear it so we
+        // do not stay in a fake "partial" state forever.
+        if (is_blank_or_comment(buffer)) {
+            buffer.clear();
         }
     }
-    printf("Goodbye.\n");
+    if (interactive_) printf("Goodbye.\n");
 }
 
 void REPL::execute_sql(const String& sql) {
