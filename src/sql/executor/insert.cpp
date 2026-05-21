@@ -301,18 +301,22 @@ ExecResult InsertExecutor::next() {
         auto result = heap_->commit_insert(plan.page_id, plan.is_new_page,
                                             plan.predicted_slot, buffer, size, lsn);
         if (result.ok()) {
+            Pair<PageId, SlotIdx> rid = result.value();
+            RecordId record_id(rid.first, rid.second);
+            // Record the heap-insert undo BEFORE touching indexes so the
+            // active transaction's rollback removes both the heap row and
+            // any partial index entries via delete_index_entries.
+            if (txn_mgr_ && txn_mgr_->current()) {
+                txn_mgr_->record_insert(table_id_, record_id);
+            }
+            if (db_ && !db_->insert_index_entries(table_id_, tuple, record_id)) {
+                set_executor_error("index insert failed");
+                return ExecResult::empty();
+            }
             for (u32 k = 0; k < row_unique_keys.size(); k++) {
                 pending_unique_keys.insert(row_unique_keys[k], true);
             }
             count++;
-            Pair<PageId, SlotIdx> rid = result.value();
-            RecordId record_id(rid.first, rid.second);
-            if (db_) {
-                db_->insert_index_entries(table_id_, tuple, record_id);
-            }
-            if (txn_mgr_ && txn_mgr_->current()) {
-                txn_mgr_->record_insert(table_id_, record_id);
-            }
         }
     }
 

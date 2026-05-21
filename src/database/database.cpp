@@ -627,7 +627,27 @@ bool Database::read_tuple(u32 table_id, const Schema& schema, const RecordId& ri
     return true;
 }
 
-void Database::insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid) {
+// Fault-injection hook for ACID tests. Activated by setting the env var
+// MINIDB_FAULT to a comma-separated list of named injection points. Has
+// zero impact when unset, which is the production case.
+static bool fault_active(const char* name) {
+    const char* env = std::getenv("MINIDB_FAULT");
+    if (!env || !*env) return false;
+    size_t len = std::strlen(name);
+    const char* p = env;
+    while (*p) {
+        const char* end = p;
+        while (*end && *end != ',') end++;
+        if (static_cast<size_t>(end - p) == len && std::strncmp(p, name, len) == 0) {
+            return true;
+        }
+        if (!*end) break;
+        p = end + 1;
+    }
+    return false;
+}
+
+bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid) {
     Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
     u64 txn_id = txn_manager_.current() ? txn_manager_.current()->id() : 1;
     for (u32 i = 0; i < indexes.size(); i++) {
@@ -636,11 +656,18 @@ void Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
         IndexKey key = index_key_from_tuple(*index, tuple);
         if (!key.fits()) continue;
         BPlusTree* tree = get_index_tree(index->index_id);
-        if (tree) {
-            wal_->log_index_insert(txn_id, index->index_id, key.first_value(), rid);
-            tree->insert(key, rid);
+        if (!tree) continue;
+        wal_->log_index_insert(txn_id, index->index_id, key.first_value(), rid);
+        if (fault_active("index_insert_fail") || !tree->insert(key, rid)) {
+            // The heap tuple is in place but at least one index entry is
+            // missing. Return false so the caller can surface an error;
+            // the active transaction's undo records will then remove the
+            // heap row plus any partial index entries via
+            // delete_index_entries, which is idempotent.
+            return false;
         }
     }
+    return true;
 }
 
 void Database::delete_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid) {

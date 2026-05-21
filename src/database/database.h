@@ -47,7 +47,11 @@ public:
                                    const String& new_name, String* error = nullptr);
     HeapFile* get_heap_file(u32 table_id);
     BPlusTree* get_index_tree(u32 index_id);
-    void insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);
+    // Returns true iff every B+ tree entry for `tuple` was inserted. On
+    // false the caller is responsible for surfacing an error and relying
+    // on the active transaction's undo to remove the heap row plus any
+    // partial index entries that did land.
+    bool insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);
     void delete_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid);
     bool validate_index_keys(u32 table_id, const Tuple& tuple) const;
     void rebuild_indexes_for_table(u32 table_id);

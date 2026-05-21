@@ -410,10 +410,6 @@ ExecResult UpdateExecutor::next() {
                 auto ins_result = heap_->commit_insert(
                     plan.page_id, plan.is_new_page, plan.predicted_slot, buffer, size, lsn);
                 if (ins_result.ok()) {
-                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                        pending_unique_keys.insert(row_unique_keys[k], true);
-                    }
-                    count++;
                     Pair<PageId, SlotIdx> new_rid = ins_result.value();
                     RecordId new_record_id(new_rid.first, new_rid.second);
 
@@ -421,14 +417,24 @@ ExecResult UpdateExecutor::next() {
                     heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                             new_rid.first, new_rid.second, txn_id, lsn);
 
+                    // Record undo BEFORE touching indexes so a failure in
+                    // insert_index_entries unwinds heap + partial indexes
+                    // via the transaction's rollback path.
                     if (txn_mgr_ && txn_mgr_->current()) {
                         txn_mgr_->record_delete(table_id_, old_rid);
                         txn_mgr_->record_insert(table_id_, new_record_id);
                     }
                     if (db_ && hot_eligible) {
                         db_->delete_index_entries(table_id_, old_tuple, old_rid);
-                        db_->insert_index_entries(table_id_, new_tuple, new_record_id);
+                        if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
+                            set_executor_error("index insert failed");
+                            return ExecResult::empty();
+                        }
                     }
+                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
+                        pending_unique_keys.insert(row_unique_keys[k], true);
+                    }
+                    count++;
                 }
             }
         }

@@ -97,6 +97,8 @@ add_test(NAME write_skew
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew.py $<TARGET_FILE:minidb> --seed 12648439)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
+add_test(NAME index_heap_atomic
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/index_heap_atomic.py $<TARGET_FILE:minidb> --seed 12648441)
 add_test(NAME constraints_not_null_default
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/constraints_not_null_default.py $<TARGET_FILE:minidb> --seed 12648437)
 add_test(NAME recovery_smoke
