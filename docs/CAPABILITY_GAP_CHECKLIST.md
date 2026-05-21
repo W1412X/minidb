@@ -133,7 +133,7 @@ The main distinction used here:
   - [x] Fall back to heap visibility check when visibility proof is absent.
   - [x] Keep the covering-index path only after heap visibility recheck.
 
-- [ ] Tighten B+ tree deletion APIs:
+- [x] Tighten B+ tree deletion APIs:
   - [x] Make `remove(key)` valid only for unique indexes or remove the method.
   - [x] Use `remove(key, rid)` for non-unique indexes.
   - [x] Add duplicate-key deletion tests.

@@ -27,15 +27,15 @@ MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。
 
 支持 `BOOL`/`BOOLEAN`、`INT`/`INTEGER`、`BIGINT`、`FLOAT`/`REAL`、`DOUBLE`/`DECIMAL`/`NUMERIC`、`VARCHAR(n)`、`TEXT` 和 `NULL`。
 
-字段约束支持 `PRIMARY KEY`、`UNIQUE`、`NOT NULL` 和 `DEFAULT`。Primary Key 和 Unique 字段会自动创建唯一索引。
+字段约束支持 `PRIMARY KEY`、`UNIQUE`、`NOT NULL` 和 `DEFAULT`。Primary Key 和 Unique 字段会自动创建唯一索引。通过统一的 `IndexKey` 表达支持了复合唯一约束的完整校验与落地。
 
 ## 存储引擎
 
 - 8KB 页面，包含 PageHeader 和 line pointer 数组。
 - Heap file 存储表数据。
-- B+Tree 索引支持单列、复合、唯一索引。
-- 支持索引等值扫描、范围扫描、Index-Only Scan 和索引有序输出优化。
-- Buffer Pool 支持可配置大小、LRU、顺序扫描防污染，以及按 page id 分区的 page table/LRU 锁。
+- B+Tree 索引基于统一的二进制可比 `IndexKey` 表达，支持多列复合索引、变长键 (`TEXT`/`VARCHAR`)、字节序排序 (bytewise collation) 规则、前缀扫描和范围扫描。
+- 支持索引等值扫描、范围扫描、MVCC 安全的 `IndexOnlyScan` (集成 heap recheck 自动回退可见性校验) 和索引有序输出优化。
+- Buffer Pool 支持可配置大小、LRU、顺序扫描防污染，以及按 page id 分区的 page table/LRU 锁。完整文档化的 Frame 状态机和强化的并发保护 (如并发 `new_page` 保护)。
 - Double-write buffer 用于降低 torn page 风险。
 - Page checksum 用于检测页损坏。
 - FD cache 用于限制打开文件描述符数量。
@@ -55,7 +55,7 @@ MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。
 - 客户端支持连接复用、连接超时、IO 超时、重试次数、连接池上限。
 - PageServer 支持最大活跃连接数限制。
 - PageServer 持久化 remote WAL page image。
-- PageServer 持久化 metadata，并在重启后重建 LogIndex。
+- PageServer 持久化 metadata，并在重启后重建 LogIndex，支持 checksum 与 end-marker 尾部校验以防范半写/重启损坏。
 - 写页前检查 page LSN 和 durable LSN。
 - 支持 `storage_read_only` 和 `storage_read_lsn` 的 RO Compute 快照读。
 - 遇到 future page 时，通过持久化 LogIndex/WAL image 返回不超过 `read_lsn` 的页版本。
@@ -74,7 +74,7 @@ MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。
 
 - 快照隔离。
 - Tuple 包含 `xmin` / `xmax` 和版本链指针。
-- 支持 HOT 风格同页版本链。
+- 支持 MVCC 安全的同页 HOT (Heap-Only Tuple) 语义，非索引列更新不新增 index entry，scan 会正确追踪重定向和版本链。
 - 支持事务 undo record，回滚不依赖 REDO。
 - GC 基于活跃事务水位线回收旧版本。
 - UPDATE/COMMIT 路径会在安全时主动剪枝旧版本链。
@@ -89,7 +89,7 @@ MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。
 MiniDB 使用 Volcano iterator 模型，已实现：
 
 - `SeqScan`：MVCC 可见性、版本链遍历、RID skip-list、投影列 late materialization，大表可选 parallel scan。
-- `IndexScan` / `IndexOnlyScan`。
+- `IndexScan` / MVCC 安全的 `IndexOnlyScan` (集成 heap recheck fallback)。
 - `Filter`：常见表达式编译快路径，回退通用表达式求值。
 - `Project`。
 - `NestedLoopJoin`。
@@ -109,7 +109,7 @@ MiniDB 使用 Volcano iterator 模型，已实现：
 - HashJoin build 小侧选择。
 - 内侧有索引时选择 IndexLookupJoin。
 - 等值/范围索引路径选择。
-- 投影只需要索引 key 时选择 IndexOnlyScan。
+- 投影只需要索引 key 时选择 IndexOnlyScan (集成 heap recheck 自动保障 MVCC 完整可见性)。
 - 索引有序输出可消除兼容的升序 `ORDER BY`。
 - 远程存储模式下使用 remote IO cost model，使随机远程索引查找成本高于本地页读。
 - `EXPLAIN` 输出 cost、rows 和 optimizer note。

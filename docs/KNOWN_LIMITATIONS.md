@@ -28,6 +28,7 @@ This list is intentionally explicit so production users know where MiniDB still 
 
 ## Indexes
 
-- Numeric and boolean single-column B+ tree indexes are directly supported.
-- Composite or non-B+ tree-native keys may use encoded/hash keys depending on path.
+- Single-column B+ tree indexes are directly supported for numeric, boolean, TEXT, and VARCHAR types.
+- Multi-column composite B+ tree indexes are fully supported using the unified binary-comparable `IndexKey` representation, enabling composite unique constraints, prefix scans, and range scans.
 - B+ tree operations use coarse tree locking; this is correct but can limit write-heavy concurrency.
+

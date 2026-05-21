@@ -31,16 +31,15 @@ The project currently includes MVCC snapshot isolation, WAL-based crash recovery
 
 `BOOL`/`BOOLEAN`, `INT`/`INTEGER`, `BIGINT`, `FLOAT`/`REAL`, `DOUBLE`/`DECIMAL`/`NUMERIC`, `VARCHAR(n)`, `TEXT`, and `NULL`.
 
-Column constraints include `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, and `DEFAULT`. Primary key and single-column unique constraints create unique indexes automatically. Composite unique paths are experimental until the physical index key model is upgraded.
+Column constraints include `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, and `DEFAULT`. Primary key and single-column unique constraints create unique indexes automatically. Composite unique constraints are fully supported and validated via the unified `IndexKey` representation.
 
 ### Storage
 
 - 8KB pages with a compact page header and line pointer array.
 - Heap files for table storage.
-- B+ tree indexes for native single-column numeric and boolean keys.
-- Experimental composite and non-native key paths that may use encoded/hash keys depending on the access path.
-- Index equality scan, range scan, covering-index scan path, and index order optimization. Full MVCC-safe index-only scan requires visibility-map validation and is tracked separately.
-- Buffer pool with configurable size, partitioned page table/LRU locks, LRU replacement, and sequential-scan anti-pollution behavior.
+- B+ tree indexes based on a unified, binary-comparable `IndexKey` representation, supporting multi-column composite indexes, variable-length keys (`TEXT`/`VARCHAR`), bytewise collation for string ordering, prefix scans, and range scans.
+- Index equality scan, range scan, covering-index scan path, index order optimization, and MVCC-safe `IndexOnlyScan` (with heap recheck fallback to verify visibility).
+- Buffer pool with configurable size, partitioned page table/LRU locks, LRU replacement, and sequential-scan anti-pollution behavior. Fully documented frame state machine with enhanced concurrency protection (e.g. concurrent `new_page` safety).
 - Double-write buffer and page checksums.
 - File descriptor cache with configurable limit.
 - `PageStore` abstraction with:
@@ -59,7 +58,7 @@ MiniDB includes an experimental PolarDB-like shared-storage path:
 - Client connection reuse, connect timeout, IO timeout, retry count, and connection-pool size.
 - PageServer request admission by maximum active connections.
 - Remote WAL page-image file for page reconstruction.
-- Persistent PageServer metadata and LogIndex reconstruction after restart.
+- Persistent PageServer metadata and LogIndex reconstruction after restart, verified by checksum and end-marker integrity check to detect partial write or restart corruption.
 - Page LSN and durable LSN checks before accepting page writes.
 - Read-only compute mode with `storage_read_lsn`.
 - Future-page handling by using persisted LogIndex/WAL page images to return a page version at or before `read_lsn`.
@@ -78,7 +77,7 @@ Current distributed limitations:
 
 - Snapshot isolation.
 - Tuple `xmin`/`xmax` metadata and version-chain traversal.
-- HOT-style same-page version-chain infrastructure. Full PostgreSQL-style HOT semantics are still under validation.
+- MVCC-safe Heap-Only Tuple (HOT) semantics, where updates to non-indexed columns are directed to the same page without requiring new index entries. Scans correctly traverse HOT version chains.
 - Per-transaction undo records for rollback.
 - Configurable transaction-slot admission.
 - Garbage collection based on active transaction watermarks.
@@ -100,7 +99,7 @@ Current distributed limitations:
 MiniDB uses a Volcano iterator model. Implemented executor paths include:
 
 - `SeqScan`, including MVCC visibility, version-chain traversal, RID skip-list, projected-column late materialization, and optional parallel scan for larger tables.
-- `IndexScan` and a covering-index scan path. MVCC-safe index-only scan is not yet claimed without visibility-map validation.
+- `IndexScan`, covering-index scan, and MVCC-safe `IndexOnlyScan` with automated heap recheck fallback to verify visibility.
 - `Filter` with compiled fast paths for common expression shapes and fallback expression evaluation.
 - `Project`.
 - `NestedLoopJoin`.
@@ -120,7 +119,7 @@ MiniDB uses a Volcano iterator model. Implemented executor paths include:
 - Hash join build-side selection.
 - Index lookup join selection when the inner side has a usable index.
 - Index range and equality path selection.
-- Covering-index scan selection when projection is covered by the index key, subject to current MVCC visibility limitations.
+- Covering-index scan selection (`IndexOnlyScan`) when projection is covered by the index key, fully integrated with MVCC visibility via heap recheck fallback.
 - Index order scan optimization for compatible ascending `ORDER BY`.
 - Initial remote-storage cost model that makes random remote index lookups more expensive than local page reads.
 - `EXPLAIN` includes cost/row estimates and optimizer notes.
