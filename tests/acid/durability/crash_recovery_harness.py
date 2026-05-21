@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"))
 from minidb_testlib import (  # noqa: E402
     add_seed_args,
     assert_no_error,
