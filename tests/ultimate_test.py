@@ -234,7 +234,7 @@ try:
     run("CREATE INDEX idx_v ON t (v);", db)
     run("INSERT INTO t VALUES (1, 100), (2, 200), (3, 300);", db)
     check("Index eq", "2", run("SELECT id FROM t WHERE v = 200;", db))
-    check("Index range", "2", run("SELECT COUNT(*) FROM t WHERE v > 150 AND v < 250;", db))
+    check("Index range", "1", run("SELECT COUNT(*) FROM t WHERE v > 150 AND v < 250;", db))
     run("UPDATE t SET v = 999 WHERE id = 1;", db)
     check("Index after UPDATE", "1", run("SELECT id FROM t WHERE v = 999;", db))
     run("DELETE FROM t WHERE v = 999;", db)
