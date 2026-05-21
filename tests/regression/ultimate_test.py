@@ -8,7 +8,10 @@ BUGS = []
 
 def run(sqls, db=None):
     if db is None: db = tempfile.mkdtemp()
-    if isinstance(sqls, str): sqls = [sqls]
+    if isinstance(sqls, str):
+        sqls = [sqls]
+    else:
+        sqls = list(sqls)
     sqls.append("exit")
     r = subprocess.run([BIN, "--dir", db], input="\n".join(sqls),
                        capture_output=True, text=True, timeout=60)
@@ -183,15 +186,15 @@ db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
     run("INSERT INTO t VALUES (1, 10);", db)
-    run("BEGIN; INSERT INTO t VALUES (2, 20); COMMIT;", db)
+    run(["BEGIN;", "INSERT INTO t VALUES (2, 20);", "COMMIT;"], db)
     check("COMMIT", "2", run("SELECT COUNT(*) FROM t;", db))
-    run("BEGIN; INSERT INTO t VALUES (3, 30); ROLLBACK;", db)
+    run(["BEGIN;", "INSERT INTO t VALUES (3, 30);", "ROLLBACK;"], db)
     check("ROLLBACK", "2", run("SELECT COUNT(*) FROM t;", db))
-    run("BEGIN; UPDATE t SET v = 99 WHERE id = 1; ROLLBACK;", db)
+    run(["BEGIN;", "UPDATE t SET v = 99 WHERE id = 1;", "ROLLBACK;"], db)
     check("UPDATE ROLLBACK", "10", run("SELECT v FROM t WHERE id = 1;", db))
-    run("BEGIN; DELETE FROM t WHERE id = 2; ROLLBACK;", db)
+    run(["BEGIN;", "DELETE FROM t WHERE id = 2;", "ROLLBACK;"], db)
     check("DELETE ROLLBACK", "2", run("SELECT COUNT(*) FROM t;", db))
-    run("BEGIN; INSERT INTO t VALUES (4, 40); COMMIT;", db)
+    run(["BEGIN;", "INSERT INTO t VALUES (4, 40);", "COMMIT;"], db)
     check("COMMIT after ROLLBACK", "3", run("SELECT COUNT(*) FROM t;", db))
 finally:
     shutil.rmtree(db)
