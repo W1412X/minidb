@@ -199,6 +199,39 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
     expect_keyword(TokenType::KW_SELECT);
     stmt->distinct = match_keyword(TokenType::KW_DISTINCT);
 
+    // Reject keywords that introduce a downstream SELECT clause from
+    // appearing in the select list. is_identifier_token() accepts every
+    // keyword in the KW_SELECT..KW_DEALLOCATE range, so without this guard
+    // `SELECT FROM t` silently parses as "SELECT [column-named-FROM] FROM t"
+    // and yields an empty result with no diagnostic. Caught early so the
+    // REPL surfaces a precise line:col error.
+    {
+        Token next = peek();
+        switch (next.type) {
+            case TokenType::KW_FROM:
+            case TokenType::KW_WHERE:
+            case TokenType::KW_GROUP:
+            case TokenType::KW_HAVING:
+            case TokenType::KW_ORDER:
+            case TokenType::KW_LIMIT:
+            case TokenType::KW_OFFSET:
+            case TokenType::KW_UNION:
+            case TokenType::KW_JOIN:
+            case TokenType::KW_INNER:
+            case TokenType::KW_LEFT:
+            case TokenType::KW_RIGHT:
+            case TokenType::KW_CROSS:
+            case TokenType::KW_OUTER:
+            case TokenType::KW_ON:
+            case TokenType::SEMICOLON:
+            case TokenType::END_OF_INPUT:
+                set_error_at(String("expected select expression"), next);
+                return stmt;
+            default:
+                break;
+        }
+    }
+
     // select list
     if (check(TokenType::STAR)) {
         lexer_.consume_token();

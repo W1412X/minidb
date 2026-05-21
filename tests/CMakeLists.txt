@@ -64,6 +64,8 @@ add_test(NAME sql_correctness_matrix
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/sql_correctness_matrix.py $<TARGET_FILE:minidb> --seed 12648430)
 add_test(NAME differential_sqlite
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/differential_sqlite.py $<TARGET_FILE:minidb> --seed 12648431)
+add_test(NAME select_empty_list
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/select_empty_list.py $<TARGET_FILE:minidb> --seed 12648444)
 
 # ---------------------------------------------------------------------------
 # DDL and catalog
