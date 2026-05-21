@@ -321,18 +321,24 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
 
     // LIMIT
     if (match_keyword(TokenType::KW_LIMIT)) {
+        bool negative = match(TokenType::MINUS);
         Token t = expect(TokenType::INT_LITERAL);
         char* end = nullptr;
         long val = strtol(t.value.c_str(), &end, 10);
-        stmt->limit = (val > 0) ? static_cast<u32>(val) : 0;
+        if (negative) {
+            stmt->limit = -1;  // PostgreSQL-compatible: negative LIMIT means no limit.
+        } else {
+            stmt->limit = (val > 0) ? static_cast<i32>(val) : 0;
+        }
     }
 
     // OFFSET
     if (match_keyword(TokenType::KW_OFFSET)) {
+        bool negative = match(TokenType::MINUS);
         Token t = expect(TokenType::INT_LITERAL);
         char* end = nullptr;
         long val = strtol(t.value.c_str(), &end, 10);
-        stmt->offset = (val > 0) ? static_cast<u32>(val) : 0;
+        stmt->offset = (!negative && val > 0) ? static_cast<i32>(val) : 0;
     }
 
     return stmt;

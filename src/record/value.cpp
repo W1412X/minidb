@@ -357,7 +357,7 @@ String Value::to_string() const {
     char buf[64];
     int len = 0;
     switch (type_id_) {
-        case TypeId::kBool:    return bool_val_ ? "true" : "false";
+        case TypeId::kBool:    return bool_val_ ? "1" : "0";
         case TypeId::kInt32:   len = snprintf(buf, sizeof(buf), "%d", int32_val_); break;
         case TypeId::kInt64:   len = snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(int64_val_)); break;
         case TypeId::kFloat:   len = snprintf(buf, sizeof(buf), "%f", float_val_); break;

@@ -180,8 +180,12 @@ onerow_out="$(
     run_sql \
         'EXPLAIN SELECT 1 + 2;' \
         'SELECT 1 + 2;' \
+        'SELECT NULL OR TRUE;' \
         'SELECT 1 WHERE TRUE;' \
         'SELECT 1 WHERE FALSE;' \
+        'CREATE TABLE limit_neg (id INT PRIMARY KEY);' \
+        'INSERT INTO limit_neg VALUES (1), (2), (3);' \
+        'SELECT id FROM limit_neg ORDER BY id LIMIT -1;' \
         'SELECT COUNT(*);' \
         'CREATE TABLE lower_count (id INT);' \
         'INSERT INTO lower_count VALUES (1), (2);' \
@@ -192,6 +196,12 @@ onerow_out="$(
 require_contains 'Project
   OneRow' "$onerow_out"
 require_contains 'expr_0
+3' "$onerow_out"
+require_contains 'expr_0
+1' "$onerow_out"
+require_contains 'id
+1
+2
 3' "$onerow_out"
 require_contains 'agg_0
 1' "$onerow_out"
