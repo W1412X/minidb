@@ -238,26 +238,7 @@ Tuple Tuple::deserialize_from_page(const byte* buf, const Schema& schema, u32 le
     // Pad missing columns (from ADD COLUMN) with default values
     while (tuple.values_.size() < schema.column_count()) {
         u32 col_idx = static_cast<u32>(tuple.values_.size());
-        const Column& col = schema.get_column(col_idx);
-        Value default_val;
-        if (!col.default_value.empty()) {
-            // Parse default value based on column type
-            if (col.type == TypeId::kInt32 || col.type == TypeId::kInt64) {
-                char* end = nullptr;
-                long v = strtol(col.default_value.c_str(), &end, 10);
-                default_val = Value(static_cast<i64>(v));
-            } else if (col.type == TypeId::kFloat || col.type == TypeId::kDouble) {
-                char* end = nullptr;
-                double v = strtod(col.default_value.c_str(), &end);
-                default_val = Value(v);
-            } else if (col.type == TypeId::kBool) {
-                default_val = Value(col.default_value == "true" || col.default_value == "1" ||
-                                    col.default_value == "TRUE");
-            } else {
-                default_val = Value(col.default_value);
-            }
-        }
-        tuple.values_.push_back(static_cast<Value&&>(default_val));
+        tuple.values_.push_back(schema.get_column(col_idx).default_as_value());
     }
 
     return tuple;
@@ -324,21 +305,8 @@ Tuple Tuple::deserialize_projected_from_page(const byte* buf,
         u32 source_col = projected_columns[i];
         if (source_col < num_cols || source_col >= source_schema.column_count()) continue;
         const Column& col = source_schema.get_column(source_col);
-        if (!col.default_value.empty()) {
-            if (col.type == TypeId::kInt32 || col.type == TypeId::kInt64) {
-                char* parse_end = nullptr;
-                long v = strtol(col.default_value.c_str(), &parse_end, 10);
-                tuple.values_[i] = Value(static_cast<i64>(v));
-            } else if (col.type == TypeId::kFloat || col.type == TypeId::kDouble) {
-                char* parse_end = nullptr;
-                double v = strtod(col.default_value.c_str(), &parse_end);
-                tuple.values_[i] = Value(v);
-            } else if (col.type == TypeId::kBool) {
-                tuple.values_[i] = Value(col.default_value == "true" || col.default_value == "1" ||
-                                         col.default_value == "TRUE");
-            } else {
-                tuple.values_[i] = Value(col.default_value);
-            }
+        if (col.has_default()) {
+            tuple.values_[i] = col.default_as_value();
         }
     }
     return tuple;

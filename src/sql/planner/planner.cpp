@@ -544,6 +544,16 @@ UniquePtr<PlanNode> Planner::plan_insert(const InsertStmt& stmt) {
         }
     }
 
+    // Columns omitted from an explicit column list pick up their declared
+    // DEFAULT (or NULL when none was declared). The NOT NULL check at
+    // execution time then rejects rows where a NOT NULL column has neither
+    // an explicit value nor a default.
+    Vector<bool> column_supplied;
+    column_supplied.resize(table->schema.column_count());
+    for (u32 i = 0; i < target_columns.size(); i++) {
+        column_supplied[target_columns[i]] = true;
+    }
+
     for (u32 r = 0; r < stmt.values_list.size(); r++) {
         if (stmt.values_list[r].size() != target_columns.size()) {
             return UniquePtr<PlanNode>();
@@ -551,6 +561,9 @@ UniquePtr<PlanNode> Planner::plan_insert(const InsertStmt& stmt) {
 
         Vector<Value> row;
         row.resize(table->schema.column_count());
+        for (u32 i = 0; i < table->schema.column_count(); i++) {
+            if (!column_supplied[i]) row[i] = table->schema.get_column(i).default_as_value();
+        }
         for (u32 c = 0; c < stmt.values_list[r].size(); c++) {
             const auto& expr = stmt.values_list[r][c];
             Value v;

@@ -4,8 +4,32 @@
  */
 #include "record/schema.h"
 #include <cstring>
+#include <cstdlib>
 
 namespace minidb {
+
+Value Column::default_as_value() const {
+    if (default_value.empty()) return Value();
+    switch (type) {
+        case TypeId::kInt32:
+        case TypeId::kInt64: {
+            char* end = nullptr;
+            long v = std::strtol(default_value.c_str(), &end, 10);
+            return Value(static_cast<i64>(v));
+        }
+        case TypeId::kFloat:
+        case TypeId::kDouble: {
+            char* end = nullptr;
+            double v = std::strtod(default_value.c_str(), &end);
+            return Value(v);
+        }
+        case TypeId::kBool:
+            return Value(default_value == "true" || default_value == "1" ||
+                         default_value == "TRUE");
+        default:
+            return Value(default_value);
+    }
+}
 
 void Schema::add_column(const Column& col) {
     columns_.push_back(col);

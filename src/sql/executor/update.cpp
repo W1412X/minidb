@@ -312,7 +312,10 @@ ExecResult UpdateExecutor::next() {
             }
         }
 
-        if (!row_satisfies_schema(new_values)) continue;
+        if (!row_satisfies_schema(new_values)) {
+            set_executor_error("NOT NULL constraint violated");
+            return ExecResult::empty();
+        }
         if (violates_unique_constraints(new_values, old_rid)) continue;
         bool batch_unique_conflict = false;
         Vector<String> row_unique_keys;

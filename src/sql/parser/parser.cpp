@@ -469,18 +469,26 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
             }
         }
 
-        // constraints
-        if (match_keyword(TokenType::KW_PRIMARY)) {
-            expect_keyword(TokenType::KW_KEY);
-            col.is_primary = true;
-            col.not_null = true;
-        }
-        if (match_keyword(TokenType::KW_NOT)) {
-            expect_keyword(TokenType::KW_NULL);
-            col.not_null = true;
-        }
-        if (match_keyword(TokenType::KW_UNIQUE)) {
-            col.is_unique = true;
+        // constraints: order-agnostic, mirrors the ALTER TABLE ADD COLUMN
+        // grammar so PRIMARY KEY/NOT NULL/UNIQUE/DEFAULT can appear in any
+        // permutation. Each clause is recognised at most once.
+        while (true) {
+            if (match_keyword(TokenType::KW_PRIMARY)) {
+                expect_keyword(TokenType::KW_KEY);
+                col.is_primary = true;
+                col.not_null = true;
+            } else if (match_keyword(TokenType::KW_NOT)) {
+                expect_keyword(TokenType::KW_NULL);
+                col.not_null = true;
+            } else if (match_keyword(TokenType::KW_UNIQUE)) {
+                col.is_unique = true;
+            } else if (match_keyword(TokenType::KW_DEFAULT)) {
+                Token def = peek();
+                lexer_.consume_token();
+                col.default_value = def.value;
+            } else {
+                break;
+            }
         }
 
         stmt->columns.push_back(col);
