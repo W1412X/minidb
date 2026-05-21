@@ -2,15 +2,12 @@
 set -euo pipefail
 
 BIN="${1:?usage: full_sql_suite.sh /path/to/minidb}"
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/minidb-full-suite.XXXXXX")"
 OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/minidb-full-suite-output.XXXXXX")"
 trap 'rm -rf "$DB_DIR"; rm -f "$OUT_FILE"' EXIT
 
-SUITE_SQL="$ROOT_DIR/test_suite.sql"
-if [[ ! -f "$SUITE_SQL" ]]; then
-    SUITE_SQL="$ROOT_DIR/tests/test_suite.sql"
-fi
+SUITE_SQL="$SCRIPT_DIR/test_suite.sql"
 
 "$BIN" --dir "$DB_DIR" < "$SUITE_SQL" > "$OUT_FILE"
 

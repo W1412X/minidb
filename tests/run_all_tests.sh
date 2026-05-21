@@ -102,18 +102,18 @@ run_test "txn_slots"      "./build/tests/transaction_slots_test"
 # --- SQL Regression ---
 CURRENT_GROUP="SQL Regression"
 echo -e "\n[SQL Regression]"
-run_test "regression"     "bash tests/sql_regression.sh $BIN"
-run_test "resource_limits" "bash tests/resource_limits.sh $BIN"
-run_test "keyword_combos" "bash tests/sql_keyword_combinations.sh $BIN"
-run_test "join_syntax"    "bash tests/join_syntax_strict.sh $BIN"
-run_test "production_reg" "bash tests/production_regression.sh $BIN"
-run_test "join_optimizer" "bash tests/join_optimizer.sh $BIN"
+run_test "regression"     "bash tests/sql/sql_regression.sh $BIN"
+run_test "resource_limits" "bash tests/regression/resource_limits.sh $BIN"
+run_test "keyword_combos" "bash tests/sql/sql_keyword_combinations.sh $BIN"
+run_test "join_syntax"    "bash tests/sql/join_syntax_strict.sh $BIN"
+run_test "production_reg" "bash tests/regression/production_regression.sh $BIN"
+run_test "join_optimizer" "bash tests/sql/join_optimizer.sh $BIN"
 stress_flag=""
 if [[ "$STRESS" == "1" ]]; then stress_flag="--stress"; fi
-run_test "sql_matrix"     "python3 tests/sql_correctness_matrix.py $BIN --seed $SEED $stress_flag"
-run_test "sqlite_diff"    "python3 tests/differential_sqlite.py $BIN --seed $((SEED + 1)) $stress_flag"
-run_test "crash_harness"  "python3 tests/crash_recovery_harness.py $BIN --seed $((SEED + 2)) $stress_flag"
-run_test "mvcc_lock"      "python3 tests/mvcc_lock_regression.py $BIN --seed $((SEED + 3)) $stress_flag"
+run_test "sql_matrix"     "python3 tests/sql/sql_correctness_matrix.py $BIN --seed $SEED $stress_flag"
+run_test "sqlite_diff"    "python3 tests/sql/differential_sqlite.py $BIN --seed $((SEED + 1)) $stress_flag"
+run_test "crash_harness"  "python3 tests/acid/durability/crash_recovery_harness.py $BIN --seed $((SEED + 2)) $stress_flag"
+run_test "mvcc_lock"      "python3 tests/acid/isolation/mvcc_lock_regression.py $BIN --seed $((SEED + 3)) $stress_flag"
 
 if [[ "$SUITE" == "pr" && "$STRESS" != "1" ]]; then
     echo -e "\n============================================"
@@ -132,35 +132,35 @@ fi
 # --- Comprehensive SQL ---
 CURRENT_GROUP="Comprehensive SQL"
 echo -e "\n[Comprehensive SQL]"
-run_test "comprehensive"  "python3 tests/comprehensive_test.py $BIN"
+run_test "comprehensive"  "python3 tests/regression/comprehensive_test.py $BIN"
 
 # --- Data Consistency ---
 CURRENT_GROUP="Data Consistency"
 echo -e "\n[Data Consistency]"
-run_test "consistency"    "python3 tests/consistency_test.py $BIN"
-run_test "bug_verify"     "python3 tests/bug_verify.py $BIN"
+run_test "consistency"    "python3 tests/regression/consistency_test.py $BIN"
+run_test "bug_verify"     "python3 tests/regression/bug_verify.py $BIN"
 
 # --- Ultimate Test ---
 CURRENT_GROUP="Ultimate"
 echo -e "\n[Ultimate Test]"
-run_test "ultimate"       "python3 tests/ultimate_test.py $BIN"
+run_test "ultimate"       "python3 tests/regression/ultimate_test.py $BIN"
 
 # --- Concurrent ---
 CURRENT_GROUP="Concurrent"
 echo -e "\n[Concurrent]"
-run_test "concurrent"     "python3 tests/concurrent_test.py $BIN"
+run_test "concurrent"     "python3 tests/concurrency/concurrent_test.py $BIN"
 
 # --- Storage / Recovery / Performance Paths ---
 CURRENT_GROUP="Storage and Recovery"
 echo -e "\n[Storage and Recovery]"
-run_test "persistence"    "bash tests/persistence_and_composite.sh $BIN"
-run_test "remote_store"   "bash tests/remote_page_store.sh $BIN"
-run_test "recovery"       "bash tests/recovery_smoke.sh $BIN"
-run_test "index_delete"   "bash tests/index_delete_rebuild.sh $BIN"
-run_test "bulk_perf"      "bash tests/bulk_update_delete_perf.sh $BIN"
-run_test "perf_paths"     "bash tests/performance_paths.sh $BIN"
-run_test "perf_delivery"  "bash tests/performance_delivery.sh $BIN"
-run_test "perf_opts"      "bash tests/performance_optimizations.sh $BIN"
+run_test "persistence"    "bash tests/index/persistence_and_composite.sh $BIN"
+run_test "remote_store"   "bash tests/storage/remote_page_store.sh $BIN"
+run_test "recovery"       "bash tests/acid/durability/recovery_smoke.sh $BIN"
+run_test "index_delete"   "bash tests/index/index_delete_rebuild.sh $BIN"
+run_test "bulk_perf"      "bash tests/performance/bulk_update_delete_perf.sh $BIN"
+run_test "perf_paths"     "bash tests/performance/performance_paths.sh $BIN"
+run_test "perf_delivery"  "bash tests/performance/performance_delivery.sh $BIN"
+run_test "perf_opts"      "bash tests/performance/performance_optimizations.sh $BIN"
 
 echo -e "\n============================================"
 echo "  Results: $PASS passed, $FAIL failed"

@@ -77,7 +77,7 @@ jobs:
       - name: Stress run_all
         run: bash tests/run_all_tests.sh ./build/minidb --suite nightly --stress --seed 12648430 --report build/nightly-test-report.md
       - name: Crash stress
-        run: python3 tests/crash_recovery_harness.py ./build/minidb --stress --seed 12648500 --cases 5000
+        run: python3 tests/acid/durability/crash_recovery_harness.py ./build/minidb --stress --seed 12648500 --cases 5000
       - name: Differential stress
-        run: python3 tests/differential_sqlite.py ./build/minidb --stress --seed 12648600 --cases 10000
+        run: python3 tests/sql/differential_sqlite.py ./build/minidb --stress --seed 12648600 --cases 10000
 
