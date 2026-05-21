@@ -142,3 +142,5 @@ add_test(NAME production_regression
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/regression/production_regression.sh $<TARGET_FILE:minidb>)
 add_test(NAME resource_limits
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/regression/resource_limits.sh $<TARGET_FILE:minidb>)
+add_test(NAME update_halloween
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/regression/update_halloween.py $<TARGET_FILE:minidb> --seed 12648443)

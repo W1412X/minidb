@@ -235,9 +235,16 @@ ExecResult UpdateExecutor::next() {
         }
     }
     HashMap<String, bool> pending_unique_keys;
-    Vector<RecordId> materialized_targets;
 
-    if (!hot_eligible) {
+    // Drain the WHERE-side iterator into a frozen RID list BEFORE applying
+    // any updates. Streaming directly from `child_->next()` while mutating
+    // the heap is unsafe: the HOT path writes a new same-page version that
+    // satisfies "own write" visibility, so a subsequent child_->next() would
+    // see it and re-match the predicate, looping until the page fills up
+    // (the classic SQL "Halloween problem"). Materialising decouples scan
+    // from mutation in both the HOT and non-HOT branches.
+    Vector<RecordId> materialized_targets;
+    {
         HashMap<String, bool> seen_targets;
         while (true) {
             if (executor_cancelled()) break;
@@ -257,19 +264,14 @@ ExecResult UpdateExecutor::next() {
     u32 materialized_pos = 0;
     while (true) {
         if (executor_cancelled()) break;
-        RecordId old_rid;
+        if (materialized_pos >= materialized_targets.size()) break;
+        RecordId old_rid = materialized_targets[materialized_pos++];
         Tuple old_tuple;
-        if (hot_eligible) {
-            ExecResult result = child_->next();
-            if (!result.ok()) break;
-            old_tuple = static_cast<Tuple&&>(result.tuple);
-            if (!child_->last_record_id(&old_rid)) continue;
-        } else {
-            if (materialized_pos >= materialized_targets.size()) break;
-            old_rid = materialized_targets[materialized_pos++];
-            if (!db_ || !db_->read_tuple(table_id_, schema_, old_rid, &old_tuple)) continue;
-            if (old_tuple.xmax() != kInvalidTxnId) continue;
-        }
+        if (!db_ || !db_->read_tuple(table_id_, schema_, old_rid, &old_tuple)) continue;
+        // No silent skip on xmax!=0 here. A non-zero xmax means another
+        // transaction modified the row between our snapshot and now — the
+        // lock + xmax recheck below surfaces that as a serialization error
+        // (I2). Silently skipping would mask the lost-update conflict.
 
         Vector<Value> new_values;
         for (u32 i = 0; i < old_tuple.column_count(); i++) {
