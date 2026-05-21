@@ -6,11 +6,14 @@
 #include "sql/parser/parser.h"
 #include "sql/planner/planner.h"
 #include "sql/executor/executor_factory.h"
+#include "sql/executor/executor.h"
 #include "catalog/catalog.h"
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
+#include <csignal>
+#include <cerrno>
 #include <unistd.h>
 #include <unordered_map>
 
@@ -112,6 +115,12 @@ REPL::REPL(Database& db) : db_(db) {
     interactive_ = isatty(fileno(stdin)) != 0;
 }
 
+extern "C" void repl_sigint_handler(int) {
+    // Signal handler context: only async-signal-safe ops are allowed.
+    // request_executor_interrupt() does a single relaxed atomic store.
+    minidb::request_executor_interrupt();
+}
+
 namespace {
 
 // Walk `text` and track per-character quote state. Returns the index of the
@@ -187,8 +196,22 @@ bool starts_with_word_ci(const String& s, const char* word) {
 
 void REPL::run() {
     if (interactive_) {
+        // Ctrl-C cancels the current statement instead of killing the
+        // process. We install the handler only in interactive mode so
+        // scripted runs (pipes / shell tests) keep the standard
+        // terminate-on-SIGINT behaviour.
+        struct sigaction sa;
+        sa.sa_handler = repl_sigint_handler;
+        sigemptyset(&sa.sa_mask);
+        // Intentionally NOT SA_RESTART — when a Ctrl-C lands while we are
+        // blocked in fgets() the read should return EINTR so the loop can
+        // discard the half-typed line and re-prompt, psql-style.
+        sa.sa_flags = 0;
+        sigaction(SIGINT, &sa, nullptr);
+
         printf("MiniDB v0.3.0 — Interactive SQL Shell\n");
-        printf("Type 'help' for commands, 'exit' to quit. Statements end with ';'.\n\n");
+        printf("Type 'help' for commands, 'exit' to quit. Statements end with ';'.\n");
+        printf("Ctrl-C cancels the current statement.\n\n");
     }
 
     String buffer;
@@ -205,7 +228,17 @@ void REPL::run() {
             printf("minidb%s ", tail);
             fflush(stdout);
         }
-        if (!fgets(line, sizeof(line), stdin)) break;
+        if (!fgets(line, sizeof(line), stdin)) {
+            if (interactive_ && errno == EINTR) {
+                // Ctrl-C at the prompt: drop any partial statement and start fresh.
+                clearerr(stdin);
+                buffer.clear();
+                clear_executor_interrupt();
+                printf("^C\n");
+                continue;
+            }
+            break;
+        }
 
         // Top-level meta commands only apply when a fresh statement is starting.
         if (!partial) {
@@ -287,6 +320,9 @@ void REPL::run() {
 }
 
 void REPL::execute_sql(const String& sql) {
+    // Each statement starts with a fresh cancellation flag so a SIGINT
+    // delivered between statements does not abort the next one.
+    clear_executor_interrupt();
     u64 timeout_ms = 0;
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_repl_statement_timeout_ms = timeout_ms;
@@ -665,6 +701,7 @@ void REPL::execute_sql(const String& sql) {
     bool row_limit_hit = false;
     auto exec_start = std::chrono::steady_clock::now();
     while (true) {
+        if (executor_cancelled()) break;
         if (effective_timeout_ms != 0 && std::chrono::steady_clock::now() >= deadline) {
             timed_out = true;
             break;
