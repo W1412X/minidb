@@ -626,40 +626,97 @@ void REPL::execute_sql(const String& sql) {
                     std::chrono::milliseconds(effective_timeout_ms);
     bool timed_out = false;
 
-    if (out.column_count() > 0) {
-        for (u32 i = 0; i < out.column_count(); i++) {
-            if (i > 0) printf(" | ");
-            printf("%s", out.get_column(i).name.c_str());
-        }
-        printf("\n");
-    }
-
-    u64 row_count = 0;
+    // Buffer the result rows first. Interactive mode then renders an
+    // aligned table; non-interactive mode falls back to the legacy
+    // pipe-separated stream, so shell tests are unaffected.
+    Vector<Vector<String>> rows;
+    bool row_limit_hit = false;
+    auto exec_start = std::chrono::steady_clock::now();
     while (true) {
         if (effective_timeout_ms != 0 && std::chrono::steady_clock::now() >= deadline) {
             timed_out = true;
             break;
         }
-        if (db_.config().max_result_rows != 0 && row_count >= db_.config().max_result_rows) {
-            printf("Error: result row limit exceeded.\n");
+        if (db_.config().max_result_rows != 0 && rows.size() >= db_.config().max_result_rows) {
+            row_limit_hit = true;
             break;
         }
         ExecResult r = exec->next();
         if (!r.ok()) break;
-        print_tuple(r.tuple, out);
-        row_count++;
+        Vector<String> cells;
+        for (u32 i = 0; i < out.column_count(); i++) {
+            Value v = r.tuple.get_value(i);
+            cells.push_back(v.is_null() ? String("NULL") : v.to_string());
+        }
+        rows.push_back(static_cast<Vector<String>&&>(cells));
     }
+    auto exec_end = std::chrono::steady_clock::now();
+    double elapsed_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count()) / 1000.0;
 
     if (executor_error()) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
         printf("Error: %s\n\n", executor_error());
         return;
     }
-
     if (timed_out) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
         printf("Error: statement timeout.\n\n");
         return;
+    }
+
+    // DML statements report through a one-column tuple named
+    // "affected_rows" (insert/update) or "deleted_rows" (delete). In
+    // interactive mode we surface that as a friendly "INSERT N" /
+    // "UPDATE N" / "DELETE N" line, mirroring psql. Non-interactive
+    // mode keeps the legacy two-row column to avoid breaking tests.
+    bool is_dml_summary = out.column_count() == 1 &&
+        (out.get_column(0).name == String("affected_rows") ||
+         out.get_column(0).name == String("deleted_rows"));
+
+    if (interactive_) {
+        if (is_dml_summary) {
+            const char* verb = "RESULT";
+            switch (stmt.type) {
+                case StmtType::kInsert: verb = "INSERT"; break;
+                case StmtType::kUpdate: verb = "UPDATE"; break;
+                case StmtType::kDelete: verb = "DELETE"; break;
+                default: break;
+            }
+            const char* n = "0";
+            if (!rows.empty() && !rows[0].empty()) n = rows[0][0].c_str();
+            printf("%s %s\n", verb, n);
+        } else if (out.column_count() == 0) {
+            // Statements that succeed without a result tuple — nothing to print.
+        } else {
+            render_aligned_table(rows, out);
+            printf("(%llu row%s)\n",
+                   static_cast<unsigned long long>(rows.size()),
+                   rows.size() == 1 ? "" : "s");
+            if (row_limit_hit) {
+                printf("Note: result truncated at max_result_rows = %llu.\n",
+                       static_cast<unsigned long long>(db_.config().max_result_rows));
+            }
+        }
+        if (show_timing_) printf("Time: %.3f ms\n", elapsed_ms);
+    } else {
+        if (out.column_count() > 0) {
+            for (u32 i = 0; i < out.column_count(); i++) {
+                if (i > 0) printf(" | ");
+                printf("%s", out.get_column(i).name.c_str());
+            }
+            printf("\n");
+        }
+        for (u32 r = 0; r < rows.size(); r++) {
+            for (u32 i = 0; i < rows[r].size(); i++) {
+                if (i > 0) printf(" | ");
+                printf("%s", rows[r][i].c_str());
+            }
+            printf("\n");
+        }
+        if (row_limit_hit) {
+            printf("Error: result row limit exceeded.\n");
+        }
     }
 
     if (is_write_stmt) {
@@ -676,6 +733,42 @@ void REPL::execute_sql(const String& sql) {
     }
 
     printf("\n");
+}
+
+void REPL::render_aligned_table(const Vector<Vector<String>>& rows,
+                                const Schema& schema) {
+    u32 n = schema.column_count();
+    if (n == 0) return;
+    Vector<u32> widths;
+    widths.resize(n);
+    for (u32 i = 0; i < n; i++) widths[i] = schema.get_column(i).name.size();
+    for (u32 r = 0; r < rows.size(); r++) {
+        for (u32 i = 0; i < rows[r].size() && i < n; i++) {
+            u32 w = rows[r][i].size();
+            if (w > widths[i]) widths[i] = w;
+        }
+    }
+    // Header
+    for (u32 i = 0; i < n; i++) {
+        if (i > 0) printf(" | ");
+        printf("%-*s", static_cast<int>(widths[i]), schema.get_column(i).name.c_str());
+    }
+    printf("\n");
+    // Separator: dashes per column, "-+-" at boundaries.
+    for (u32 i = 0; i < n; i++) {
+        if (i > 0) printf("-+-");
+        for (u32 j = 0; j < widths[i]; j++) printf("-");
+    }
+    printf("\n");
+    // Rows
+    for (u32 r = 0; r < rows.size(); r++) {
+        for (u32 i = 0; i < n; i++) {
+            if (i > 0) printf(" | ");
+            const String& cell = i < rows[r].size() ? rows[r][i] : String("");
+            printf("%-*s", static_cast<int>(widths[i]), cell.c_str());
+        }
+        printf("\n");
+    }
 }
 
 void REPL::print_tuple(const Tuple& tuple, const Schema& schema) {
