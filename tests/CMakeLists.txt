@@ -97,6 +97,8 @@ add_test(NAME recovery_smoke
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/recovery_smoke.sh $<TARGET_FILE:minidb>)
 add_test(NAME wal_replay_slot_reuse
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_replay_slot_reuse.sh $<TARGET_FILE:minidb>)
+add_test(NAME torn_page
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/torn_page.py $<TARGET_FILE:minidb> --seed 12648436)
 add_test(NAME crash_recovery_harness
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/crash_recovery_harness.py $<TARGET_FILE:minidb> --seed 12648432)
 
