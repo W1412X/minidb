@@ -14,11 +14,25 @@
 
 namespace minidb {
 
+// ErrorInfo carries the diagnostic state captured by a failing Parser::parse()
+// call. `message` is "" when parsing succeeded; otherwise it always names the
+// problem ("expected ',' but got ')'", "unknown statement", ...). `line` and
+// `column` point at the offending token. `near` is the offending token's text
+// (or "<end of input>") for quoting in the error string.
+struct ParserError {
+    String message;
+    String near;
+    u32    line = 0;
+    u32    column = 0;
+};
+
 class Parser {
 public:
     explicit Parser(const String& sql);
 
     Statement parse();
+    const ParserError& error() const { return error_; }
+    bool ok() const { return ok_; }
 
 private:
     // Statement parsers.
@@ -61,9 +75,12 @@ private:
     bool check_identifier();
     bool is_identifier_token(TokenType type) const;
     void mark_error();
+    void set_error(const String& message);
+    void set_error_at(const String& message, const Token& tok);
 
     Lexer lexer_;
     bool ok_;
+    ParserError error_;
 };
 
 } // namespace minidb

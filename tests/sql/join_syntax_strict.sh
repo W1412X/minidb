@@ -25,7 +25,10 @@ grep -q '^2$' "$OUT_FILE"
 grep -q '^3$' "$OUT_FILE"
 grep -q '^6$' "$OUT_FILE"
 
-error_count="$(grep -c 'Error: unsupported or unrecognized command\.' "$OUT_FILE" || true)"
+# The unsupported variants ("RIGHT JOIN", "LEFT JOIN without ON") must each
+# surface as a parser-level error. The exact wording is "syntax error" or
+# "expected ...", so accept any error line that is not table-not-found.
+error_count="$(grep -cE '^Error: (syntax error|expected |unknown statement|unexpected trailing|only SHOW)' "$OUT_FILE" || true)"
 if [[ "$error_count" -ne 2 ]]; then
     cat "$OUT_FILE" >&2
     exit 1

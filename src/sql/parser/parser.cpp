@@ -54,6 +54,7 @@ Statement Parser::parse() {
                     inner->insert = parse_insert();
                     break;
                 default:
+                    set_error_at(String("EXPLAIN requires SELECT/INSERT/UPDATE/DELETE"), next);
                     return Statement();
             }
             stmt.explain_stmt = static_cast<UniquePtr<Statement>&&>(inner);
@@ -109,6 +110,8 @@ Statement Parser::parse() {
             if (match_keyword(TokenType::KW_TABLES)) {
                 stmt.type = StmtType::kShowTables;
             } else {
+                Token after_show = peek();
+                set_error_at(String("only SHOW TABLES is supported"), after_show);
                 return Statement();
             }
             break;
@@ -147,12 +150,15 @@ Statement Parser::parse() {
             stmt.deallocate_stmt = parse_deallocate();
             break;
         default:
-            break;
+            set_error_at(String("unknown statement"), t);
+            return Statement();
     }
 
     if (!ok_) return Statement();
     match(TokenType::SEMICOLON);
-    if (!check(TokenType::END_OF_INPUT)) {
+    Token trailing = peek();
+    if (trailing.type != TokenType::END_OF_INPUT) {
+        set_error_at(String("unexpected trailing token after statement"), trailing);
         return Statement();
     }
     return stmt;
@@ -1176,7 +1182,7 @@ UniquePtr<Expression> Parser::parse_primary() {
 Token Parser::expect(TokenType type) {
     Token t = peek();
     if (t.type != type) {
-        mark_error();
+        set_error_at(String("expected different token"), t);
         // Consume the bad token to avoid spinning.
         lexer_.consume_token();
         return Token(TokenType::ERROR, "unexpected token", t.line, t.column);
@@ -1188,7 +1194,7 @@ Token Parser::expect(TokenType type) {
 Token Parser::expect_keyword(TokenType kw) {
     Token t = peek();
     if (t.type != kw) {
-        mark_error();
+        set_error_at(String("expected keyword"), t);
         lexer_.consume_token();
         return Token(TokenType::ERROR, "unexpected keyword", t.line, t.column);
     }
@@ -1202,7 +1208,7 @@ Token Parser::expect_alias() {
         lexer_.consume_token();
         return t;
     }
-    mark_error();
+    set_error_at(String("expected identifier"), t);
     lexer_.consume_token();
     return Token(TokenType::ERROR, "unexpected token", t.line, t.column);
 }
@@ -1249,7 +1255,40 @@ bool Parser::is_identifier_token(TokenType type) const {
 }
 
 void Parser::mark_error() {
-    ok_ = false;
+    if (ok_) {
+        // Capture the current token so the REPL can quote it. Callers that
+        // know more about the failure should use set_error_at().
+        Token t = peek();
+        set_error_at(String("syntax error"), t);
+    } else {
+        ok_ = false;
+    }
+}
+
+void Parser::set_error(const String& message) {
+    if (ok_) {
+        ok_ = false;
+        error_.message = message;
+        error_.near = String("");
+        error_.line = 0;
+        error_.column = 0;
+    }
+}
+
+void Parser::set_error_at(const String& message, const Token& tok) {
+    if (ok_) {
+        ok_ = false;
+        error_.message = message;
+        if (tok.type == TokenType::END_OF_INPUT) {
+            error_.near = String("<end of input>");
+        } else if (!tok.value.empty()) {
+            error_.near = tok.value;
+        } else {
+            error_.near = String("<unknown>");
+        }
+        error_.line = tok.line;
+        error_.column = tok.column;
+    }
 }
 
 } // namespace minidb

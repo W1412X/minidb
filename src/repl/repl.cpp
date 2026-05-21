@@ -326,6 +326,18 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
     Statement stmt = parser.parse();
+    if (!parser.ok()) {
+        const ParserError& e = parser.error();
+        if (e.line != 0 || e.column != 0) {
+            printf("Error: %s near \"%s\" at line %u column %u\n\n",
+                   e.message.c_str(), e.near.c_str(), e.line, e.column);
+        } else if (!e.message.empty()) {
+            printf("Error: %s\n\n", e.message.c_str());
+        } else {
+            printf("Error: failed to parse statement.\n\n");
+        }
+        return;
+    }
     QueryResourceGuard query_guard(db_.resources(), is_write_statement_type(stmt.type),
                                    db_.config().work_mem_bytes);
     if (!query_guard.acquired()) {
@@ -337,12 +349,10 @@ void REPL::execute_sql(const String& sql) {
                          stmt.type == StmtType::kUpdate;
     bool implicit_txn = false;
 
-    // Check empty/unknown statement
-    if (stmt.type == StmtType::kSelect && !stmt.select) {
-        printf("Error: unsupported or unrecognized command.\n");
-        printf("Type 'help' for available commands.\n\n");
-        return;
-    }
+    // After a successful parse, stmt.type+stmt.select are always consistent.
+    // The "empty SELECT" sentinel that the old code printed as
+    // "Error: unsupported or unrecognized command." can no longer occur:
+    // the parser sets a proper error before returning a default Statement.
 
     // SHOW TABLES
     if (stmt.type == StmtType::kShowTables) {
@@ -602,7 +612,29 @@ void REPL::execute_sql(const String& sql) {
     UniquePtr<PlanNode> plan = planner.plan(stmt);
     if (!plan) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
-        printf("Error: failed to build plan.\n\n");
+        // Most common cause: a referenced table does not exist. Catch that
+        // up front so the user gets a useful message instead of the generic
+        // "failed to build plan".
+        const String* missing = nullptr;
+        if (stmt.type == StmtType::kInsert && stmt.insert) {
+            if (!db_.get_table(stmt.insert->table.name)) missing = &stmt.insert->table.name;
+        } else if (stmt.type == StmtType::kUpdate && stmt.update) {
+            if (!db_.get_table(stmt.update->table.name)) missing = &stmt.update->table.name;
+        } else if (stmt.type == StmtType::kDelete && stmt.delete_stmt) {
+            if (!db_.get_table(stmt.delete_stmt->table.name)) missing = &stmt.delete_stmt->table.name;
+        } else if (stmt.type == StmtType::kSelect && stmt.select) {
+            for (u32 i = 0; i < stmt.select->from_tables.size(); i++) {
+                if (!db_.get_table(stmt.select->from_tables[i].name)) {
+                    missing = &stmt.select->from_tables[i].name;
+                    break;
+                }
+            }
+        }
+        if (missing) {
+            printf("Error: table '%s' not found.\n\n", missing->c_str());
+        } else {
+            printf("Error: failed to build plan (check column names and join conditions).\n\n");
+        }
         return;
     }
 
