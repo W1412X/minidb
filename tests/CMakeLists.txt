@@ -91,6 +91,8 @@ add_test(NAME index_unique_matrix
 
 add_test(NAME mvcc_lock_regression
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/mvcc_lock_regression.py $<TARGET_FILE:minidb> --seed 12648433)
+add_test(NAME commit_durability
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
 add_test(NAME recovery_smoke
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/recovery_smoke.sh $<TARGET_FILE:minidb>)
 add_test(NAME wal_replay_slot_reuse

@@ -141,14 +141,28 @@ Transaction* TransactionManager::begin() {
 bool TransactionManager::commit(Transaction* txn) {
     if (!txn || txn != g_current_txn) return false;
 
-    latch_.lock();
-    if (txn != g_current_txn) {
-        latch_.unlock();
+    u64 txn_id = txn->id();
+
+    // Step 1: write the commit record and wait for it to become durable
+    // BEFORE flipping the txn slot to kCommitted. This guarantees that
+    // any reader who observes the committed state will also find the
+    // commit record on disk after a crash. If durability fails, the
+    // transaction is treated as aborted.
+    u64 commit_lsn = db_->wal().log_commit(txn_id);
+    if (commit_lsn == 0) {
+        // WAL did not become durable. Drop back to the rollback path so
+        // the slot/undo/lock state is unwound. rollback() also relies on
+        // g_current_txn == txn, which is still true at this point.
+        rollback(txn);
         return false;
     }
 
+    // Step 2: the commit is durable. Publish it: assign commit id, flip
+    // the slot to kCommitted, and capture the oldest active txn for GC
+    // pruning. Doing this only now means a reader can never observe a
+    // committed slot whose commit record is not yet on disk.
+    latch_.lock();
     u64 commit_id = next_txn_id_++;
-    u64 txn_id = txn->id();
     u64 oldest_active = next_txn_id_;
 
     TxnSlot* slot = find_active_slot(txn_id);
@@ -169,10 +183,6 @@ bool TransactionManager::commit(Transaction* txn) {
     txn->set_state(TxnState::kCommitted);
     latch_.unlock();
 
-    u64 commit_lsn = db_->wal().log_commit(txn_id);
-    // WAL-first commit: commit only requires WAL persistence; data pages are flushed asynchronously by buffer pool/checkpoint.
-    db_->wal().flush();
-
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (u32 i = 0; i < undo_records.size(); i++) {
         const UndoRecord& rec = undo_records[i];
@@ -184,7 +194,6 @@ bool TransactionManager::commit(Transaction* txn) {
         }
     }
 
-    // Free all locks held by the transaction (State already set)
     db_->lock_manager().unlock_all(txn_id);
 
     bool release_resource = txn->resource_acquired();

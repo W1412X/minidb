@@ -72,7 +72,8 @@ private:
     bool append_to_buffer(const byte* data, u32 len);
     bool write_direct(const byte* data, u32 len);
     bool flush_buffer();
-    void flush_commit(u64 lsn);
+    // Returns true iff `lsn` is durable on disk when the call returns.
+    bool flush_commit(u64 lsn);
     void truncate();
 
     String wal_dir_;
@@ -86,6 +87,10 @@ private:
     u64 group_commit_delay_ms_;
     u32 pending_commit_waiters_;
     u64 group_commit_batches_;
+    // Monotonic counter incremented at the end of every group-commit batch.
+    // Followers compare against the value they captured on entry so they
+    // notice a closed batch even if their LSN never became durable.
+    u64 commit_batch_id_;
     u64 buffer_flushes_;
     u64 buffered_bytes_;
     u64 bytes_since_checkpoint_;
