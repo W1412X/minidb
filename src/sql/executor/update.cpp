@@ -286,33 +286,40 @@ ExecResult UpdateExecutor::next() {
 
         if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, old_rid,
                                                      LockMode::kRowExclusive).ok()) {
-            continue;
+            set_executor_error("could not serialize access due to concurrent update");
+            return ExecResult::empty();
         }
         if (!explicit_txn) autocommit_record_locks.push_back(old_rid);
 
-        // W6: Write-write conflict detection
+        // Write-write conflict detection: after taking the row lock, re-read
+        // xmax to make sure another transaction did not modify or delete this
+        // row in the window between our snapshot and our lock acquisition.
         {
             auto pg = pool_->fetch_page(old_rid.page_id);
-            if (pg.ok()) {
-                Page* p = pg.value();
-                const LinePointer* lp = p->line_pointer(old_rid.slot_idx);
-                if (lp && lp->is_valid() && lp->offset + 16 <= kPageSize) {
-                    u64 cur_xmax = 0;
-                    std::memcpy(&cur_xmax, p->data() + lp->offset + 8, 8);
-                    pool_->unpin_page(old_rid.page_id);
-                    if (cur_xmax != kInvalidTxnId && cur_xmax != txn_id) {
-                        continue;
-                    }
-                } else {
-                    pool_->unpin_page(old_rid.page_id);
-                    continue;
-                }
-            } else {
-                continue;
+            if (!pg.ok()) {
+                set_executor_error("could not read row for update");
+                return ExecResult::empty();
+            }
+            Page* p = pg.value();
+            const LinePointer* lp = p->line_pointer(old_rid.slot_idx);
+            if (!lp || !lp->is_valid() || lp->offset + 16 > kPageSize) {
+                pool_->unpin_page(old_rid.page_id);
+                set_executor_error("could not serialize access due to concurrent update");
+                return ExecResult::empty();
+            }
+            u64 cur_xmax = 0;
+            std::memcpy(&cur_xmax, p->data() + lp->offset + 8, 8);
+            pool_->unpin_page(old_rid.page_id);
+            if (cur_xmax != kInvalidTxnId && cur_xmax != txn_id) {
+                set_executor_error("could not serialize access due to concurrent update");
+                return ExecResult::empty();
             }
         }
 
-        if (!row_satisfies_schema(new_values)) continue;
+        if (!row_satisfies_schema(new_values)) {
+            set_executor_error("NOT NULL constraint violated");
+            return ExecResult::empty();
+        }
         if (violates_unique_constraints(new_values, old_rid)) continue;
         bool batch_unique_conflict = false;
         Vector<String> row_unique_keys;

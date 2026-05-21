@@ -36,7 +36,8 @@ WalManager::WalManager(const String& wal_dir, u64 segment_size_bytes, bool fsync
       segment_size_bytes_(segment_size_bytes == 0 ? 64ULL * 1024ULL * 1024ULL : segment_size_bytes),
       fsync_enabled_(fsync_enabled), group_commit_enabled_(group_commit_enabled),
       group_commit_delay_ms_(group_commit_delay_ms), pending_commit_waiters_(0),
-      group_commit_batches_(0), buffer_flushes_(0), buffered_bytes_(0),
+      group_commit_batches_(0), commit_batch_id_(0),
+      buffer_flushes_(0), buffered_bytes_(0),
       bytes_since_checkpoint_(0), write_buf_pos_(0) {
     mkdir(wal_dir.c_str(), 0755);
     String path = wal_dir + "/wal.log";
@@ -126,7 +127,11 @@ u64 WalManager::log_begin(u64 txn_id) {
 
 u64 WalManager::log_commit(u64 txn_id) {
     u64 lsn = write_record(WalType::kTxnCommit, txn_id, nullptr, 0);
-    if (lsn != 0) flush_commit(lsn);
+    if (lsn == 0) return 0;
+    // Caller must observe durability before exposing the commit. If fsync
+    // fails or group-commit closes without making us durable, return 0 so
+    // the transaction layer can run the abort path.
+    if (!flush_commit(lsn)) return 0;
     return lsn;
 }
 
@@ -264,39 +269,46 @@ u64 WalManager::checkpoint() {
     return lsn;
 }
 
-void WalManager::flush_commit(u64 lsn) {
-    latch_.lock();
-    if (fd_ < 0) {
-        latch_.unlock();
-        return;
-    }
+bool WalManager::flush_commit(u64 lsn) {
+    LockGuard guard(latch_);
+    if (fd_ < 0) return false;
+
     if (!fsync_enabled_) {
-        if (flush_buffer() && durable_lsn_ < lsn) durable_lsn_ = lsn;
+        if (!flush_buffer()) return false;
+        if (durable_lsn_ < lsn) durable_lsn_ = lsn;
         commit_cond_.broadcast();
-        latch_.unlock();
-        return;
+        return durable_lsn_ >= lsn;
     }
+
     if (!group_commit_enabled_ || group_commit_delay_ms_ == 0) {
-        if (flush_buffer() && fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        if (!flush_buffer()) return false;
+        if (fsync(fd_) != 0) return false;
+        durable_lsn_ = last_written_lsn_;
         commit_cond_.broadcast();
-        latch_.unlock();
-        return;
+        return durable_lsn_ >= lsn;
     }
 
     pending_commit_waiters_++;
-    bool leader = pending_commit_waiters_ == 1;
+    const bool leader = (pending_commit_waiters_ == 1);
     if (leader) {
         commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
-        if (flush_buffer() && fsync(fd_) == 0) durable_lsn_ = last_written_lsn_;
+        const bool ok = flush_buffer() && fsync(fd_) == 0;
+        if (ok) durable_lsn_ = last_written_lsn_;
         group_commit_batches_++;
+        commit_batch_id_++;
         pending_commit_waiters_ = 0;
         commit_cond_.broadcast();
-    } else {
-        while (durable_lsn_ < lsn && pending_commit_waiters_ != 0) {
-            commit_cond_.wait(latch_);
-        }
+        return ok && durable_lsn_ >= lsn;
     }
-    latch_.unlock();
+
+    // Follower: wait for our LSN to become durable, or for the current
+    // batch to close (so we can observe a failed flush). Loop on the
+    // predicate to stay correct under spurious wake-ups.
+    const u64 entry_batch = commit_batch_id_;
+    while (durable_lsn_ < lsn && commit_batch_id_ == entry_batch) {
+        commit_cond_.wait(latch_);
+    }
+    return durable_lsn_ >= lsn;
 }
 
 void WalManager::flush() {
@@ -304,7 +316,6 @@ void WalManager::flush() {
     if (fd_ >= 0) {
         if (flush_buffer() && (!fsync_enabled_ || fsync(fd_) == 0)) {
             durable_lsn_ = last_written_lsn_;
-            pending_commit_waiters_ = 0;
             commit_cond_.broadcast();
         }
     }
@@ -317,7 +328,6 @@ bool WalManager::flush_until(u64 lsn) {
     if (!flush_buffer()) return false;
     if (fsync_enabled_ && fsync(fd_) != 0) return false;
     durable_lsn_ = last_written_lsn_;
-    pending_commit_waiters_ = 0;
     commit_cond_.broadcast();
     return durable_lsn_ >= lsn;
 }

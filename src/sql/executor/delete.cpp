@@ -39,29 +39,33 @@ ExecResult DeleteExecutor::next() {
         if (child_->last_record_id(&rid)) {
             if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, rid,
                                                          LockMode::kRowExclusive).ok()) {
-                continue;
+                set_executor_error("could not serialize access due to concurrent update");
+                return ExecResult::empty();
             }
             if (!explicit_txn) autocommit_record_locks.push_back(rid);
 
-            // W6: Write-write conflict detection — re-read xmax after acquiring lock
+            // Write-write conflict detection — re-read xmax after taking the
+            // row lock to confirm no other transaction has already deleted
+            // or updated this row.
             {
                 auto pg = db_->pool().fetch_page(rid.page_id);
-                if (pg.ok()) {
-                    Page* p = pg.value();
-                    const LinePointer* lp = p->line_pointer(rid.slot_idx);
-                    if (lp && lp->is_valid() && lp->offset + 16 <= kPageSize) {
-                        u64 cur_xmax = 0;
-                        std::memcpy(&cur_xmax, p->data() + lp->offset + 8, 8);
-                        db_->pool().unpin_page(rid.page_id);
-                        if (cur_xmax != kInvalidTxnId && cur_xmax != txn_id) {
-                            continue;  // Already modified by another transaction
-                        }
-                    } else {
-                        db_->pool().unpin_page(rid.page_id);
-                        continue;  // Row no longer exists
-                    }
-                } else {
-                    continue;
+                if (!pg.ok()) {
+                    set_executor_error("could not read row for delete");
+                    return ExecResult::empty();
+                }
+                Page* p = pg.value();
+                const LinePointer* lp = p->line_pointer(rid.slot_idx);
+                if (!lp || !lp->is_valid() || lp->offset + 16 > kPageSize) {
+                    db_->pool().unpin_page(rid.page_id);
+                    set_executor_error("could not serialize access due to concurrent update");
+                    return ExecResult::empty();
+                }
+                u64 cur_xmax = 0;
+                std::memcpy(&cur_xmax, p->data() + lp->offset + 8, 8);
+                db_->pool().unpin_page(rid.page_id);
+                if (cur_xmax != kInvalidTxnId && cur_xmax != txn_id) {
+                    set_executor_error("could not serialize access due to concurrent update");
+                    return ExecResult::empty();
                 }
             }
 

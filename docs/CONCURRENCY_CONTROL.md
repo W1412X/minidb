@@ -22,6 +22,28 @@ The buffer pool is partitioned by page id. Each partition has its own page table
 
 Dirty page flushes obey WAL-first ordering before the page store write.
 
+## Isolation Level Guarantees
+
+MiniDB offers **snapshot isolation (SI)**. It is not SERIALIZABLE.
+
+- Each transaction reads from a snapshot taken at `BEGIN`. Reads see a
+  consistent view as of that snapshot for the entire transaction.
+- Two transactions writing the same row are detected: the second writer
+  receives `Error: could not serialize access due to concurrent update`.
+  This prevents the lost-update anomaly.
+- Two transactions writing **different** rows whose values depend on the
+  same predicate (the classic write-skew anomaly) are not detected and
+  both will commit. Snapshot isolation permits this; a serializable
+  guarantee would not.
+
+`tests/acid/isolation/write_skew.py` documents the SI anomaly as
+intentional behaviour; flipping it requires SSI or predicate locks and
+is tracked in `docs/ACID_TODO.md`.
+
+MiniDB does not currently parse `SET TRANSACTION ISOLATION LEVEL`, so
+clients cannot accidentally request SERIALIZABLE and silently receive
+SI — the statement is rejected by the parser.
+
 ## Current Boundaries
 
 - Transaction management is local to one compute process.

@@ -23,6 +23,12 @@ struct Column {
     Column() : type(TypeId::kNull), not_null(false), is_primary(false), is_unique(false) {}
     Column(const String& n, TypeId t, bool nn = false, bool pk = false)
         : name(n), type(t), not_null(nn), is_primary(pk), is_unique(false) {}
+
+    // Parse the textual default into a Value of this column's type. Returns
+    // an explicit NULL Value when no default is declared so callers can
+    // distinguish "no default" from a literal NULL default.
+    bool has_default() const { return !default_value.empty(); }
+    Value default_as_value() const;
 };
 
 class Schema {

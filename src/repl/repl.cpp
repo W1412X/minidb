@@ -327,6 +327,7 @@ void REPL::execute_sql(const String& sql) {
             c.not_null = col.not_null;
             c.is_primary = col.is_primary;
             c.is_unique = col.is_unique;
+            c.default_value = col.default_value;
             if (col.type_name == "INT" || col.type_name == "INTEGER") c.type = TypeId::kInt32;
             else if (col.type_name == "BIGINT") c.type = TypeId::kInt64;
             else if (col.type_name == "FLOAT" || col.type_name == "REAL") c.type = TypeId::kFloat;

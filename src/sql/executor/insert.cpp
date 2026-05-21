@@ -239,7 +239,10 @@ ExecResult InsertExecutor::next() {
     }
 
     for (u32 i = 0; i < values_.size(); i++) {
-        if (!row_satisfies_schema(values_[i])) continue;
+        if (!row_satisfies_schema(values_[i])) {
+            set_executor_error("NOT NULL constraint violated");
+            return ExecResult::empty();
+        }
         Vector<String> row_unique_keys;
         bool key_lock_failed = false;
         for (u32 g = 0; g < unique_groups.size(); g++) {
