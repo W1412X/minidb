@@ -123,7 +123,7 @@ static TypeId promote(TypeId a, TypeId b) {
     return TypeId::kInt32;
 }
 
-// 安全Type转换: 根据实际 type_id 读取正确的 union 成员
+// Type-safe accessor: reads the correct union member based on the actual type_id.
 static i64 to_i64(const Value& v) {
     switch (v.type_id()) {
         case TypeId::kBool:   return v.get_bool() ? 1 : 0;
@@ -315,7 +315,7 @@ byte* Value::serialize(byte* buf) const {
 }
 
 Value Value::deserialize(const byte* buf, TypeId /*schema_type*/) {
-    // 从序列化数据中读取实际 type_id, 不依赖 schema
+    // Read the actual type_id from the serialized data, do not trust the schema.
     TypeId type = static_cast<TypeId>(*buf);
     buf++;  // skip type_id
     switch (type) {
@@ -350,7 +350,7 @@ u32 Value::serialized_size() const {
 }
 
 // ============================================================
-// 转String
+// Convert to string.
 // ============================================================
 
 String Value::to_string() const {
@@ -376,14 +376,14 @@ u32 Value::type_size(TypeId type) {
         case TypeId::kInt64:   return 8;
         case TypeId::kFloat:   return 4;
         case TypeId::kDouble:  return 8;
-        case TypeId::kVarchar: return 0;  // 变长
+        case TypeId::kVarchar: return 0;  // variable-length
         case TypeId::kNull:    return 0;
         default: return 0;
     }
 }
 
 // ============================================================
-// 内部辅助
+// Internal helpers.
 // ============================================================
 
 void Value::copy_from(const Value& other) {
@@ -416,7 +416,7 @@ void Value::move_from(Value& other) noexcept {
 }
 
 void Value::destroy() {
-    // String 的析构会自动处理
+    // String's destructor handles cleanup.
     type_id_ = TypeId::kNull;
 }
 

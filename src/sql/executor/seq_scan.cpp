@@ -246,7 +246,7 @@ ExecResult SeqScanExecutor::next() {
             }
         }
 
-        // 所有 slot 处理完毕, 翻页
+        // Done with this page; advance to the next.
         pool_->unpin_page(current_page_id_);
         pages_remaining_--;
         current_slot_ = 0;

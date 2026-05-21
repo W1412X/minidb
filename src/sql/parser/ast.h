@@ -1,6 +1,6 @@
 /**
  * @file ast.h
- * @brief AST 节点定义 — SQL parsing tree
+ * @brief AST node definitions — parsed SQL tree.
  */
 #pragma once
 
@@ -14,7 +14,7 @@
 namespace minidb {
 
 // ============================================================
-// Table达式
+// Expressions.
 // ============================================================
 
 enum class ExprType {
@@ -45,7 +45,7 @@ struct Expression {
     // SUBQUERY
     UniquePtr<struct SelectStmt> subquery;
 
-    // CASE WHEN ... THEN ... ELSE ... END
+    // CASE WHEN ... ... THEN ... ELSE ... END
     Vector<Pair<UniquePtr<Expression>, UniquePtr<Expression>>> when_clauses;
     UniquePtr<Expression> else_expr;
 
@@ -54,7 +54,7 @@ struct Expression {
 };
 
 // ============================================================
-// Table引用
+// Table reference.
 // ============================================================
 
 struct TableRef {
@@ -75,7 +75,7 @@ struct JoinClause {
 };
 
 // ============================================================
-// 语句Type
+// Statement type.
 // ============================================================
 
 enum class StmtType {
@@ -234,7 +234,7 @@ struct DeallocateStmt {
 };
 
 // ============================================================
-// 顶层 Statement
+// Top-level statement.
 // ============================================================
 
 struct Statement {

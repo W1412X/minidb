@@ -1,6 +1,6 @@
 -- ============================================================
--- MiniADB 全功能测试脚本
--- 使用方法: cat test_all.sql | ./minidb
+-- MiniDB full-feature smoke script.
+-- Usage: cat test_all.sql | ./minidb
 -- ============================================================
 
 -- 1. DDL: CREATE TABLE
@@ -15,12 +15,12 @@ INSERT INTO users VALUES (3, 'Charlie', 35, 60000.0);
 INSERT INTO users VALUES (4, 'David', 28, 52000.0);
 INSERT INTO users VALUES (5, 'Eve', 32, 55000.0);
 
--- 3. SELECT: 基础查询
+-- 3. SELECT: basic queries
 SELECT * FROM users;
 SELECT name, age FROM users;
 SELECT * FROM users WHERE age > 28;
 
--- 4. SELECT: 表达式投影
+-- 4. SELECT: expression projection
 SELECT name, age + 1 AS next_age FROM users;
 
 -- 5. SELECT: ORDER BY + LIMIT
@@ -30,7 +30,7 @@ SELECT * FROM users ORDER BY salary DESC;
 -- 6. SELECT: DISTINCT
 SELECT DISTINCT age FROM users;
 
--- 7. SELECT: 聚合函数
+-- 7. SELECT: aggregate functions
 SELECT COUNT(*), AVG(salary), MAX(age), MIN(age) FROM users;
 
 -- 8. SELECT: GROUP BY + HAVING
@@ -42,7 +42,7 @@ SELECT * FROM users WHERE age BETWEEN 28 AND 32;
 -- 10. SELECT: LIKE
 SELECT * FROM users WHERE name LIKE '%li%';
 
--- 11. SELECT: IN (值列表)
+-- 11. SELECT: IN (value list)
 SELECT * FROM users WHERE age IN (25, 30, 35);
 
 -- 12. SELECT: CASE WHEN
@@ -60,14 +60,14 @@ SELECT * FROM users WHERE name = 'Alice';
 DELETE FROM users WHERE name = 'Bob';
 SELECT * FROM users;
 
--- 16. 事务: BEGIN + ROLLBACK
+-- 16. Transactions: BEGIN + ROLLBACK
 BEGIN;
 INSERT INTO users VALUES (6, 'Frank', 40, 70000.0);
 SELECT * FROM users WHERE name = 'Frank';
 ROLLBACK;
 SELECT * FROM users WHERE name = 'Frank';
 
--- 17. 事务: BEGIN + COMMIT
+-- 17. Transactions: BEGIN + COMMIT
 BEGIN;
 INSERT INTO users VALUES (7, 'Grace', 27, 48000.0);
 COMMIT;
@@ -90,10 +90,10 @@ SELECT name FROM users WHERE age < 30 UNION ALL SELECT name FROM users WHERE age
 EXPLAIN SELECT * FROM users WHERE age > 25;
 EXPLAIN SELECT u.name, o.amount FROM users u INNER JOIN orders o ON u.id = o.user_id;
 
--- 21. 错误处理
+-- 21. Error handling.
 SELECT * FROM nonexistent_table;
 INSERT INTO users VALUES (1, 'Dup', 20, 1000.0);
 SHOW DATABASES;
 
--- 22. 清理
+-- 22. Cleanup.
 SHOW TABLES;

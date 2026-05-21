@@ -32,9 +32,9 @@ static constexpr u64 kInvalidTxnId = 0;
 enum class TxnState : u8 { kActive = 0, kCommitted = 1, kAborted = 2 };
 
 struct TxnSlot {
-    u64     txn_id;          // Transaction unique ID
-    u64     snapshot_id;     // Snapshot: sees all versions committed before snapshot_id
-    u64     commit_id;       // Allocated at commit (0=uncommitted)
+    u64     txn_id;          // transaction unique id
+    u64     snapshot_id;     // snapshot: sees all versions committed before snapshot_id
+    u64     commit_id;       // assigned at commit (0 = uncommitted)
     TxnState state;
     PageId  home_page;       // Page lock holding info for the transaction's process (reserved)
 };
@@ -88,10 +88,10 @@ public:
     Transaction* current() const;
     u64 next_snapshot_id();
 
-    // 可见性判断 (供 SeqScan 调用)
-    // 版本 V 对事务 T 可见 ⟺
-    //   1. V.xmin 已提交 且 V.xmin < T.snapshot
-    //   2. V.xmax == 0 或 V.xmax 未提交 或 V.xmax >= T.snapshot
+    // Visibility predicate (called by SeqScan etc.)
+    // A version V is visible to transaction T iff
+    //   1. V.xmin is committed AND V.xmin < T.snapshot, AND
+    //   2. V.xmax == 0, or V.xmax is not committed, or V.xmax >= T.snapshot
     bool is_visible(u64 xmin, u64 xmax, const Transaction& txn) const;
 
     bool is_txn_committed(u64 txn_id) const;

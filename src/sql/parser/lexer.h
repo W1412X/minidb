@@ -1,6 +1,6 @@
 /**
  * @file lexer.h
- * @brief Lexical analyzer — 将 SQL text split into Token stream
+ * @brief Lexical analyzer — splits SQL text into a Token stream.
  */
 #pragma once
 

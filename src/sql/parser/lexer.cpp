@@ -223,7 +223,7 @@ void Lexer::skip_whitespace() {
 }
 
 void Lexer::skip_comment() {
-    // -- 单行注释
+    // -- line comment
     while (has_more() && peek_char() != '\n') {
         next_char();
     }
@@ -313,7 +313,7 @@ Token Lexer::read_identifier() {
 
     String word(sql_.c_str() + start, pos_ - start);
 
-    // 转大写检查关键词
+    // Upper-case for keyword lookup.
     String upper = word;
     for (u32 i = 0; i < upper.size(); i++) {
         char& ch = upper[i];

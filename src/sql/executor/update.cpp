@@ -338,12 +338,12 @@ ExecResult UpdateExecutor::next() {
         if (batch_unique_conflict) continue;
 
         // Build new version Tuple
-        // Version chain方向: old → new → end (对齐 PostgreSQL t_ctid)
-        // 新版本 next_ver = (0,0) 表示链尾
+        // Version chain direction: old -> new -> end (PostgreSQL t_ctid).
+        // New version's next_ver = (0,0) signals end of chain.
         Tuple new_tuple(schema_, new_values);
         new_tuple.set_xmin(txn_id);
         new_tuple.set_xmax(0);
-        new_tuple.set_next_version(kNullPageId, 0);  // 链尾
+        new_tuple.set_next_version(kNullPageId, 0);  // end of chain
         if (db_ && !db_->validate_index_keys(table_id_, new_tuple)) continue;
 
         u32 serialized_size = new_tuple.serialized_size();
@@ -355,7 +355,7 @@ ExecResult UpdateExecutor::next() {
         bool hot_used = false;
 
         // ============================================================
-        // HOT Update: WAL-first — 预定位置 → 写 WAL → 提交数据
+        // HOT Update: WAL-first — reserve slot, write WAL, then commit data.
         // ============================================================
         if (hot_eligible) {
             auto prepare = heap_->prepare_insert_in_page(old_rid.page_id, size);
@@ -377,7 +377,7 @@ ExecResult UpdateExecutor::next() {
                     }
                     Pair<PageId, SlotIdx> new_rid = hot_result.value();
 
-                    // 原子化: set_next_version + mark_deleted + set_lsn (LSN 在 unpin 前Settings)
+                    // Atomic: set_next_version + mark_deleted + set_lsn (LSN stamped before unpin).
                     heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                             new_rid.first, new_rid.second, txn_id, lsn);
 
@@ -393,7 +393,7 @@ ExecResult UpdateExecutor::next() {
         }
 
         // ============================================================
-        // 非 HOT (回退路径): WAL-first — 预定位置 → 写 WAL → 提交数据
+        // Non-HOT fallback path: WAL-first — reserve slot, write WAL, then commit data.
         // ============================================================
         if (!hot_used) {
             auto prepare = heap_->prepare_insert(size);
@@ -413,7 +413,7 @@ ExecResult UpdateExecutor::next() {
                     Pair<PageId, SlotIdx> new_rid = ins_result.value();
                     RecordId new_record_id(new_rid.first, new_rid.second);
 
-                    // 原子化: set_next_version + mark_deleted + set_lsn
+                    // Atomic: set_next_version + mark_deleted + set_lsn.
                     heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                             new_rid.first, new_rid.second, txn_id, lsn);
 

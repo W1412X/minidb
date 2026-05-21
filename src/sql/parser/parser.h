@@ -21,7 +21,7 @@ public:
     Statement parse();
 
 private:
-    // 语句解析
+    // Statement parsers.
     UniquePtr<SelectStmt> parse_select();
     UniquePtr<SelectStmt> parse_select_body();
     UniquePtr<InsertStmt> parse_insert();

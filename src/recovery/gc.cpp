@@ -99,7 +99,7 @@ void GarbageCollector::run_gc(u32 max_pages) {
             }
 
             if (has_garbage) {
-                // 修剪 DEAD tuple
+                // Prune DEAD tuples.
                 page->prune();
                 gc->pool_->mark_dirty(page_id);
             }

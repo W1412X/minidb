@@ -1,6 +1,6 @@
 /**
  * @file distinct_executor.h / .cpp
- * @brief DISTINCT executor — 物化去重
+ * @brief DISTINCT executor — materialised deduplication.
  */
 #pragma once
 

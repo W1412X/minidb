@@ -322,36 +322,37 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
         }
     }
 
-    // 规则1: xmin 必须已提交 (不能是 ACTIVE 或 ABORTED)
+    // Rule 1: xmin must be committed (not active and not aborted).
     if (xmin_found) {
-        if (xmin_state == TxnState::kActive) return false;   // 未提交
-        if (xmin_state == TxnState::kAborted) return false;  // 已回滚
+        if (xmin_state == TxnState::kActive) return false;   // not committed
+        if (xmin_state == TxnState::kAborted) return false;  // rolled back
     }
-    // 如果 slot 被回收了 (txn_id 被新事务复用), xmin_found 但 state 可能不对
-    // — 但 slot 回收后 txn_id 不再匹配, xmin_found 为 false, 等效于 "not found"
+    // If the slot was recycled (txn_id reused by a newer txn) xmin_found
+    // is true but the state may be stale. Since slot recycling changes the
 
-    // 快照开始时仍活跃的事务不可见
+    // stored txn_id, in practice the lookup fails and we treat it as 'not found'.
+    // A transaction that was active when our snapshot was taken is invisible.
     if (was_active_in_snapshot(xmin)) return false;
 
-    // 规则1b: xmin 必须在 T 的快照之前
+    // Rule 1b: xmin must precede T's snapshot id.
     if (xmin >= txn.snapshot_id()) return false;
 
-    // 规则2: xmax 检查
-    if (xmax == kInvalidTxnId) return true;  // 未被删除
+    // Rule 2: xmax checks.
+    if (xmax == kInvalidTxnId) return true;  // not deleted
 
     if (xmax == txn.id()) return false;
 
     if (xmax_found) {
-        if (xmax_state == TxnState::kActive) return true;   // Delete未提交
-        if (xmax_state == TxnState::kAborted) return true;  // Delete已回滚, 视为未删除
+        if (xmax_state == TxnState::kActive) return true;   // delete not committed
+        if (xmax_state == TxnState::kAborted) return true;  // delete rolled back -> treat as not deleted
     }
     // xmax not found → slot recycled, treat as not deleted
 
     if (was_active_in_snapshot(xmax)) return true;
 
-    if (xmax >= txn.snapshot_id()) return true;  // Delete在 T 之后
+    if (xmax >= txn.snapshot_id()) return true;  // delete committed after T started
 
-    return false;  // 已被删除且删除在 T 之前
+    return false;  // deleted, and the delete is visible in T's snapshot
 }
 
 bool TransactionManager::is_txn_committed(u64 txn_id) const {

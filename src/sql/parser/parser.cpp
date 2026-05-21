@@ -435,7 +435,7 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
 
     do {
         ColumnDef col;
-        // Compatible with column names conflicting with keywords (e.g., status)
+        // Allow column names that collide with reserved keywords (e.g. status).
         col.name = expect_alias().value;
 
         // type
@@ -469,8 +469,8 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
             }
         }
 
-        // constraints: order-agnostic, mirrors the ALTER TABLE ADD COLUMN
-        // grammar so PRIMARY KEY/NOT NULL/UNIQUE/DEFAULT can appear in any
+        // Constraints: order-agnostic, mirrors the ALTER TABLE ADD COLUMN
+        // grammar so PRIMARY KEY / NOT NULL / UNIQUE / DEFAULT can appear in
         // permutation. Each clause is recognised at most once.
         while (true) {
             if (match_keyword(TokenType::KW_PRIMARY)) {
@@ -1123,7 +1123,7 @@ UniquePtr<Expression> Parser::parse_primary() {
         return expr;
     }
 
-    // 简单函数调用: LENGTH(expr). If LENGTH appears without parentheses,
+    // Simple function call: LENGTH(expr). If LENGTH appears without parentheses,
     // treat it as a normal identifier/column name.
     if (is_identifier_token(t.type) && upper_ascii(t.value) == "LENGTH") {
         lexer_.consume_token();
@@ -1170,14 +1170,14 @@ UniquePtr<Expression> Parser::parse_primary() {
 }
 
 // ============================================================
-// Utility方法
+// Utility helpers.
 // ============================================================
 
 Token Parser::expect(TokenType type) {
     Token t = peek();
     if (t.type != type) {
         mark_error();
-        // 消费掉错误 token 防止死循环
+        // Consume the bad token to avoid spinning.
         lexer_.consume_token();
         return Token(TokenType::ERROR, "unexpected token", t.line, t.column);
     }

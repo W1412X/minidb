@@ -9,7 +9,7 @@
 
 namespace minidb {
 
-// 基础Integer type aliases
+// Basic integer type aliases.
 using i8  = int8_t;
 using i16 = int16_t;
 using i32 = int32_t;
@@ -22,7 +22,7 @@ using u64 = uint64_t;
 // Byte type
 using byte = uint8_t;
 
-// Page面相关
+// Page-related aliases.
 using PageId   = u64;
 using LSN      = u64;
 using SlotIdx  = u16;
@@ -31,14 +31,14 @@ using FrameIdx = u32;
 // Transaction related
 using TxnId = u64;
 
-// 无效值常量
+// Sentinel constants for invalid values.
 constexpr PageId   kNullPageId  = 0;
 constexpr LSN      kNullLsn     = 0;
 constexpr TxnId    kNullTxnId   = 0;
 constexpr SlotIdx  kNullSlot    = 0xFFFF;
 constexpr FrameIdx kNullFrame   = 0xFFFFFFFF;
 
-// PageId 编解码: 高32位=file_id, 低32位=page_num
+// PageId layout: high 32 bits = file_id, low 32 bits = page_num
 inline u32 file_id_from_page(PageId pid) {
     return static_cast<u32>(pid >> 32);
 }

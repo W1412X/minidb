@@ -225,7 +225,7 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
             continue;
         }
 
-        // Disk I/O (无锁)
+        // Disk I/O (lock-free).
         if (evict_page_id != kNullPageId) {
             if (frames_[victim].is_dirty) {
                 if (need_wal_flush && !flush_frame_wal_first(frames_[victim])) {
@@ -245,7 +245,7 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
             }
         }
 
-        // Update元数据 (持有写锁)
+        // Update metadata (still holding the write lock).
         {
             WriteGuard guard(partition.latch);
             Frame& victim_frame = frames_[victim];
@@ -263,7 +263,7 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
 }
 
 // ============================================================
-// unpin_page — 读锁即可
+// unpin_page — read lock is enough.
 // ============================================================
 
 void BufferPool::unpin_page(PageId page_id) {
@@ -285,7 +285,7 @@ void BufferPool::unpin_page(PageId page_id) {
 }
 
 // ============================================================
-// mark_dirty / set_page_lsn — 读锁即可
+// mark_dirty / set_page_lsn — read lock is enough.
 // ============================================================
 
 void BufferPool::mark_dirty(PageId page_id) {
@@ -305,7 +305,7 @@ void BufferPool::set_page_lsn(PageId page_id, u64 lsn) {
     auto* frame_idx = find_page_mapping(partition, page_id);
     if (!frame_idx) return;
 
-    // LSN 只能前进, 不能回退 (防止恢复 undo 操作降低已有的更高 LSN)
+    // page_lsn moves forward only — never let recovery undo a higher committed LSN.
     u64 cur = frames_[*frame_idx].page.header()->lsn;
     if (lsn > cur) {
         frames_[*frame_idx].page.header()->lsn = lsn;
@@ -374,7 +374,7 @@ void BufferPool::flush_all() {
 // ============================================================
 
 FrameIdx BufferPool::find_victim_frame(BufferPoolPartition& partition, u32 partition_idx) {
-    // 先找空帧
+    // Look for an empty frame first.
     for (u32 i = 0; i < pool_size_; i++) {
         if (frames_[i].partition_idx == partition_idx &&
             frames_[i].page_id == kNullPageId && !frames_[i].is_io_in_progress) {
@@ -382,7 +382,7 @@ FrameIdx BufferPool::find_victim_frame(BufferPoolPartition& partition, u32 parti
         }
     }
 
-    // 从 LRU 尾部 (最久Unused) 开始扫描, 找 pin_count==0 的帧
+    // Scan from the LRU tail (least-recently used) for an unpinned frame.
     for (auto it = partition.lru_list.rbegin(); it != partition.lru_list.rend(); ++it) {
         FrameIdx idx = *it;
         if (frames_[idx].pin_count.load(std::memory_order_acquire) == 0 &&

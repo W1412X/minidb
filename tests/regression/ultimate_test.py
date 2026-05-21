@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""终极 SQL 测试 — 全部语法组合 + 边界条件"""
+"""Ultimate SQL exercise — every syntax combination and boundary case."""
 import subprocess, tempfile, shutil, sys
 
 BIN = sys.argv[1] if len(sys.argv) > 1 else "./build/minidb"
@@ -130,7 +130,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 7. 聚合 + GROUP BY ===")
+print("\n=== 7. Aggregates + GROUP BY ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (cat VARCHAR, v INT);", db)
@@ -162,7 +162,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 9. NULL 处理 ===")
+print("\n=== 9. NULL handling ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT, s VARCHAR);", db)
@@ -178,7 +178,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 10. 事务 ===")
+print("\n=== 10. Transactions ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -197,7 +197,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 11. 表达式 ===")
+print("\n=== 11. Expressions ===")
 db = tempfile.mkdtemp()
 try:
     check("1+2*3=7", "7", run("SELECT 1 + 2 * 3;", db))
@@ -227,7 +227,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 13. 索引 ===")
+print("\n=== 13. Indexes ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -258,7 +258,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 15. 多语句 ===")
+print("\n=== 15. Multi-statement ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -270,7 +270,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 16. 子查询 ===")
+print("\n=== 16. Subqueries ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE a (id INT PRIMARY KEY);", db)
@@ -283,7 +283,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 17. 持久化 ===")
+print("\n=== 17. Persistence ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -304,7 +304,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 18. UPDATE 持久化 (多次) ===")
+print("\n=== 18. UPDATE persistence (multiple) ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -319,7 +319,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 19. 边界条件 ===")
+print("\n=== 19. Edge cases ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)
@@ -337,7 +337,7 @@ finally:
     shutil.rmtree(db)
 
 # =================================================================
-print("\n=== 20. 压力测试: 大量操作 ===")
+print("\n=== 20. Stress: bulk operations ===")
 db = tempfile.mkdtemp()
 try:
     run("CREATE TABLE t (id INT PRIMARY KEY, v INT);", db)

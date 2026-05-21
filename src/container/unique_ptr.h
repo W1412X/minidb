@@ -16,7 +16,7 @@ public:
     UniquePtr(std::nullptr_t) noexcept : ptr_(nullptr) {}
     ~UniquePtr() { delete ptr_; }
 
-    // 移动语义
+    // Move semantics.
     UniquePtr(UniquePtr&& other) noexcept : ptr_(other.ptr_) {
         other.ptr_ = nullptr;
     }

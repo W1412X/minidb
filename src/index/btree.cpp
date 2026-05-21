@@ -1458,7 +1458,7 @@ void BPlusTree::leaf_set_next(Page* page, PageId next) {
 }
 
 // ============================================================
-// 内部节点读写
+// Internal-node read/write helpers.
 // ============================================================
 
 u16 BPlusTree::internal_num_keys(const Page* page) const {

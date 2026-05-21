@@ -20,7 +20,7 @@ enum class PlanNodeType {
     kLimit, kSort, kDistinct, kAggregate, kUnion, kIndexScan, kIndexOnlyScan,
 };
 
-// 前向声明
+// Forward declarations.
 struct Expression;
 
 enum class JoinType { kInner, kLeft };
