@@ -1,485 +1,699 @@
-# MiniDB ACID Hardening TODO
+# MiniDB ACID TODO (v2)
 
-This document captures the concrete gaps between MiniDB's current implementation
-and a strict ACID database, together with the test items that must accompany
-each fix. It is meant to be the single source of truth for "what does it take
-to call MiniDB ACID-compliant".
+This is the working checklist for delivering **strict ACID semantics**.
+Format: `[x]` = done with a guarding test, `[~]` = partial (caveats noted
+inline), `[ ]` = pending.
 
-It is organised by ACID property (A / C / I / D), with each item carrying:
+Use [`docs/KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the
+user-facing summary; this file is the engineering plan.
 
-- **Goal** — invariant we want to hold.
-- **Current state** — what the code does today, with file:line references.
-- **Action items** — concrete code changes required.
-- **Tests** — automated tests that must be added (script name + assertion).
+---
 
-Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
-**P2 = nice-to-have / SQL-semantics**.
+## P0 — ACID boundary & acceptance criteria
+
+```text
+[ ] docs/ACID_MATRIX.md — single page, what we promise per mode
+[ ] docs/ISOLATION_LEVELS.md — SI semantics, write-skew, phantoms
+[ ] Single-node mode: ACID guarantees
+[ ] Shared-storage mode: subset that is honoured
+[~] Isolation level: Snapshot Isolation only (no Read Committed, no Serializable)
+       — covered by tests/acid/isolation/write_skew.py
+[x] README states "Snapshot isolation, not Serializable"
+       — docs/CONCURRENCY_CONTROL.md
+[x] Parser rejects SET TRANSACTION ISOLATION LEVEL (never emitted)
+[ ] README states "no full predicate/range lock"
+[~] IndexOnlyScan = heap-recheck fallback (no VM)
+       — covered by tests/sql/sql_correctness_matrix.py
+[~] Index recovery = lazy rebuild (no physical redo)
+       — covered by tests/acid/durability/recovery_smoke.sh
+[ ] DDL transactionality: explicitly documented
+[~] ALTER TABLE crash-safety: limited (see LSN watermark fix, DROP COLUMN works after restart)
+[~] UNIQUE/PK semantics under concurrency + crash: documented per case
+[ ] HOT semantics: documented as "HOT-style same-page chain, indexes
+    still maintained on indexed-column update"
+[ ] Every ACID claim links to a test file in this doc
+```
 
 ---
 
 ## A — Atomicity
 
-### A1. Crash mid-commit must yield all-or-nothing [P0] — **DONE**
+### A1. Transaction state machine
 
-Slot flip moved after `flush_commit` succeeds; group-commit follower
-loop is now lost-wakeup safe via a per-batch generation counter; fsync
-failure returns 0 from `log_commit` and `TransactionManager::commit`
-falls back to the rollback path. Test:
-`tests/acid/atomicity/commit_durability.py`.
+```text
+[~] States ACTIVE / COMMITTED / ABORTED defined (TxnState enum)
+[ ] State COMMITTING — currently elided (commit_record fsync IS the transition)
+[ ] State ABORTING — currently elided (rollback path runs synchronously)
+[ ] State UNKNOWN_COMMIT_RESULT — currently elided
+[x] All state transitions go through TransactionManager
+       — src/transaction/transaction.cpp
+[x] storage/executor/index do not flip final state
+[x] COMMIT idempotent (no-op if already committed/aborted)
+       — tests/acid/atomicity/commit_durability.py
+[x] ROLLBACK idempotent
+[x] commit record durable BEFORE slot flips to kCommitted (A1)
+       — tests/acid/atomicity/commit_durability.py
+[ ] ABORTING state persists across crash (currently in-memory undo only)
+[ ] CLOG-equivalent transaction-status log
+       — needed for "did txn N commit?" lookup after recovery
+[~] Transaction id watermark persisted (control file `next_txn_id`)
+[x] LSN watermark persisted across restart (control file `checkpoint_lsn`)
+       — tests/regression/lsn_watermark_restart.py
+```
 
----
+### A2. Statement-level atomicity
 
+```text
+[~] Multi-row INSERT mid-failure: autocommit rolls back via undo,
+    explicit txn leaves partial rows
+       — tests/acid/atomicity/index_heap_atomic.py
+[ ] Explicit savepoint per statement so explicit txns also get
+    statement-level all-or-nothing
+[~] UPDATE mid-failure: same as INSERT
+[~] DELETE mid-failure: same as INSERT
+[ ] CREATE INDEX failure must not leave a partial index visible
+[ ] ALTER TABLE failure must not leave a partial catalog change
+       — partly addressed by LSN watermark fix, still no WAL for DDL
+[ ] OOM in executor must trigger statement rollback
+[ ] I/O error in executor must surface (currently many silent failures)
+[ ] temp-file error in sort/hash spill must trigger rollback
+```
 
-- **Goal**: A committed txn is visible after restart iff its commit WAL record
-  is durable; otherwise the txn must be rolled back during replay.
-- **Current state**:
-  - `TransactionManager::commit` writes the slot to `kCommitted` **before**
-    fsync ([src/transaction/transaction.cpp:155-174](../src/transaction/transaction.cpp)).
-    If we crash between `set_state(kCommitted)` and `wal.flush()`, the in-memory
-    slot is gone, but readers in the same process briefly saw a "committed"
-    state. On recovery the txn looks aborted (no commit record durable), which
-    is correct on disk but inconsistent with the brief in-memory window.
-  - Group commit waiters use `commit_cond_` ([src/recovery/wal.cpp](../src/recovery/wal.cpp))
-    but the follower path returns the LSN without re-checking `durable_lsn_`
-    after a spurious wakeup or timeout.
-- **Action items**:
-  - Flip the order: only mark the slot `kCommitted` **after** `flush_commit`
-    succeeds; if fsync fails, mark `kAborted` and run the rollback path.
-  - In `flush_commit`, loop on the condition variable until
-    `durable_lsn_ >= commit_lsn` (lost-wakeup safe).
-  - Surface fsync errors back to the user as a hard `ERROR` instead of returning
-    silently.
-- **Tests**:
-  - `tests/acid/atomicity/commit_fsync_failure.sh` — inject `wal_fsync = off`
-    plus `SIGKILL` immediately after `COMMIT;` returns. After restart, neither
-    half-committed rows nor "ghost commits" are visible.
-  - `tests/acid/atomicity/group_commit_wait.py` — N concurrent commits,
-    verify every successful `COMMIT;` reply implies `durable_lsn >= its lsn`.
+### A3. INSERT atomicity
 
-### A2. Index entry / heap tuple atomicity [P0] — **DONE**
+```text
+[x] heap tuple + every index entry atomic (A2)
+       — tests/acid/atomicity/index_heap_atomic.py
+[x] unique conflict leaves no visible row, no dangling index
+       — tests/index/index_unique_matrix.sh
+[x] crash before commit → row invisible
+       — tests/acid/durability/crash_recovery_harness.py
+[x] crash after commit → row visible
+       — tests/acid/durability/recovery_smoke.sh
+[~] crash during index maintenance → recovery lazily rebuilds index
+[~] INSERT WAL redo idempotent (page_lsn skip)
+[~] INSERT undo idempotent
+[x] composite index INSERT atomic
+       — tests/index/persistence_and_composite.sh
+[x] unique index INSERT atomic
+       — tests/index/index_unique_matrix.sh
+```
 
-`Database::insert_index_entries` now returns bool and stops on the
-first failed tree insert. InsertExecutor and the non-HOT UpdateExecutor
-path record the heap-insert undo BEFORE attempting index inserts, so a
-failure unwinds the heap row plus any partial index entries through
-the active transaction's rollback path. `delete_index_entries` is
-idempotent against the never-inserted entries. Test:
-`tests/acid/atomicity/index_heap_atomic.py` (uses `MINIDB_FAULT=index_insert_fail`
-to deterministically trigger the failure).
+### A4. DELETE atomicity
 
----
+```text
+[x] DELETE only marks xmax; old snapshots still see the row
+       — tests/acid/isolation/mvcc_lock_regression.py
+[x] DELETE rollback restores visibility
+[~] Index entry lifecycle after DELETE: kept until GC sweep
+[ ] Explicit test: long snapshot + DELETE + GC must not vacuum
+    versions still visible to the snapshot
+[~] DELETE WAL redo / undo idempotent
+[x] DELETE crash before commit → row still visible
+[x] DELETE crash after commit → row gone
+```
 
+### A5. UPDATE atomicity
 
-- **Goal**: For every committed heap tuple, all matching index entries exist;
-  for every rolled-back tuple, no index entries leak.
-- **Current state**:
-  - Insert path performs `heap.insert` then `index.insert`
-    ([src/database/database.cpp](../src/database/database.cpp)); if the index
-    insert fails (e.g. OOM, duplicate), the heap tuple is left behind.
-  - Recovery sets `needs_index_rebuild = true` and does a lazy rebuild
-    ([src/recovery/wal.cpp](../src/recovery/wal.cpp)); this is documented as
-    incomplete in
-    [CAPABILITY_GAP_CHECKLIST.md:61-65](CAPABILITY_GAP_CHECKLIST.md).
-- **Action items**:
-  - Decide redo vs rebuild and pick one. Recommendation: keep lazy rebuild for
-    `CREATE INDEX`, but require physical redo for all `INSERT/UPDATE/DELETE`
-    index WAL records during normal recovery.
-  - Make index WAL replay idempotent (skip if key + RID already present).
-  - On insert failure mid-row, roll back the heap insert before returning the
-    error.
-- **Tests**:
-  - `tests/acid/atomicity/index_heap_consistency.py` — random
-    INSERT/UPDATE/DELETE workload, after each `COMMIT` assert
-    `heap_scan(table) == index_scan(table)` on every index.
-  - Extend `tests/storage/recovery/recovery_smoke.sh` to cover crash between
-    `heap.insert` and `index.insert` (use a `MINIDB_FAULT=index_insert_skip`
-    debug knob to be added).
+```text
+[x] Halloween-safe (always materialise targets)
+       — tests/regression/update_halloween.py
+[x] HOT update keeps old + new versions atomically
+       — tests/ddl/hot_index_semantics.sh
+[~] Non-indexed update goes HOT, no new index entry
+[~] Indexed-column update creates new index entry,
+    old entry stays until GC
+[x] UPDATE rollback restores old version
+[x] UPDATE crash before commit → old version visible
+[x] UPDATE crash after commit → new version visible
+[ ] UPDATE of UNIQUE key conflict checks + reservation release on rollback
+       — partial today; explicit test pending
+```
 
-### A3. Rollback must restore unique-key reservation [P1]
+### A6. Undo / rollback
 
-- **Goal**: `BEGIN; INSERT k=1; ROLLBACK;` followed by `INSERT k=1` succeeds.
-- **Current state**: `tuple_live_for_unique_check` in
-  [src/sql/executor/insert.cpp:82+](../src/sql/executor/insert.cpp) already
-  checks MVCC liveness, but the index entry from the rolled-back insert is
-  removed only in `rollback()` via `delete_index_entries`. Crash before
-  rollback completes leaks the index entry.
-- **Action items**: WAL-log unique-key reservations the same way as heap
-  inserts; recovery must replay the corresponding delete for aborted txns.
-- **Tests**:
-  - `tests/acid/atomicity/unique_rollback_crash.sh` — kill process between
-    `INSERT` and `ROLLBACK`, then on restart try the same key, must succeed.
-
-### A4. DDL atomicity [P1]
-
-- **Goal**: `ALTER TABLE … ADD/DROP COLUMN` is all-or-nothing across crashes.
-- **Current state**: ALTER TABLE rewrites tuples in place
-  ([src/database/database.cpp:448+](../src/database/database.cpp)); no WAL
-  record covers schema version transitions, so a crash mid-rewrite can leave
-  tuples with the new layout and the catalog with the old schema.
-- **Action items**: write a `kDDLBegin` / `kDDLCommit` WAL pair, log
-  per-tuple rewrite records, and refuse to load a catalog whose schema version
-  has no matching `kDDLCommit`.
-- **Tests**:
-  - `tests/acid/atomicity/ddl_crash.sh` — kill between ALTER tuple rewrite
-    and catalog flush; restart must either show old schema or new schema, never
-    a mix.
-
----
-
-## C — Consistency
-
-### C1. Enforce NOT NULL / CHECK / DEFAULT at DML layer [P0] — **PARTIAL**
-
-- NOT NULL: now surfaces as `Error: NOT NULL constraint violated` on
-  both INSERT and UPDATE instead of silently skipping the row.
-- DEFAULT: `CREATE TABLE` and `ALTER TABLE` accept it; the planner
-  substitutes the column default for any column omitted from an INSERT
-  column list. `Column::default_as_value()` is the single source of
-  truth for parsing the textual default into a typed Value.
-- CHECK: still unimplemented.
-
-Test: `tests/acid/consistency/constraints_not_null_default.py`.
+```text
+[x] Undo records cover heap insert / delete / hot insert / hot delete
+       — src/transaction/transaction.h (UndoType enum)
+[ ] Undo records for index insert / index delete
+       (currently rolled back via delete_index_entries from heap-undo,
+        not as primary undo records)
+[ ] Undo for unique reservation
+[ ] Undo for page allocation
+[ ] Undo for catalog create / drop / alter
+[ ] Mid-rollback crash continuation (currently restart redoes the abort,
+    which is idempotent — formalise + test)
+[x] rollback releases row + table + key locks (LockManager::unlock_all)
+[x] rollback releases unique reservation in autocommit
+[ ] rollback closes cursors / executor state explicitly
+```
 
 ---
 
+## B — Consistency
 
-- **Goal**: Constraints declared in DDL hold for every committed row.
-- **Current state**:
-  - `InsertExecutor::row_satisfies_schema` rejects NOT NULL violations
-    ([src/sql/executor/insert.cpp:71-80](../src/sql/executor/insert.cpp)).
-  - `UpdateExecutor` does **not** re-check NOT NULL after applying the SET list.
-  - No `CHECK` constraint parser/storage at all.
-  - `DEFAULT` is applied only in `ALTER TABLE ADD COLUMN`
-    ([src/database/database.cpp:448](../src/database/database.cpp)); INSERT
-    with missing columns rejects the row instead of substituting the default.
-- **Action items**:
-  - Add NOT NULL post-condition check in `UpdateExecutor`.
-  - Add `Column::check_expr` storage + evaluator and wire it into INSERT and
-    UPDATE.
-  - Substitute `DEFAULT` for omitted columns on INSERT.
-- **Tests**:
-  - `tests/acid/consistency/constraints_not_null.sh`
-  - `tests/acid/consistency/constraints_check.sh`
-  - `tests/acid/consistency/constraints_default.sh`
+### B1. PRIMARY KEY
 
-### C2. Unique / PK race under concurrency [P0]
+```text
+[x] PK auto-creates a unique index
+[x] PK column implies NOT NULL
+       — tests/acid/consistency/constraints_not_null_default.py
+[ ] INSERT NULL into PK column rejected (test missing — verify path)
+[ ] UPDATE PK to NULL rejected
+[x] INSERT duplicate PK rejected
+       — tests/index/index_unique_matrix.sh
+[x] UPDATE to duplicate PK rejected
+[x] crash after PK insert preserves uniqueness
+[x] composite PK supported
+[ ] composite PK NULL semantics explicitly documented
+[x] concurrent INSERT same PK — exactly one wins
+       — tests/acid/isolation/lost_update.py
+[x] PK works with HOT update (id is indexed → non-HOT path)
+```
 
-- **Goal**: Two concurrent INSERTs with the same unique key must conflict
-  deterministically — exactly one succeeds.
-- **Current state**: `InsertExecutor::violates_unique_constraints` is read-then-
-  insert without a key-level lock; the index B+ tree uses coarse tree locking
-  but does not block other writers from observing the same "free" key window.
-  Lock manager exposes `lock_key` ([src/concurrency/lock_manager.h:69](../src/concurrency/lock_manager.h))
-  but insert does not call it for unique keys.
-- **Action items**:
-  - Take `lock_key(txn, table, encoded_key, kExclusive)` for every unique key
-    before the index lookup; release on commit/abort.
-  - Document this in `docs/CONCURRENCY_CONTROL.md`.
-- **Tests**:
-  - `tests/acid/isolation/unique_insert_race.py` — N threads insert the same
-    key, assert exactly one OK and N-1 unique-violation errors, no orphans.
+### B2. UNIQUE
 
-### C3. Foreign keys (deferred) [P2]
+```text
+[ ] UNIQUE NULL semantics documented (multiple NULLs allowed? standard says yes)
+[x] single-column UNIQUE
+[x] composite UNIQUE
+       — tests/index/index_unique_matrix.sh
+[x] INSERT unique check under correct snapshot
+[x] UPDATE unique check under correct snapshot
+[x] concurrent INSERT same key — exactly one wins
+[~] INSERT rollback releases reservation (works in autocommit)
+[~] UPDATE rollback releases reservation
+[x] crash preserves uniqueness
+[~] unique index rebuild detects conflicts
+[ ] remote PageServer mode UNIQUE semantics documented
+```
 
-- **Goal**: Referential integrity if/when `FOREIGN KEY` syntax is parsed.
-- **Current state**: Not parsed.
-- **Action items**: Out of scope for ACID baseline. Document in
-  `docs/KNOWN_LIMITATIONS.md` that FK is unsupported.
+### B3. NOT NULL / DEFAULT / VARCHAR
 
-### C4. Post-recovery consistency assertion [P0] — **DONE**
+```text
+[x] NOT NULL enforced on INSERT
+       — tests/acid/consistency/constraints_not_null_default.py
+[x] NOT NULL enforced on UPDATE
+[x] DEFAULT substituted when column omitted from INSERT
+[x] DEFAULT + NOT NULL combination
+[ ] DEFAULT expression typing/validation (only literals today)
+[ ] VARCHAR(n) length limit on INSERT
+[ ] VARCHAR(n) length limit on UPDATE
+[ ] VARCHAR(n) length on CAST
+[ ] VARCHAR(n) overflow behaviour documented (currently silent)
+[ ] TEXT vs VARCHAR comparison semantics documented
+```
 
-`Database::check_table_index_consistency` already walked the heap and
-verified every live tuple was reachable through each index. It is now
-wired into startup behind a new `consistency_check_on_startup` config
-(default off): when set, the constructor runs the check after WAL
-replay + lazy index rebuild and refuses to open the DB (stderr +
-`std::exit(1)`) if it finds any disagreement. Test:
-`tests/acid/consistency/post_recovery_verify.py` covers both the
-healthy-pass case and a synthesized-inconsistency case (via the
-test-only `MINIDB_FAULT=index_insert_silent` knob that mimics the
-pre-A2 bug).
+### B4. Catalog consistency
 
----
+```text
+[ ] Catalog mutations transaction-scoped (currently apply immediately)
+[ ] Catalog mutations WAL-logged
+[ ] Catalog cache has schema version
+[ ] Prepared statement invalidation on schema change
+       (partially via clear_prepared_cache, but no version check)
+[~] Table metadata / heap file consistency: maintained by save_catalog
+[~] Index metadata / index file consistency
+[ ] DROP TABLE / DROP INDEX physical file cleanup on rollback
+       (currently irreversible)
+[~] RENAME COLUMN updates dependencies (catalog only; expressions reparsed lazily)
+[~] Recovery preserves catalog/file consistency (only because catalog is
+     written outside the buffer pool with fsync)
+```
 
+### B5. Heap/index consistency
 
-- **Goal**: On clean startup, MiniDB asserts heap/index/catalog agreement.
-- **Current state**: Recovery rebuilds indexes lazily; no consistency
-  assertion runs.
-- **Action items**:
-  - Add a `--verify` startup flag that runs the existing consistency checker
-    over every table and refuses to open the DB if it finds mismatches.
-  - Run it automatically when `MINIDB_VERIFY=on`.
-- **Tests**:
-  - `tests/acid/consistency/post_recovery_verify.sh` — random crash workload,
-    on restart `--verify` must always pass.
+```text
+[x] check_table_index_consistency() exists
+       — src/database/database.cpp:746
+[x] Optional startup check (consistency_check_on_startup = on)
+       — tests/acid/consistency/post_recovery_verify.py
+[ ] Index state machine: invalid / rebuilding / valid
+[ ] Optimizer must refuse invalid indexes
+[ ] Atomic flip to valid after rebuild
+[~] Lazy rebuild on recovery (only when needs_index_rebuild set during WAL replay)
+```
 
----
+### B6. SQL standard semantics
 
-## I — Isolation
-
-### I1. Snapshot isolation correctness [P0]
-
-- **Goal**: A read sees exactly one consistent snapshot for its lifetime;
-  read-own-write, read-own-delete, and old-snapshot rules hold.
-- **Current state**: `TransactionManager::is_visible`
-  ([src/transaction/transaction.cpp:278-346](../src/transaction/transaction.cpp))
-  implements snapshot isolation but reads xmin/xmax slot states under the
-  latch. Slot recycling is handled by re-checking `txn_id`, which is correct
-  only if `next_txn_id_` never wraps.
-- **Action items**:
-  - Add a wraparound watchdog: refuse new transactions when
-    `next_txn_id_ > 2^62`.
-  - Add explicit "slot generation" counter to defend against ABA on slot
-    reuse.
-- **Tests**:
-  - `tests/acid/isolation/snapshot_matrix.py` — full visibility matrix for
-    {insert, update, delete} × {commit, rollback} × {own, other, old-snapshot}.
-  - `tests/acid/isolation/long_snapshot_gc.py` — long reader keeps an old
-    snapshot, writers commit many versions, reader still sees the original
-    snapshot and GC does not prune visible versions.
-
-### I2. Lost update prevention [P0] — **DONE**
-
-UpdateExecutor and DeleteExecutor already took a per-row `RowExclusive`
-lock and re-read `xmax` after acquiring it. The conflict was silently
-swallowed with `continue`; now both paths surface
-`Error: could not serialize access due to concurrent update` and abort
-the statement. Test: `tests/acid/isolation/lost_update.py`.
-
----
-
-
-- **Goal**: Two concurrent transactions updating the same row must not silently
-  lose one update.
-- **Current state**: Lock manager has `lock_record`, but Update path takes
-  only a table-level `RowExclusive` lock; on conflicting MVCC writes, the
-  second writer sees the unchanged version and overwrites it.
-- **Action items**:
-  - On UPDATE/DELETE, acquire `lock_record(txn, table, rid, kExclusive)`
-    before writing.
-  - If the row's xmax already names a different active txn, raise a
-    serialization error.
-- **Tests**:
-  - `tests/acid/isolation/lost_update.py` — two txns SET v=v+1 on the same row;
-    after both commit, v must be incremented by 2, never 1.
-
-### I3. Phantom prevention for SERIALIZABLE [P1] — **DONE (docs only)**
-
-MiniDB is documented as SI, not SERIALIZABLE
-(`docs/CONCURRENCY_CONTROL.md`). The parser refuses
-`SET TRANSACTION ISOLATION LEVEL`, so clients cannot silently downgrade.
-`tests/acid/isolation/write_skew.py` is a regression test that pins the
-documented SI write-skew behaviour: when MiniDB later grows SSI, this
-test should be flipped to expect an abort. Implementing real SSI is
-deferred.
+```text
+[~] NULL three-valued logic — partial; expression_evaluator currently has
+     deliberate deviation (== NULL → false), documented inline
+[~] IS NULL / IS NOT NULL
+[~] AND / OR / NOT three-valued
+[~] IN + NULL
+[ ] NOT IN + NULL (correctness gap exists — see differential_sqlite output)
+[~] BETWEEN + NULL
+[~] LIKE + NULL
+[~] LEFT JOIN ON vs WHERE semantics
+[~] Predicate pushdown safety on outer joins
+[~] GROUP BY / DISTINCT / ORDER BY NULL handling
+[ ] NULLS FIRST / NULLS LAST syntax + behaviour
+[~] COUNT(*) / COUNT(col) / SUM / AVG / MIN / MAX edge cases
+[ ] UNION duplicate elimination + NULL
+[ ] CAST failure behaviour
+[~] CASE / COALESCE / NULLIF
+```
 
 ---
 
+## C — Isolation
 
-- **Goal**: Range predicates do not see new rows inserted by concurrent txns.
-- **Current state**: No predicate locks, no gap locks; MiniDB advertises
-  snapshot isolation only.
-- **Action items**:
-  - Either (a) document explicitly that MiniDB offers SI not SERIALIZABLE and
-    refuse `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`, or (b) implement
-    SSI / range locks.
-  - Recommendation for now: (a) — update README to say "snapshot isolation,
-    not serializable".
-- **Tests**:
-  - `tests/acid/isolation/write_skew.py` — classic doctor-on-call write-skew
-    case; assert MiniDB reproduces the SI anomaly and document the fact.
+### C1. Isolation level definition
 
-### I4. Deadlock detection fairness [P1]
+```text
+[ ] docs/ISOLATION_LEVELS.md
+[x] Snapshot Isolation supported
+       — tests/acid/isolation/mvcc_lock_regression.py
+[ ] Read Committed: declared unsupported OR implemented
+[ ] Serializable: declared unsupported (currently rejected by parser silence)
+[x] write-skew documented as intentional SI anomaly
+       — tests/acid/isolation/write_skew.py
+[~] autocommit snapshot semantics (one snapshot per statement)
+[~] explicit transaction snapshot pinned at BEGIN
+[ ] read-only transaction snapshot (no SET TRANSACTION READ ONLY today)
+[~] read-only compute storage_read_lsn semantics
+       — docs/WAL_RECOVERY_PROTOCOL.md
+[ ] Phantom behaviour explicitly tested + documented
+```
 
-- **Goal**: Long-running transactions are not perpetually starved.
-- **Current state**: Wait-for graph cycle detector picks the **youngest** txn
-  as the victim ([src/concurrency/lock_manager.cpp](../src/concurrency/lock_manager.cpp)),
-  which can starve old transactions if they keep reconflicting with younger ones.
-- **Action items**: switch to "oldest-survives, youngest-aborts" or
-  "wound-wait" selection.
-- **Tests**:
-  - `tests/acid/isolation/deadlock_fairness.py` — three-cycle deadlock, the
-    longest-running txn must survive.
+### C2. MVCC visibility matrix
 
-### I5. Lock release guarantees [P1]
+```text
+[~] xmin committed + xmax variants — partial coverage via mvcc_lock_regression
+[ ] explicit visibility matrix test covering all 8+ combinations
+[~] read-own-write / read-own-delete
+[~] update chain traversal
+[~] HOT chain traversal
+[x] old snapshot sees old version, new sees new
+       — tests/acid/isolation/mvcc_lock_regression.py
+[ ] command id (intra-statement visibility) — not implemented
+[~] index scan visibility == seq scan visibility (heap recheck)
+```
 
-- **Goal**: All locks held by a txn are released at COMMIT, ROLLBACK, process
-  exit, or connection drop.
-- **Current state**: `unlock_all(txn_id)` is called on commit and rollback
-  ([src/transaction/transaction.cpp:188,209](../src/transaction/transaction.cpp));
-  connection close is not exercised by tests.
-- **Action items**:
-  - Hook `TcpServer::on_disconnect` into `txn_mgr.rollback(current)`.
-  - Add an idle-txn reaper that rolls back txns whose owning connection has
-    been gone > `idle_in_transaction_timeout`.
-- **Tests**:
-  - `tests/acid/isolation/connection_drop_release.py` — drop the TCP socket
-    mid-transaction, verify the table lock is released and a new connection
-    can immediately acquire it.
+### C3. Write-write conflict
+
+```text
+[x] concurrent UPDATE same row
+       — tests/acid/isolation/lost_update.py
+[x] concurrent DELETE same row (same path as UPDATE)
+[x] concurrent INSERT same unique key
+[x] lost-update prevention
+[x] write skew permitted (SI), documented
+[ ] SELECT FOR UPDATE: declare unsupported OR implement
+[~] Lock-wait timeout (controlled via config)
+[x] Deadlock detection (wait-for graph DFS)
+       — src/concurrency/lock_manager.cpp
+[ ] Deadlock victim fairness: currently youngest-aborts, should be oldest-wins
+[x] Aborted writer releases locks
+[x] Committed writer releases locks
+```
+
+### C4. Lock manager
+
+```text
+[~] Lock compatibility matrix exists (4 modes)
+[ ] Documented as a published matrix (not in CONCURRENCY_CONTROL yet)
+[x] Table / record / key lock modes
+[~] Lock upgrade (in-place upgrade exists, no downgrade)
+[ ] Lock downgrade explicitly documented as unsupported
+[ ] Wait-queue fairness policy
+[~] Deadlock wait-for graph
+[ ] Deadlock detection interval / threshold tunable
+[ ] DDL ⇔ DML conflict matrix documented
+[ ] CREATE INDEX ⇔ DML concurrency rule
+[ ] DROP INDEX ⇔ live query rule
+[ ] "key lock ≠ predicate lock" called out in docs
+```
+
+### C5. Serializable / predicate lock — branch "NOT SUPPORTED"
+
+```text
+[x] README/CONCURRENCY_CONTROL state SI only, not Serializable
+[ ] docs/ISOLATION_LEVELS.md mirrors that
+[~] Parser silently ignores SET TRANSACTION; should reject loudly
+       — issue: gives the user no signal
+[x] write-skew test recording current behaviour
+[ ] phantom test recording current behaviour
+[x] Key locks are not described as predicate locks
+```
 
 ---
 
 ## D — Durability
 
-### D1. WAL-first ordering for every page write [P0]
+### D1. WAL record format
 
-- **Goal**: A page on disk never has `page_lsn > durable_wal_lsn`.
-- **Current state**: `BufferPool::flush_page` calls
-  `wal.flush_until(page_lsn)` before write
-  ([src/storage/buffer_pool.cpp](../src/storage/buffer_pool.cpp)). Checkpoint
-  truncation does not assert this invariant globally.
-- **Action items**:
-  - At checkpoint, scan all dirty frames; if any `page_lsn > durable_lsn`,
-    flush WAL again before truncating.
-  - Add an assertion in debug builds.
-- **Tests**:
-  - `tests/acid/durability/wal_first_invariant.cpp` — extends
-    `wal_buffer_pool_test` to cover all pages flushed by checkpoint, not just
-    eviction.
+```text
+[~] WAL record header has lsn / txn_id / type / data_len
+       — src/recovery/wal.h
+[ ] Per-record magic byte
+[ ] Per-record format version
+[ ] Per-record CRC32
+[ ] WAL partial-record detection on replay
+[ ] Segment header with magic + version
+[ ] Segment end marker (recovery currently relies on file length)
+[x] WAL durable_lsn queryable
+[~] corrupted record rejection (just stops replay)
+```
 
-### D2. Checkpoint barrier [P0] — **DONE**
+### D2. WAL-before-data
 
-`WalManager::checkpoint()` now takes a page-flush callback and runs
-all four phases (write kCheckpoint, fsync WAL, flush dirty pages,
-truncate) under a single critical section. Writers are parked on the
-WAL latch for the duration; `BufferPool::flush_frame_wal_first` takes
-its fast path because every dirty page already has
-`page_lsn ≤ durable_lsn`, so no lock-order inversion. Test:
-`tests/acid/durability/checkpoint_barrier.py` hammers concurrent
-commits with `checkpoint_timeout=50ms` and SIGKILLs the server; every
-acknowledged commit must survive restart.
+```text
+[x] page_lsn in page header
+[x] page flush flushes WAL up to page_lsn
+       — tests/unit/wal_buffer_pool_test.cpp
+[x] BufferPool flush_page enforces WAL-first
+[x] Checkpoint flush enforces WAL-first
+       — tests/acid/durability/checkpoint_barrier.py
+[x] LSN monotonic across restart
+       — tests/regression/lsn_watermark_restart.py
+[ ] PageStore write failure propagated everywhere (some void returns remain)
+```
 
----
+### D3. Heap redo
 
+```text
+[x] heap insert redo
+[x] heap delete redo
+[x] heap update redo
+[~] HOT update redo (covered by update redo)
+[x] heap page allocation handled at recovery
+[~] heap page init redo (implicit via insert)
+[ ] heap prune redo (no WAL record; prune is opportunistic)
+[x] Redo idempotent via page_lsn skip
+[x] crash during heap insert / delete / update covered
+       — tests/acid/durability/crash_recovery_harness.py
+```
 
-- **Goal**: WAL truncation never drops redo records still needed by unflushed
-  pages.
-- **Current state**: `checkpoint()` calls `wal_->checkpoint()` then truncates
-  ([src/recovery/wal.cpp](../src/recovery/wal.cpp)); does not block in-flight
-  writers nor force flush all dirty pages.
-- **Action items**:
-  - Make checkpoint a 3-phase protocol: (1) freeze new dirty-page allocations
-    behind a global checkpoint latch, (2) flush all dirty pages, (3) fsync
-    WAL, then truncate.
-- **Tests**:
-  - `tests/acid/durability/checkpoint_no_data_loss.py` — heavy writers in
-    background, force `CHECKPOINT`, then `SIGKILL` immediately; on restart no
-    committed row is missing.
+### D4. Index recovery — current choice: REBUILD-BASED
 
-### D3. Group-commit correctness [P0] — **DONE**
+```text
+[~] Index marked needs_index_rebuild when WAL replay touches a heap row
+[ ] Per-index state machine: valid / invalid / rebuilding
+[ ] Optimizer refuses invalid index
+[~] Recovery triggers rebuild_all_indexes()
+[ ] Background rebuild option (currently synchronous)
+[~] Unique index rebuild detects conflicts (relies on tree->insert returning false)
+[ ] Rebuild failure leaves index marked invalid
+[~] README states "lazy rebuild on recovery"
+       — docs/KNOWN_LIMITATIONS.md
+```
 
-Folded into A1; see test `tests/acid/atomicity/commit_durability.py`.
+(Phase-2 alternative: physical btree redo. Tracked separately; not started.)
 
----
+### D5. Checkpoint
 
+```text
+[ ] kCheckpointBegin record
+[~] Single kCheckpoint record exists today
+[ ] Checkpoint redo_lsn computed and persisted
+[ ] Checkpoint includes dirty-page table
+[ ] Checkpoint includes active-transaction table
+[ ] Checkpoint includes transaction-status durable point
+[x] Checkpoint barrier holds WAL latch through page flush (D2)
+[x] crash before / during / after checkpoint covered
+       — tests/acid/durability/checkpoint_barrier.py
+[ ] Fuzzy checkpoint (currently stop-the-world via barrier)
+```
 
-- **Goal**: Every commit returns only after its commit LSN is durable.
-- **Current state**: see A1.
-- **Action items**: covered by A1.
-- **Tests**: covered by A1 + a stress test
-  `tests/acid/durability/group_commit_stress.py`.
+### D6. Double-write / checksum / torn page
 
-### D4. Torn-page protection [P0] — **DONE (defaults + regression)**
+```text
+[x] Page checksum covers body
+[ ] Checksum also covers page_id / LSN (currently body-only)
+[x] Doublewrite buffer with magic + checksum
+[x] Doublewrite fsync before main write
+[x] Crash + torn-page restored from doublewrite
+       — tests/acid/durability/torn_page.py
+[~] LSN regression detection (set_page_lsn clamps to forward-only)
+```
 
-`DbConfig` already defaults `doublewrite=on` and `page_checksum=on`.
-`DiskManager` writes the doublewrite copy with checksum + magic before
-overwriting the main page, and `recover_double_write()` restores from
-it on startup. `tests/acid/durability/torn_page.py` covers both
-invariants: corrupted page never surfaces as garbage rows, and a
-synthesized `doublewrite.bin` restores a torn page.
+### D7. DDL durability
 
----
+```text
+[ ] CREATE TABLE WAL record
+[ ] DROP TABLE WAL record
+[ ] CREATE INDEX WAL record
+[ ] DROP INDEX WAL record
+[ ] ALTER TABLE ADD/DROP/RENAME WAL records
+[ ] Catalog change WAL
+[ ] Physical-file create/delete WAL
+[~] crash during ALTER TABLE handled (LSN watermark fix; rewrite was already in-place)
+       — tests/regression/lsn_watermark_restart.py
+[ ] crash during CREATE INDEX
+[ ] crash during DROP TABLE: physical file orphan handling
+```
 
+### D8. I/O error durability
 
-- **Goal**: A power loss in the middle of writing an 8KB page is recoverable.
-- **Current state**:
-  - Doublewrite is implemented and recovered at startup
-    ([src/storage/disk_manager.cpp:51-225](../src/storage/disk_manager.cpp)).
-  - Page checksum is verified on read when `page_checksum = on`.
-  - **Gap**: doublewrite default is config-driven; remote `PageStore` path
-    does not use it.
-- **Action items**:
-  - Default `doublewrite = on` and `page_checksum = on` in
-    `src/common/db_config.cpp`.
-  - Mirror doublewrite into the remote write path or document that remote
-    storage is responsible for atomic page writes (it currently is, via the
-    PageServer's own buffer protocol).
-- **Tests**:
-  - `tests/acid/durability/torn_page.cpp` — write a page, truncate the file
-    to 4KB, restart, verify the doublewrite copy restores the page.
-
-### D5. Recovery idempotency [P0]
-
-- **Goal**: Running recovery twice on the same WAL produces identical state.
-- **Current state**: Page-LSN checks (`if page_lsn >= record_lsn skip`) make
-  most redo idempotent; index redo currently relies on lazy rebuild (see A2).
-- **Action items**:
-  - After A2 lands, write a unit test that calls `WalManager::recover` twice
-    and diffs every page.
-- **Tests**:
-  - `tests/acid/durability/recovery_idempotency.cpp` (new C++ test that
-    invokes the recovery path directly).
-  - Extend `tests/storage/recovery/crash_recovery_harness.py` (already does
-    3 idempotent passes; add an explicit assertion that the WAL durable LSN
-    is the same after each pass).
-
-### D6. fsync error handling [P1]
-
-- **Goal**: An fsync failure is treated as a hard error; we never silently
-  continue.
-- **Current state**: `disk_manager.cpp` writes/fsyncs without surfacing errors
-  to higher layers in some paths.
-- **Action items**: thread `Result<void>` through `flush_page` and `fsync`,
-  panic if a previously-acked commit can't be recovered.
-- **Tests**:
-  - `tests/acid/durability/fsync_failure.sh` — use `LD_PRELOAD` shim to make
-    `fsync()` return EIO; verify subsequent commits fail loudly.
-
----
-
-## Cross-cutting
-
-### X1. Test taxonomy
-
-All new ACID tests go under `tests/acid/{atomicity,consistency,isolation,
-durability}/` and are registered in `tests/CMakeLists.txt`. Each script must:
-
-- Accept the minidb binary path as `$1`.
-- Use `tests/lib/minidb_testlib.py` for the Python harness.
-- Be deterministic given `--seed`.
-- Print `PASS` on success, exit non-zero on failure.
-
-### X2. Continuous fault injection
-
-Add a `MINIDB_FAULT` env var that the build understands as a comma-separated
-list of named injection points:
-
-- `commit_before_fsync`
-- `commit_after_fsync_before_state`
-- `index_insert_skip`
-- `heap_insert_skip`
-- `ddl_mid_rewrite`
-- `checkpoint_after_truncate`
-
-`tests/acid/**` shell scripts toggle these to exercise the rare windows that
-random kills cannot reliably hit.
-
-### X3. Sanitizer matrix
-
-Existing CI already runs ASAN / UBSAN / TSAN on a smoke subset. After ACID
-tests land, extend the sanitizer matrix to include the full `tests/acid/`
-suite (likely nightly only — TSAN is slow).
+```text
+[x] PageStore APIs return Result<void> / per-page status
+       — src/storage/page_store.h
+[~] Batch IO returns per-page status (Remote path)
+[ ] DiskManager surfaces fsync errors all the way to commit
+[ ] ENOSPC / EIO / partial-write tests
+[ ] Permission-denied test
+[~] Corrupted page detection (checksum)
+[ ] Commit returns failure on WAL fsync error
+       — current: log_commit returns 0 → commit() runs rollback path; good,
+         but no test asserts the user sees a hard error
+```
 
 ---
 
-## Roll-up: minimum work to claim "ACID baseline"
+## E — HOT / GC / VACUUM
 
-| Property | P0 items | Tests required to pass | Status |
+### E1. HOT
+
+```text
+[x] HOT update predicate: only non-indexed columns
+[x] HOT update same-page only; falls back to non-HOT otherwise
+[~] HOT root item + index entry consistency
+[~] LP_REDIRECT chain traversal
+[x] Index scan follows HOT chain
+[x] Seq scan follows HOT chain
+[~] Covering-index scan heap recheck follows HOT chain
+[x] HOT rollback restores chain
+[x] HOT crash recovery restores chain
+[ ] HOT chain length bound + opportunistic prune metric
+[~] HOT × unique index
+[ ] HOT × vacuum interaction (vacuum not implemented as a dedicated op yet)
+```
+
+### E2. GC / VACUUM
+
+```text
+[x] global oldest-active-xid query
+[x] DEAD tuple detection
+[x] aborted tuple cleanup (via undo path)
+[x] committed-deleted tuple cleanup
+[~] HOT chain pruning
+[~] LP_DEAD → LP_UNUSED transition
+[ ] Free-space-map (not implemented)
+[ ] Visibility-map (not implemented)
+[~] Index cleanup during GC (lazy)
+[ ] Long-transaction blocking-cleanup test
+[~] Vacuum-vs-old-snapshot correctness
+[~] Vacuum × concurrent scan
+[ ] Freeze / all-frozen — not supported, document
+```
+
+### E3. Visibility Map / IndexOnlyScan
+
+```text
+[ ] visibility-map file/fork — NOT IMPLEMENTED
+[ ] all-visible bit per page
+[ ] all-frozen bit (declare unsupported)
+[ ] heap insert/update/delete clears all-visible
+[ ] vacuum sets all-visible
+[~] IndexOnlyScan currently does heap recheck unconditionally
+[~] Recheck fallback safe (visibility-correct)
+```
+
+---
+
+## F — DDL ACID
+
+### F1. CREATE / DROP
+
+```text
+[ ] CREATE TABLE transactional (rollback removes catalog entry + file)
+[ ] DROP TABLE transactional (rollback restores file)
+[ ] CREATE INDEX transactional
+[ ] DROP INDEX transactional
+[ ] Active scan isolation from DROP
+[ ] Prepared statement invalidation
+[~] crash recovery for CREATE TABLE (catalog persisted on fsync)
+[ ] crash recovery for DROP TABLE (file cleanup)
+```
+
+### F2. ALTER TABLE
+
+```text
+[~] ADD COLUMN metadata only; existing tuples padded at read time
+[x] ADD COLUMN DEFAULT applied to old rows on read
+       — tests/acid/consistency/constraints_not_null_default.py
+[ ] ADD COLUMN NOT NULL validation: rejects when table has rows w/o default
+[ ] ADD COLUMN rollback
+[~] ADD COLUMN crash recovery
+[~] DROP COLUMN tuple layout rewrite in place
+[x] DROP COLUMN crash-safe across restart
+       — tests/regression/lsn_watermark_restart.py
+[ ] DROP COLUMN rollback (currently irreversible)
+[ ] RENAME COLUMN dependency update (expressions reparse on next plan)
+[ ] RENAME COLUMN rollback
+[ ] ALTER TABLE schema version bumped on success
+[ ] ALTER TABLE invalidates prepared statements
+[ ] ALTER TABLE invalidates catalog cache (currently no cache)
+```
+
+---
+
+## G — Shared-storage / PageServer ACID
+
+### G1. Documentation
+
+```text
+[~] README says experimental shared storage
+[ ] docs/ACID_MATRIX.md: single-writer compute
+[ ] read-only compute mode documented
+[ ] No distributed transaction
+[ ] No multi-writer
+[ ] No Raft / quorum
+[ ] Local replica dirs ≠ consensus replicas
+[~] read_lsn / durable_lsn semantics
+       — docs/WAL_RECOVERY_PROTOCOL.md
+[~] future-page handling
+[ ] Network-timeout-after-commit "unknown" behaviour
+```
+
+### G2. PageServer durability
+
+```text
+[x] metadata file checksum + end marker
+       — src/storage/page_server.cpp
+[x] WAL-image file checksum + magic + trailer
+[ ] log_index file end-marker (rebuilt from WAL-image on startup)
+[x] partial metadata write detection
+[x] partial WAL-image write detection
+[~] PageServer crash during write_page (batch IO returns per-page status)
+[x] PageServer restart rebuilds versions/log_index
+       — tests/unit/page_store_remote_test.cpp
+[x] read_lsn unsatisfiable returns explicit error
+[~] Batch read partial failure
+[~] Batch write partial failure
+```
+
+### G3. Compute ⇔ PageServer consistency
+
+```text
+[~] commit_lsn ⇔ PageServer durable_lsn relationship
+[~] Committed transaction pages durable or redoable
+[~] read-only compute snapshot_lsn never reads future page
+[ ] Stale-page detection
+[ ] Duplicate write_page request idempotent
+[ ] Retry write_page idempotent
+[ ] Connection drop mid write
+[ ] Timeout-after-commit "unknown" handling
+[~] replica-dir write failure (best-effort)
+[ ] PageServer consistency checker
+```
+
+### G4. Real distributed ACID — OUT OF SCOPE for now
+
+```text
+[ ] metadata service / consensus / failover / shard placement
+[ ] 2PC / cross-shard atomic commit
+[ ] distributed deadlock / timestamp oracle
+```
+
+Document explicitly as future / unsupported.
+
+---
+
+## H — Tests
+
+```text
+[x] tests/acid/atomicity/commit_durability.py
+[x] tests/acid/atomicity/index_heap_atomic.py
+[x] tests/acid/consistency/constraints_not_null_default.py
+[x] tests/acid/consistency/post_recovery_verify.py
+[x] tests/acid/isolation/mvcc_lock_regression.py
+[x] tests/acid/isolation/lost_update.py
+[x] tests/acid/isolation/write_skew.py
+[x] tests/acid/durability/recovery_smoke.sh
+[x] tests/acid/durability/wal_replay_slot_reuse.sh
+[x] tests/acid/durability/crash_recovery_harness.py
+[x] tests/acid/durability/torn_page.py
+[x] tests/acid/durability/checkpoint_barrier.py
+[x] tests/regression/update_halloween.py
+[x] tests/regression/lsn_watermark_restart.py
+[x] tests/sql/select_empty_list.py
+[ ] tests/acid/atomicity/statement_savepoint.py — explicit txn statement rollback
+[ ] tests/acid/atomicity/multi_index_atomic.py — multi-index INSERT atomicity (currently in index_heap_atomic, expand)
+[ ] tests/acid/consistency/check_constraint.py — when CHECK is implemented
+[ ] tests/acid/consistency/varchar_length.py
+[ ] tests/acid/consistency/null_three_valued.py
+[ ] tests/acid/consistency/notin_null.py
+[ ] tests/acid/isolation/mvcc_visibility_matrix.py — exhaustive matrix
+[ ] tests/acid/isolation/phantom.py
+[ ] tests/acid/durability/wal_record_corruption.py
+[ ] tests/acid/durability/io_error_propagation.py
+[ ] tests/acid/durability/ddl_crash.py
+[ ] tests/acid/durability/index_state_machine.py
+[ ] tests/storage/pageserver_unknown_commit.py
+```
+
+---
+
+## Recommended next 6 items (in order)
+
+The biggest correctness-vs-effort wins from the remaining gaps:
+
+1. **A1 — CLOG-equivalent + COMMITTING/ABORTING states.** Today the
+   commit record fsync IS the transition; an in-flight fsync failure
+   triggers rollback, but post-restart we lose the COMMITTING audit
+   trail. A small log indexed by xid lets recovery answer "was xid N
+   committed?" without scanning the entire WAL.
+
+2. **D7 — DDL WAL records.** ALTER/CREATE/DROP currently mutate catalog
+   + files outside WAL; rollback is best-effort, recovery is "the file
+   exists or it doesn't". Even a single `kDdlMarker` record per DDL
+   call would close most of F1/F2.
+
+3. **B3 — VARCHAR(n) length enforcement.** Tiny code change in
+   InsertExecutor/UpdateExecutor, covers a long-standing diff with
+   SQLite. Unblocks many SQL-correctness tests.
+
+4. **D1 — Per-record CRC32 + magic in WAL records.** One-time format
+   change; future corruption tests need it. Migration is
+   straightforward because no on-disk WAL survives across releases.
+
+5. **B5/D4 — Index state machine (valid/invalid/rebuilding) + optimizer
+   gate.** Closes the "optimizer used a half-rebuilt index" hazard
+   that the rebuild-based recovery path opens.
+
+6. **C2 — Exhaustive MVCC visibility matrix test.** Pure test, no
+   code; catches any future MVCC refactor that breaks a corner of
+   the matrix. The current `mvcc_lock_regression.py` exercises
+   real-workload paths, not the matrix.
+
+After those, the next tier is statement-level savepoints (A2),
+visibility-map (E3), CHECK constraints (B3), and full predicate
+locks / SSI (C5 — only if we commit to Serializable).
+
+---
+
+## Roll-up
+
+| Property | P0 done | P0 remaining | Acceptance test bundle |
 | --- | --- | --- | --- |
-| Atomicity | A1, A2 | `acid/atomicity/*`, `recovery_smoke`, `crash_recovery_harness` | A1 + A2 done |
-| Consistency | C1, C4 | `acid/consistency/*`, `consistency_test`, `index_unique_matrix` | C1 partial (NOT NULL+DEFAULT), C4 done |
-| Isolation | I1, I2 | `acid/isolation/*`, `mvcc_lock_regression` | I2 done; I1 pending (slot generation/wraparound); I3 doc-only done |
-| Durability | D1, D2, D3, D4, D5 | `acid/durability/*`, `wal_buffer_pool_test`, `crash_recovery_harness` | D2 + D3 + D4 done; D1, D5 pending (D1 mostly implicit in D2) |
+| Atomicity | A1 commit ordering, A2 heap/index | CLOG, statement savepoints, undo for indexes/DDL | `acid/atomicity/*`, `crash_recovery_harness` |
+| Consistency | C1 NOT NULL+DEFAULT, C4 startup check | CHECK constraints, VARCHAR(n), full NULL 3VL, index state machine | `acid/consistency/*`, `index_unique_matrix` |
+| Isolation | I2 lost-update, I3 SI doc | docs/ISOLATION_LEVELS.md, MVCC matrix test, deadlock fairness | `acid/isolation/*`, `mvcc_lock_regression` |
+| Durability | D2 barrier, D3 commit, D4 torn page | WAL CRC, DDL WAL, checkpoint dirty-page table, fsync-error path | `acid/durability/*`, `wal_buffer_pool_test` |
 
-Once every row's tests are green, the README can drop "experimental" from the
-"ACID transactions" bullet and link this document as the contract.
+Until the "P0 remaining" column is empty, MiniDB stays
+**"snapshot-isolation, single-writer, lazy-index-rebuild ACID"** —
+not full PostgreSQL-grade ACID, but a documented, testable subset.
