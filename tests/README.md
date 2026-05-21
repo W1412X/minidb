@@ -109,19 +109,37 @@ on stderr so you can reproduce locally.
 
 See [docs/ACID_TODO.md](../docs/ACID_TODO.md) for the full hardening plan.
 
-- `acid/isolation/mvcc_lock_regression.py`: deterministic server-mode
-  concurrent transaction coverage.
-- `acid/durability/recovery_smoke.sh`: WAL recovery and checkpoint smoke
-  tests.
-- `acid/durability/wal_replay_slot_reuse.sh`: WAL replay correctness when
-  transaction slots are reused.
-- `acid/durability/crash_recovery_harness.py`: deterministic crash/restart
-  harness that kills MiniDB around commit, rollback, dirty-page, and
-  checkpoint-like boundaries, then verifies logical state and idempotent
-  recovery.
-- `acid/atomicity/` and `acid/consistency/` are intentionally empty placeholders
-  for the test items listed in `docs/ACID_TODO.md`. Add new tests as the
-  corresponding hardening items land.
+**Atomicity** (`acid/atomicity/`)
+- `commit_durability.py`: A1/D3 — concurrent group commits + restart;
+  every acknowledged `Transaction committed.` row must persist.
+- `index_heap_atomic.py`: A2 — uses `MINIDB_FAULT=index_insert_fail` to
+  force an index insert failure and asserts the heap row is unwound.
+
+**Consistency** (`acid/consistency/`)
+- `constraints_not_null_default.py`: C1 — NOT NULL surfaces as a SQL
+  error on INSERT and UPDATE; `DEFAULT` is substituted when the INSERT
+  column list omits a column.
+- `post_recovery_verify.py`: C4 — the `consistency_check_on_startup`
+  flag opens healthy databases and refuses opened-but-corrupt ones
+  (the inconsistency is synthesised with `MINIDB_FAULT=index_insert_silent`).
+
+**Isolation** (`acid/isolation/`)
+- `mvcc_lock_regression.py`: deterministic server-mode concurrent
+  transaction coverage.
+- `lost_update.py`: I2 — two concurrent `SET v = v + 1` writers must
+  produce exactly one success + one conflict and a final value of 1.
+- `write_skew.py`: I3 — pins the documented SI write-skew anomaly so a
+  future SSI upgrade has to flip it deliberately.
+
+**Durability** (`acid/durability/`)
+- `recovery_smoke.sh`: WAL recovery and checkpoint smoke.
+- `wal_replay_slot_reuse.sh`: replay with transaction-slot reuse.
+- `crash_recovery_harness.py`: randomised crash/restart harness with
+  idempotent-recovery checks.
+- `torn_page.py`: D4 — corrupted page detected by checksum + valid
+  doublewrite restores a torn page.
+- `checkpoint_barrier.py`: D2 — concurrent writers + low
+  `checkpoint_timeout` + SIGKILL; every acknowledged commit survives.
 
 ### `concurrency/` — Multi-client
 

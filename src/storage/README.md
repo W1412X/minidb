@@ -107,14 +107,26 @@ page_id -> [(lsn, wal_image_offset)]
 page_id -> latest_lsn
 ```
 
+## ACID-relevant invariants
+
+- **WAL-first** — `BufferPool::flush_frame_wal_first()` runs `wal_->flush_until(page_lsn)`
+  before any dirty page leaves the pool.
+- **Torn-page protection** — `DiskManager` writes a doublewrite copy
+  with magic + checksum before overwriting the main page, and
+  `recover_double_write()` restores from it on startup (D4).
+- **Checkpoint barrier** — `WalManager::checkpoint(cb, ctx)` runs the
+  page flush callback inside the WAL latch so writers can't sneak
+  records into the about-to-be-truncated WAL window (D2).
+
 ## Tests
 
 Relevant tests:
 
 ```bash
 ./build/tests/page_store_remote_test
-bash tests/remote_page_store.sh ./build/minidb
-ctest --test-dir build -R 'page_store_remote_test|remote_page_store' --output-on-failure
+./build/tests/wal_buffer_pool_test
+bash tests/storage/remote_page_store.sh ./build/minidb
+ctest --test-dir build -R 'page_store_remote_test|remote_page_store|torn_page|checkpoint_barrier' --output-on-failure
 ```
 
-These tests cover local PageStore compatibility, TCP remote reads/writes, batch IO, PageServer restart recovery, persisted metadata/WAL image files, RO snapshot reads, future-page handling, and replica directory writes.
+These tests cover local PageStore compatibility, TCP remote reads/writes, batch IO, PageServer restart recovery, persisted metadata/WAL image files, RO snapshot reads, future-page handling, replica directory writes, WAL-first eviction ordering, torn-page protection (`tests/acid/durability/torn_page.py`), and the checkpoint barrier (`tests/acid/durability/checkpoint_barrier.py`).
