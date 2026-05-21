@@ -19,7 +19,16 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
 
 ## A — Atomicity
 
-### A1. Crash mid-commit must yield all-or-nothing [P0]
+### A1. Crash mid-commit must yield all-or-nothing [P0] — **DONE**
+
+Slot flip moved after `flush_commit` succeeds; group-commit follower
+loop is now lost-wakeup safe via a per-batch generation counter; fsync
+failure returns 0 from `log_commit` and `TransactionManager::commit`
+falls back to the rollback path. Test:
+`tests/acid/atomicity/commit_durability.py`.
+
+---
+
 
 - **Goal**: A committed txn is visible after restart iff its commit WAL record
   is durable; otherwise the txn must be rolled back during replay.
@@ -107,7 +116,20 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
 
 ## C — Consistency
 
-### C1. Enforce NOT NULL / CHECK / DEFAULT at DML layer [P0]
+### C1. Enforce NOT NULL / CHECK / DEFAULT at DML layer [P0] — **PARTIAL**
+
+- NOT NULL: now surfaces as `Error: NOT NULL constraint violated` on
+  both INSERT and UPDATE instead of silently skipping the row.
+- DEFAULT: `CREATE TABLE` and `ALTER TABLE` accept it; the planner
+  substitutes the column default for any column omitted from an INSERT
+  column list. `Column::default_as_value()` is the single source of
+  truth for parsing the textual default into a typed Value.
+- CHECK: still unimplemented.
+
+Test: `tests/acid/consistency/constraints_not_null_default.py`.
+
+---
+
 
 - **Goal**: Constraints declared in DDL hold for every committed row.
 - **Current state**:
@@ -190,7 +212,16 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
     snapshot, writers commit many versions, reader still sees the original
     snapshot and GC does not prune visible versions.
 
-### I2. Lost update prevention [P0]
+### I2. Lost update prevention [P0] — **DONE**
+
+UpdateExecutor and DeleteExecutor already took a per-row `RowExclusive`
+lock and re-read `xmax` after acquiring it. The conflict was silently
+swallowed with `continue`; now both paths surface
+`Error: could not serialize access due to concurrent update` and abort
+the statement. Test: `tests/acid/isolation/lost_update.py`.
+
+---
+
 
 - **Goal**: Two concurrent transactions updating the same row must not silently
   lose one update.
@@ -206,7 +237,18 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
   - `tests/acid/isolation/lost_update.py` — two txns SET v=v+1 on the same row;
     after both commit, v must be incremented by 2, never 1.
 
-### I3. Phantom prevention for SERIALIZABLE [P1]
+### I3. Phantom prevention for SERIALIZABLE [P1] — **DONE (docs only)**
+
+MiniDB is documented as SI, not SERIALIZABLE
+(`docs/CONCURRENCY_CONTROL.md`). The parser refuses
+`SET TRANSACTION ISOLATION LEVEL`, so clients cannot silently downgrade.
+`tests/acid/isolation/write_skew.py` is a regression test that pins the
+documented SI write-skew behaviour: when MiniDB later grows SSI, this
+test should be flipped to expect an abort. Implementing real SSI is
+deferred.
+
+---
+
 
 - **Goal**: Range predicates do not see new rows inserted by concurrent txns.
 - **Current state**: No predicate locks, no gap locks; MiniDB advertises
@@ -285,7 +327,12 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
     background, force `CHECKPOINT`, then `SIGKILL` immediately; on restart no
     committed row is missing.
 
-### D3. Group-commit correctness [P0]
+### D3. Group-commit correctness [P0] — **DONE**
+
+Folded into A1; see test `tests/acid/atomicity/commit_durability.py`.
+
+---
+
 
 - **Goal**: Every commit returns only after its commit LSN is durable.
 - **Current state**: see A1.
@@ -293,7 +340,17 @@ Priorities: **P0 = correctness-blocker**, **P1 = correctness-hardening**,
 - **Tests**: covered by A1 + a stress test
   `tests/acid/durability/group_commit_stress.py`.
 
-### D4. Torn-page protection [P0]
+### D4. Torn-page protection [P0] — **DONE (defaults + regression)**
+
+`DbConfig` already defaults `doublewrite=on` and `page_checksum=on`.
+`DiskManager` writes the doublewrite copy with checksum + magic before
+overwriting the main page, and `recover_double_write()` restores from
+it on startup. `tests/acid/durability/torn_page.py` covers both
+invariants: corrupted page never surfaces as garbage rows, and a
+synthesized `doublewrite.bin` restores a torn page.
+
+---
+
 
 - **Goal**: A power loss in the middle of writing an 8KB page is recoverable.
 - **Current state**:
@@ -378,12 +435,12 @@ suite (likely nightly only — TSAN is slow).
 
 ## Roll-up: minimum work to claim "ACID baseline"
 
-| Property | P0 items | Tests required to pass |
-| --- | --- | --- |
-| Atomicity | A1, A2 | `acid/atomicity/*`, `recovery_smoke`, `crash_recovery_harness` |
-| Consistency | C1, C4 | `acid/consistency/*`, `consistency_test`, `index_unique_matrix` |
-| Isolation | I1, I2 | `acid/isolation/*`, `mvcc_lock_regression` |
-| Durability | D1, D2, D3, D4, D5 | `acid/durability/*`, `wal_buffer_pool_test`, `crash_recovery_harness` |
+| Property | P0 items | Tests required to pass | Status |
+| --- | --- | --- | --- |
+| Atomicity | A1, A2 | `acid/atomicity/*`, `recovery_smoke`, `crash_recovery_harness` | A1 done, A2 pending |
+| Consistency | C1, C4 | `acid/consistency/*`, `consistency_test`, `index_unique_matrix` | C1 partial (NOT NULL+DEFAULT), C4 pending |
+| Isolation | I1, I2 | `acid/isolation/*`, `mvcc_lock_regression` | I2 done; I1 pending (slot generation/wraparound); I3 doc-only done |
+| Durability | D1, D2, D3, D4, D5 | `acid/durability/*`, `wal_buffer_pool_test`, `crash_recovery_harness` | D3 + D4 done; D1, D2, D5 pending |
 
 Once every row's tests are green, the README can drop "experimental" from the
 "ACID transactions" bullet and link this document as the contract.
