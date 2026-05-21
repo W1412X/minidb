@@ -375,6 +375,14 @@ bool WalManager::flush_until(u64 lsn) {
     return durable_lsn_ >= lsn;
 }
 
+void WalManager::ensure_next_lsn_at_least(u64 lsn) {
+    LockGuard guard(latch_);
+    if (lsn == 0) return;
+    if (next_lsn_ <= lsn) next_lsn_ = lsn + 1;
+    if (last_written_lsn_ < lsn) last_written_lsn_ = lsn;
+    if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+}
+
 void WalManager::truncate() {
     LockGuard guard(latch_);
     if (fd_ >= 0) {
@@ -642,9 +650,16 @@ bool WalManager::recover(Database* db) {
     }
     close(fd);
 
-    next_lsn_ = max_lsn + 1;
-    durable_lsn_ = max_lsn;
-    last_written_lsn_ = max_lsn;
+    // Advance — never regress — the LSN counters. If load_control_file()
+    // already restored a higher checkpoint_lsn watermark before recover()
+    // ran, keep that value: LSNs must stay globally monotonic across
+    // restarts even when the WAL file itself was truncated by clean
+    // shutdown. Resetting to max_lsn+1 here would re-introduce the D2
+    // checkpoint deadlock (page_lsn > durable_lsn → flush_until under
+    // held WAL latch).
+    if (max_lsn + 1 > next_lsn_)      next_lsn_ = max_lsn + 1;
+    if (max_lsn > durable_lsn_)       durable_lsn_ = max_lsn;
+    if (max_lsn > last_written_lsn_)  last_written_lsn_ = max_lsn;
     if (db && max_txn_id > 0) {
         db->txn_manager().ensure_next_txn_id_at_least(max_txn_id + 1);
     }

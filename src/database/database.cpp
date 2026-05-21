@@ -862,15 +862,27 @@ bool Database::load_control_file() {
     char line[256];
     bool found_next = false;
     u64 next_txn = 0;
+    u64 checkpoint_lsn = 0;
     while (std::fgets(line, sizeof(line), f)) {
         if (std::strncmp(line, "next_txn_id=", 12) == 0) {
             next_txn = static_cast<u64>(std::strtoull(line + 12, nullptr, 10));
             found_next = next_txn > 0;
+        } else if (std::strncmp(line, "checkpoint_lsn=", 15) == 0) {
+            checkpoint_lsn = static_cast<u64>(std::strtoull(line + 15, nullptr, 10));
         }
     }
     std::fclose(f);
     if (found_next) {
         txn_manager_.ensure_next_txn_id_at_least(next_txn);
+    }
+    // Restore the WAL high-water mark before recovery / first use. Clean
+    // shutdown truncates the WAL file, so without this the next session's
+    // LSNs would restart at 1 — smaller than the LSNs already stamped on
+    // data pages — which violates monotonic-LSN and would deadlock the D2
+    // checkpoint barrier (page_lsn > durable_lsn → flush_until under held
+    // WAL latch).
+    if (checkpoint_lsn != 0 && wal_) {
+        wal_->ensure_next_lsn_at_least(checkpoint_lsn);
     }
     return found_next;
 }

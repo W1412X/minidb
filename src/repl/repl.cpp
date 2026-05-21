@@ -316,7 +316,11 @@ void REPL::run() {
             buffer.clear();
         }
     }
-    if (interactive_) printf("Goodbye.\n");
+    // Printed unconditionally — several tests in tests/regression/ grep for
+    // "Goodbye" as a clean-exit sentinel. testlib._clean_minidb_lines already
+    // filters this line out of result-row parsing, so the legacy shell tests
+    // that pipe input to minidb stay unaffected.
+    printf("Goodbye.\n");
 }
 
 void REPL::execute_sql(const String& sql) {

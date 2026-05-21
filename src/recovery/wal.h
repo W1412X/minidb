@@ -67,6 +67,15 @@ public:
     void flush();
     bool flush_until(u64 lsn);
     bool recover(Database* db);
+    // Restore the LSN watermark across restarts. The on-disk WAL file is
+    // truncated by clean shutdown so next_lsn_ would otherwise reset to 1,
+    // but pages on disk still carry the higher LSNs from prior sessions.
+    // The Database constructor reads the persisted checkpoint LSN from the
+    // control file and calls this to keep LSNs globally monotonic. Without
+    // it, a checkpoint after restart could write a kCheckpoint record with
+    // an LSN smaller than existing page LSNs, which would then trigger a
+    // flush_until() recursion under the D2 checkpoint barrier and deadlock.
+    void ensure_next_lsn_at_least(u64 lsn);
     u64 durable_lsn() const { return durable_lsn_; }
     u64 next_lsn() const { return next_lsn_; }
     u64 bytes_since_checkpoint() const { return bytes_since_checkpoint_; }

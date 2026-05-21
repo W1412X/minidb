@@ -146,3 +146,5 @@ add_test(NAME resource_limits
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/regression/resource_limits.sh $<TARGET_FILE:minidb>)
 add_test(NAME update_halloween
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/regression/update_halloween.py $<TARGET_FILE:minidb> --seed 12648443)
+add_test(NAME lsn_watermark_restart
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/regression/lsn_watermark_restart.py $<TARGET_FILE:minidb> --seed 12648445)
