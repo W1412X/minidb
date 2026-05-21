@@ -60,6 +60,13 @@ struct Expression {
 struct TableRef {
     String name;
     String alias;
+    UniquePtr<struct SelectStmt> subquery;
+
+    TableRef() = default;
+    TableRef(const TableRef& other);
+    TableRef& operator=(const TableRef& other);
+    TableRef(TableRef&&) noexcept = default;
+    TableRef& operator=(TableRef&&) noexcept = default;
 };
 
 // ============================================================
@@ -141,6 +148,20 @@ struct SelectStmt {
         return s;
     }
 };
+
+inline TableRef::TableRef(const TableRef& other) : name(other.name), alias(other.alias) {
+    if (other.subquery) subquery = UniquePtr<SelectStmt>(other.subquery->clone());
+}
+
+inline TableRef& TableRef::operator=(const TableRef& other) {
+    if (this == &other) return *this;
+    name = other.name;
+    alias = other.alias;
+    subquery = other.subquery
+        ? UniquePtr<SelectStmt>(other.subquery->clone())
+        : UniquePtr<SelectStmt>();
+    return *this;
+}
 
 // ============================================================
 // INSERT

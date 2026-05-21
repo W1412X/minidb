@@ -61,6 +61,7 @@ private:
     UniquePtr<Expression> parse_multiplication();
     UniquePtr<Expression> parse_unary();
     UniquePtr<Expression> parse_primary();
+    TableRef parse_table_ref();
 
     // Utility
     Token expect(TokenType type);

@@ -272,15 +272,7 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
 
     // FROM
     if (match_keyword(TokenType::KW_FROM)) {
-        TableRef ref;
-        ref.name = expect_identifier().value;
-        if (match_keyword(TokenType::KW_AS)) {
-            ref.alias = expect_identifier().value;
-        } else if (check(TokenType::IDENTIFIER)) {
-            ref.alias = peek().value;
-            lexer_.consume_token();
-        }
-        stmt->from_tables.push_back(ref);
+        stmt->from_tables.push_back(parse_table_ref());
     }
 
     // JOINs
@@ -306,13 +298,7 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
             join.type = JoinType::kInner;
         }
         expect_keyword(TokenType::KW_JOIN);
-        join.table.name = expect_identifier().value;
-        if (match_keyword(TokenType::KW_AS)) {
-            join.table.alias = expect_identifier().value;
-        } else if (check(TokenType::IDENTIFIER)) {
-            join.table.alias = peek().value;
-            lexer_.consume_token();
-        }
+        join.table = parse_table_ref();
         if (!requires_on && check_keyword(TokenType::KW_ON)) {
             mark_error();
             break;
@@ -381,6 +367,28 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
     }
 
     return stmt;
+}
+
+TableRef Parser::parse_table_ref() {
+    TableRef ref;
+    if (match(TokenType::LPAREN)) {
+        if (!check_keyword(TokenType::KW_SELECT)) {
+            set_error_at(String("expected SELECT in derived table"), peek());
+            return ref;
+        }
+        ref.subquery = parse_select();
+        expect(TokenType::RPAREN);
+    } else {
+        ref.name = expect_identifier().value;
+    }
+
+    if (match_keyword(TokenType::KW_AS)) {
+        ref.alias = expect_identifier().value;
+    } else if (check(TokenType::IDENTIFIER)) {
+        ref.alias = peek().value;
+        lexer_.consume_token();
+    }
+    return ref;
 }
 
 // ============================================================

@@ -25,6 +25,11 @@ static Schema schema_with_table_name(const Schema& schema, const String& table_n
     return out;
 }
 
+static Schema schema_with_alias_if_present(const Schema& schema, const String& alias) {
+    if (alias.empty()) return schema;
+    return schema_with_table_name(schema, alias);
+}
+
 Planner::Planner(Catalog* catalog) : catalog_(catalog), optimizer_config_() {}
 
 Planner::Planner(Catalog* catalog, const OptimizerConfig& optimizer_config)
@@ -241,43 +246,60 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         one->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(one.release());
     } else {
-        TableEntry* table = catalog_->get_table(stmt.from_tables[0].name);
-        if (!table) return UniquePtr<PlanNode>();
+        const TableRef& from = stmt.from_tables[0];
+        if (from.subquery) {
+            current = plan_select(*from.subquery);
+            if (!current) return UniquePtr<PlanNode>();
+            merged_schema = schema_with_alias_if_present(current->output_schema, from.alias);
+            current->output_schema = merged_schema;
+        } else {
+            TableEntry* table = catalog_->get_table(from.name);
+            if (!table) return UniquePtr<PlanNode>();
 
-        String left_alias = stmt.from_tables[0].alias.empty()
-                            ? table->table_name : stmt.from_tables[0].alias;
+            String left_alias = from.alias.empty()
+                                ? table->table_name : from.alias;
 
-        merged_schema = schema_with_table_name(table->schema, left_alias);
+            merged_schema = schema_with_table_name(table->schema, left_alias);
 
-        current = plan_table_access(
-            table, merged_schema, stmt.joins.empty() ? stmt.where_clause.get() : nullptr,
-            &where_satisfied_by_index);
+            current = plan_table_access(
+                table, merged_schema, stmt.joins.empty() ? stmt.where_clause.get() : nullptr,
+                &where_satisfied_by_index);
+        }
     }
 
     // JOIN
     for (u32 j = 0; j < stmt.joins.size(); j++) {
         const JoinClause& join = stmt.joins[j];
-        TableEntry* right_table = catalog_->get_table(join.table.name);
-        if (!right_table) return UniquePtr<PlanNode>();
-        String right_alias = join.table.alias.empty() ? right_table->table_name : join.table.alias;
+        UniquePtr<PlanNode> right_plan;
+        Schema right_schema;
+        if (join.table.subquery) {
+            right_plan = plan_select(*join.table.subquery);
+            if (!right_plan) return UniquePtr<PlanNode>();
+            right_schema = schema_with_alias_if_present(right_plan->output_schema, join.table.alias);
+            right_plan->output_schema = right_schema;
+        } else {
+            TableEntry* right_table = catalog_->get_table(join.table.name);
+            if (!right_table) return UniquePtr<PlanNode>();
+            String right_alias = join.table.alias.empty() ? right_table->table_name : join.table.alias;
 
-        auto right_scan = make_unique<SeqScanPlan>();
-        right_scan->table_id = right_table->table_id;
-        right_scan->table_name = right_table->table_name;
-        right_scan->output_schema = schema_with_table_name(right_table->schema, right_alias);
+            auto right_scan = make_unique<SeqScanPlan>();
+            right_scan->table_id = right_table->table_id;
+            right_scan->table_name = right_table->table_name;
+            right_scan->output_schema = schema_with_table_name(right_table->schema, right_alias);
+            right_schema = right_scan->output_schema;
+            right_plan = UniquePtr<PlanNode>(right_scan.release());
+        }
 
         auto join_plan = make_unique<JoinPlan>();
         join_plan->left = UniquePtr<PlanNode>(current.release());
-        join_plan->right = UniquePtr<PlanNode>(right_scan.release());
+        join_plan->right = UniquePtr<PlanNode>(right_plan.release());
         join_plan->on_condition = join.on_condition
             ? UniquePtr<Expression>(join.on_condition->clone())
             : UniquePtr<Expression>();
         join_plan->join_type = join.type;
 
-        for (u32 i = 0; i < right_table->schema.column_count(); i++) {
-            Column col = right_table->schema.get_column(i);
-            col.table_name = right_alias;
-            merged_schema.add_column(col);
+        for (u32 i = 0; i < right_schema.column_count(); i++) {
+            merged_schema.add_column(right_schema.get_column(i));
         }
         join_plan->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(join_plan.release());
