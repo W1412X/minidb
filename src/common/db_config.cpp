@@ -137,6 +137,8 @@ bool DbConfigLoader::load_file(const String& path, DbConfig* config, String* err
             config->recover_indexes_lazy = !ascii_ieq(value, "rebuild");
         } else if (std::strcmp(key, "startup_scan_txn_watermark") == 0) {
             if (!parse_bool(value, &config->startup_scan_txn_watermark)) goto bad;
+        } else if (std::strcmp(key, "consistency_check_on_startup") == 0) {
+            if (!parse_bool(value, &config->consistency_check_on_startup)) goto bad;
         } else if (std::strcmp(key, "checkpoint_timeout") == 0) {
             if (!parse_u64_unit(value, &ms)) goto bad;
             config->checkpoint_timeout_ms = ms;

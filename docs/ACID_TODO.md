@@ -56,7 +56,19 @@ falls back to the rollback path. Test:
   - `tests/acid/atomicity/group_commit_wait.py` — N concurrent commits,
     verify every successful `COMMIT;` reply implies `durable_lsn >= its lsn`.
 
-### A2. Index entry / heap tuple atomicity [P0]
+### A2. Index entry / heap tuple atomicity [P0] — **DONE**
+
+`Database::insert_index_entries` now returns bool and stops on the
+first failed tree insert. InsertExecutor and the non-HOT UpdateExecutor
+path record the heap-insert undo BEFORE attempting index inserts, so a
+failure unwinds the heap row plus any partial index entries through
+the active transaction's rollback path. `delete_index_entries` is
+idempotent against the never-inserted entries. Test:
+`tests/acid/atomicity/index_heap_atomic.py` (uses `MINIDB_FAULT=index_insert_fail`
+to deterministically trigger the failure).
+
+---
+
 
 - **Goal**: For every committed heap tuple, all matching index entries exist;
   for every rolled-back tuple, no index entries leak.
@@ -174,7 +186,21 @@ Test: `tests/acid/consistency/constraints_not_null_default.py`.
 - **Action items**: Out of scope for ACID baseline. Document in
   `docs/KNOWN_LIMITATIONS.md` that FK is unsupported.
 
-### C4. Post-recovery consistency assertion [P0]
+### C4. Post-recovery consistency assertion [P0] — **DONE**
+
+`Database::check_table_index_consistency` already walked the heap and
+verified every live tuple was reachable through each index. It is now
+wired into startup behind a new `consistency_check_on_startup` config
+(default off): when set, the constructor runs the check after WAL
+replay + lazy index rebuild and refuses to open the DB (stderr +
+`std::exit(1)`) if it finds any disagreement. Test:
+`tests/acid/consistency/post_recovery_verify.py` covers both the
+healthy-pass case and a synthesized-inconsistency case (via the
+test-only `MINIDB_FAULT=index_insert_silent` knob that mimics the
+pre-A2 bug).
+
+---
+
 
 - **Goal**: On clean startup, MiniDB asserts heap/index/catalog agreement.
 - **Current state**: Recovery rebuilds indexes lazily; no consistency
@@ -311,7 +337,20 @@ deferred.
     `wal_buffer_pool_test` to cover all pages flushed by checkpoint, not just
     eviction.
 
-### D2. Checkpoint barrier [P0]
+### D2. Checkpoint barrier [P0] — **DONE**
+
+`WalManager::checkpoint()` now takes a page-flush callback and runs
+all four phases (write kCheckpoint, fsync WAL, flush dirty pages,
+truncate) under a single critical section. Writers are parked on the
+WAL latch for the duration; `BufferPool::flush_frame_wal_first` takes
+its fast path because every dirty page already has
+`page_lsn ≤ durable_lsn`, so no lock-order inversion. Test:
+`tests/acid/durability/checkpoint_barrier.py` hammers concurrent
+commits with `checkpoint_timeout=50ms` and SIGKILLs the server; every
+acknowledged commit must survive restart.
+
+---
+
 
 - **Goal**: WAL truncation never drops redo records still needed by unflushed
   pages.
@@ -437,10 +476,10 @@ suite (likely nightly only — TSAN is slow).
 
 | Property | P0 items | Tests required to pass | Status |
 | --- | --- | --- | --- |
-| Atomicity | A1, A2 | `acid/atomicity/*`, `recovery_smoke`, `crash_recovery_harness` | A1 done, A2 pending |
-| Consistency | C1, C4 | `acid/consistency/*`, `consistency_test`, `index_unique_matrix` | C1 partial (NOT NULL+DEFAULT), C4 pending |
+| Atomicity | A1, A2 | `acid/atomicity/*`, `recovery_smoke`, `crash_recovery_harness` | A1 + A2 done |
+| Consistency | C1, C4 | `acid/consistency/*`, `consistency_test`, `index_unique_matrix` | C1 partial (NOT NULL+DEFAULT), C4 done |
 | Isolation | I1, I2 | `acid/isolation/*`, `mvcc_lock_regression` | I2 done; I1 pending (slot generation/wraparound); I3 doc-only done |
-| Durability | D1, D2, D3, D4, D5 | `acid/durability/*`, `wal_buffer_pool_test`, `crash_recovery_harness` | D3 + D4 done; D1, D2, D5 pending |
+| Durability | D1, D2, D3, D4, D5 | `acid/durability/*`, `wal_buffer_pool_test`, `crash_recovery_harness` | D2 + D3 + D4 done; D1, D5 pending (D1 mostly implicit in D2) |
 
 Once every row's tests are green, the README can drop "experimental" from the
 "ACID transactions" bullet and link this document as the contract.

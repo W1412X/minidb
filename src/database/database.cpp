@@ -91,6 +91,21 @@ Database::Database(const String& db_dir, const DbConfig& config)
     if (!has_control && config_.startup_scan_txn_watermark) {
         advance_txn_id_watermark_from_storage();
     }
+    if (config_.consistency_check_on_startup) {
+        // C4 — opt-in fail-fast guard. After WAL replay and lazy index
+        // rebuild the heap and indexes must agree on every live tuple.
+        // If they do not, something corrupted the database state and we
+        // refuse to open it rather than silently serving partial reads.
+        String err;
+        if (!check_table_index_consistency(&err)) {
+            std::fprintf(stderr,
+                         "minidb: startup consistency check failed: %s\n"
+                         "        refusing to open '%s'. Set "
+                         "consistency_check_on_startup = off to bypass.\n",
+                         err.c_str(), db_dir_.c_str());
+            std::exit(1);
+        }
+    }
     gc_ = UniquePtr<GarbageCollector>(new GarbageCollector(pool_.get(), &txn_manager_, &catalog_));
 
     // Collect statistics for query optimizer (on-demand via ANALYZE, not at startup)
@@ -650,6 +665,10 @@ static bool fault_active(const char* name) {
 bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const RecordId& rid) {
     Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
     u64 txn_id = txn_manager_.current() ? txn_manager_.current()->id() : 1;
+    // index_insert_silent mimics the pre-A2 bug for the C4 negative test:
+    // skip the tree insert AND report success, leaving a heap row with no
+    // matching index entry. Production code never sets this fault.
+    const bool silent = fault_active("index_insert_silent");
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
         if (!index) continue;
@@ -658,6 +677,7 @@ bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
         BPlusTree* tree = get_index_tree(index->index_id);
         if (!tree) continue;
         wal_->log_index_insert(txn_id, index->index_id, key.first_value(), rid);
+        if (silent) continue;
         if (fault_active("index_insert_fail") || !tree->insert(key, rid)) {
             // The heap tuple is in place but at least one index entry is
             // missing. Return false so the caller can surface an error;

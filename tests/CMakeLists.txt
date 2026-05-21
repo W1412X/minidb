@@ -101,6 +101,8 @@ add_test(NAME index_heap_atomic
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/index_heap_atomic.py $<TARGET_FILE:minidb> --seed 12648441)
 add_test(NAME constraints_not_null_default
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/constraints_not_null_default.py $<TARGET_FILE:minidb> --seed 12648437)
+add_test(NAME post_recovery_verify
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/post_recovery_verify.py $<TARGET_FILE:minidb> --seed 12648442)
 add_test(NAME recovery_smoke
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/recovery_smoke.sh $<TARGET_FILE:minidb>)
 add_test(NAME wal_replay_slot_reuse
