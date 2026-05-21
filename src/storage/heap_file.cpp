@@ -649,9 +649,10 @@ bool HeapFile::recover_insert_at(PageId page_id, SlotIdx slot_idx,
     if (is_uninitialized) {
         page->init(page_id, PageType::kHeapData);
     }
+    bool page_already_redone = !is_uninitialized && lsn != 0 && page->header()->lsn >= lsn;
     const LinePointer* lp = page->line_pointer(slot_idx);
     bool inserted = false;
-    if (!(lp && lp->is_valid())) {
+    if (!page_already_redone && !(lp && lp->is_valid())) {
         if (page->insert_tuple_at(data, length, slot_idx) == kNullSlot) {
             pool_->unpin_page(page_id);
             return false;
@@ -659,8 +660,10 @@ bool HeapFile::recover_insert_at(PageId page_id, SlotIdx slot_idx,
         inserted = true;
         if (out_new_physical_tuple) *out_new_physical_tuple = true;
     }
-    pool_->set_page_lsn(page_id, lsn);
-    pool_->mark_dirty(page_id);
+    if (!page_already_redone) {
+        pool_->set_page_lsn(page_id, lsn);
+        pool_->mark_dirty(page_id);
+    }
     pool_->unpin_page(page_id);
 
     // 元数据更新必须始终执行 (即使 LSN 匹配跳过了数据插入),

@@ -142,6 +142,11 @@ add_test(
 )
 
 add_test(
+    NAME wal_replay_slot_reuse
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/wal_replay_slot_reuse.sh $<TARGET_FILE:minidb>
+)
+
+add_test(
     NAME index_delete_rebuild
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/index_delete_rebuild.sh $<TARGET_FILE:minidb>
 )

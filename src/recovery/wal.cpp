@@ -369,6 +369,16 @@ bool WalManager::recover(Database* db) {
 
     constexpr u32 kMaxReplayDataLen = kPageSize + 256;
 
+    auto page_lsn_at = [db](PageId page_id, LSN* out) -> bool {
+        if (!db || !out || page_id == kNullPageId) return false;
+        auto res = db->pool().fetch_page(page_id);
+        if (!res.ok()) return false;
+        Page* page = res.value();
+        *out = page->header()->lsn;
+        db->pool().unpin_page(page_id);
+        return true;
+    };
+
     WalRecord hdr;
     while (read_exact(fd, &hdr, sizeof(hdr))) {
         max_lsn = hdr.lsn;
@@ -441,18 +451,12 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&dh, data.data(), sizeof(dh));
                 HeapFile* heap = db->get_heap_file(dh.table_id);
                 if (heap) {
-                    // During recovery, historical txn_id is not in TransactionManager.
-                    // Mark the slot DEAD directly so it's invisible to all scans.
-                    auto res = db->pool().fetch_page(dh.page_id);
-                    if (res.ok()) {
-                        Page* page = res.value();
-                        LinePointer* lp = page->line_pointer(dh.slot_idx);
-                        if (lp) {
-                            lp->mark_dead();
-                            if (hdr.lsn != 0) db->pool().set_page_lsn(dh.page_id, hdr.lsn);
-                            db->pool().mark_dirty(dh.page_id);
-                        }
-                        db->pool().unpin_page(dh.page_id);
+                    LSN page_lsn = 0;
+                    if (page_lsn_at(dh.page_id, &page_lsn) && page_lsn >= hdr.lsn) {
+                        continue;
+                    }
+                    if (heap->mark_deleted(dh.page_id, dh.slot_idx, hdr.txn_id, hdr.lsn)) {
+                        needs_index_rebuild = true;
                     }
                 }
             } else if (hdr.type == WalType::kUpdate) {
@@ -470,24 +474,40 @@ bool WalManager::recover(Database* db) {
                 if (data.size() < sizeof(uh) + uh.data_size) continue;
                 HeapFile* heap = db->get_heap_file(uh.table_id);
                 if (heap) {
-                    bool ok = heap->recover_update(uh.old_page_id, uh.old_slot_idx,
-                                         uh.new_page_id, uh.new_slot_idx,
-                                         hdr.txn_id,
-                                         data.data() + sizeof(uh),
-                                         uh.data_size, hdr.lsn);
-                    if (ok) {
-                        // Mark old tuple DEAD directly (historical txn_id not in TransactionManager)
-                        auto res = db->pool().fetch_page(uh.old_page_id);
-                        if (res.ok()) {
-                            Page* page = res.value();
-                            LinePointer* lp = page->line_pointer(uh.old_slot_idx);
-                            if (lp) {
-                                lp->mark_dead();
-                                if (hdr.lsn != 0) db->pool().set_page_lsn(uh.old_page_id, hdr.lsn);
-                                db->pool().mark_dirty(uh.old_page_id);
-                            }
-                            db->pool().unpin_page(uh.old_page_id);
+                    LSN old_lsn = 0;
+                    LSN new_lsn = 0;
+                    bool old_done = page_lsn_at(uh.old_page_id, &old_lsn) && old_lsn >= hdr.lsn;
+                    bool new_done = page_lsn_at(uh.new_page_id, &new_lsn) && new_lsn >= hdr.lsn;
+                    if (old_done && new_done) {
+                        continue;
+                    }
+                    bool applied = false;
+                    bool inserted_new = false;
+                    if (!new_done) {
+                        if (!heap->recover_insert_at(uh.new_page_id, uh.new_slot_idx,
+                                                     data.data() + sizeof(uh),
+                                                     uh.data_size, hdr.lsn,
+                                                     &inserted_new)) {
+                            continue;
                         }
+                        applied = true;
+                    }
+                    if (!old_done) {
+                        bool marked = heap->mark_deleted(uh.old_page_id, uh.old_slot_idx,
+                                                         hdr.txn_id, hdr.lsn);
+                        bool linked = heap->set_next_version(uh.old_page_id, uh.old_slot_idx,
+                                                             uh.new_page_id, uh.new_slot_idx,
+                                                             hdr.lsn);
+                        if (!marked || !linked) {
+                            if (inserted_new) {
+                                heap->rollback_insert(uh.new_page_id, uh.new_slot_idx, hdr.lsn);
+                            }
+                            continue;
+                        }
+                        applied = true;
+                    }
+                    if (applied) {
+                        needs_index_rebuild = true;
                     }
                 }
             }
