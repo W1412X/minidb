@@ -55,7 +55,14 @@ public:
                    const byte* new_data, u16 size);
     u64 log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
     u64 log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
-    u64 checkpoint();
+
+    // Hook invoked inside `checkpoint()` while the WAL latch is held, after
+    // the kCheckpoint record has been fsynced and before the log is
+    // truncated. Used to flush dirty pages so that no committed page write
+    // depends on a WAL record we are about to truncate.
+    using CheckpointPageFlush = void (*)(void* ctx);
+    u64 checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx);
+    u64 checkpoint() { return checkpoint(nullptr, nullptr); }
 
     void flush();
     bool flush_until(u64 lsn);

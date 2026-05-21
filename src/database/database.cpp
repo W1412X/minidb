@@ -899,12 +899,32 @@ void Database::flush() {
     }
 }
 
+void Database::flush_pages_for_checkpoint_trampoline(void* ctx) {
+    static_cast<Database*>(ctx)->flush_pages_for_checkpoint();
+}
+
+void Database::flush_pages_for_checkpoint() {
+    // Called by WalManager::checkpoint() with the WAL latch held. At this
+    // point durable_lsn_ == last_written_lsn_, so every dirty page has
+    // page_lsn <= durable_lsn_ and BufferPool::flush_frame_wal_first will
+    // take its fast path instead of re-entering the WAL latch.
+    if (page_store_) page_store_->set_durable_lsn(wal_->durable_lsn());
+    pool_->flush_all();
+    if (page_store_) page_store_->flush();
+    for (auto it = heap_files_.begin(); it; it = heap_files_.next(it)) {
+        TableEntry* table = catalog_.get_table(it->key);
+        if (!table || !it->value) continue;
+        table->num_tuples = it->value->meta().num_tuples;
+        table->stat_num_tuples = it->value->meta().num_tuples;
+        table->stat_num_pages = it->value->meta().num_data_pages;
+    }
+}
+
 void Database::checkpoint() {
     for (auto it = heap_files_.begin(); it; it = heap_files_.next(it)) {
         if (it->value) it->value->flush_meta();
     }
-    flush();
-    wal_->checkpoint();
+    wal_->checkpoint(&Database::flush_pages_for_checkpoint_trampoline, this);
     save_control_file(false);
 }
 

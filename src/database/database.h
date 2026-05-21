@@ -79,6 +79,12 @@ private:
     void rebuild_index(IndexEntry* index);
     void rebuild_all_indexes();
     void sync_catalog_metadata();
+    // Page-flush hook invoked by WalManager::checkpoint() while it holds
+    // the WAL latch. Runs the dirty-page flush + page-store fsync inside
+    // the checkpoint barrier so the about-to-be-truncated WAL never
+    // contains records still needed by unflushed pages.
+    void flush_pages_for_checkpoint();
+    static void flush_pages_for_checkpoint_trampoline(void* ctx);
     void advance_txn_id_watermark_from_storage();
     bool load_control_file();
     void save_control_file(bool clean_shutdown);

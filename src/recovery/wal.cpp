@@ -261,10 +261,53 @@ u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, con
     return lsn;
 }
 
-u64 WalManager::checkpoint() {
-    u64 lsn = write_record(WalType::kCheckpoint, 0, nullptr, 0);
-    flush();
-    if (lsn != 0) truncate();
+u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
+    LockGuard guard(latch_);
+    if (fd_ < 0) return 0;
+
+    // Phase 1: write the kCheckpoint marker. Done inline (rather than via
+    // write_record) because we must hold the latch from now until the
+    // log is truncated, so no other writer can sneak in records that
+    // would later get clobbered by the truncate.
+    WalRecord hdr;
+    hdr.lsn = next_lsn_;
+    hdr.txn_id = 0;
+    hdr.type = WalType::kCheckpoint;
+    hdr.data_len = 0;
+    if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) return 0;
+    bytes_since_checkpoint_ += sizeof(hdr);
+    next_lsn_++;
+    last_written_lsn_ = hdr.lsn;
+    u64 lsn = hdr.lsn;
+
+    // Phase 2: fsync the WAL up to and including the kCheckpoint record.
+    if (!flush_buffer()) return 0;
+    if (fsync_enabled_ && fsync(fd_) != 0) return 0;
+    durable_lsn_ = last_written_lsn_;
+    commit_cond_.broadcast();
+
+    // Phase 3: flush dirty pages while the latch is still held. At this
+    // point every dirty page satisfies page_lsn <= durable_lsn_, so
+    // BufferPool::flush_frame_wal_first takes its fast path and does NOT
+    // try to re-acquire the WAL latch — no deadlock. New writers are
+    // parked on the WAL latch and cannot dirty additional pages until
+    // we release it, so the dirty-page set is stable for the entire
+    // flush.
+    if (flush_pages_cb) flush_pages_cb(ctx);
+
+    // Phase 4: truncate the WAL. Safe now because everything that
+    // referenced records we are about to discard is durable on disk.
+    if (fd_ >= 0) {
+        u64 keep_next = next_lsn_;
+        u64 keep_durable = durable_lsn_;
+        close(fd_);
+        String path = wal_dir_ + "/wal.log";
+        fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        next_lsn_ = keep_next;
+        durable_lsn_ = keep_durable;
+        last_written_lsn_ = keep_durable;
+    }
+
     bytes_since_checkpoint_ = 0;
     return lsn;
 }
