@@ -13,6 +13,11 @@ void FilterExecutor::init() {
     compiled_nodes_.clear();
     compiled_root_ = compile_expr(predicate_.get(), child_->output_schema());
     if (compiled_root_ < 0) compiled_nodes_.clear();
+    // Allocate the eval stack once. eval_compiled() previously did
+    // `std::vector<Value>(N)` on every row — a heap alloc + default-init
+    // pass per evaluation. With this we reuse the same buffer and only
+    // pay one allocation per scan.
+    eval_stack_.assign(compiled_nodes_.size(), Value());
 }
 
 int FilterExecutor::compile_expr(const Expression* expr, const Schema& schema) {
@@ -72,7 +77,7 @@ int FilterExecutor::compile_expr(const Expression* expr, const Schema& schema) {
 
 bool FilterExecutor::eval_compiled(const Tuple& tuple, Value* out) const {
     if (compiled_root_ < 0 || !out) return false;
-    std::vector<Value> stack(compiled_nodes_.size());
+    std::vector<Value>& stack = eval_stack_;
     for (u32 i = 0; i < compiled_nodes_.size(); i++) {
         const CompiledNode& node = compiled_nodes_[i];
         switch (node.kind) {

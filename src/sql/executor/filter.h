@@ -42,6 +42,10 @@ private:
     UniquePtr<Expression> predicate_;
     std::vector<CompiledNode> compiled_nodes_;
     int compiled_root_ = -1;
+    // Pre-allocated evaluation stack reused across every `next()` call.
+    // The old code re-allocated `std::vector<Value>(N)` on every row,
+    // which dominated CPU time in selective scans.
+    mutable std::vector<Value> eval_stack_;
 };
 
 } // namespace minidb
