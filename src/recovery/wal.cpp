@@ -263,6 +263,35 @@ u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, con
     return lsn;
 }
 
+u64 WalManager::log_ddl(DdlOp op, u32 table_id, u32 aux, const String& object_name) {
+    struct __attribute__((packed)) DdlHdr {
+        u8  op;
+        u32 table_id;
+        u32 aux;
+        u16 name_len;
+    } hdr;
+    hdr.op = static_cast<u8>(op);
+    hdr.table_id = table_id;
+    hdr.aux = aux;
+    u32 name_len = object_name.size();
+    if (name_len > 0xffff) name_len = 0xffff;
+    hdr.name_len = static_cast<u16>(name_len);
+
+    u32 total = sizeof(hdr) + name_len;
+    byte* buf = static_cast<byte*>(std::malloc(total));
+    if (!buf) return 0;
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    if (name_len > 0) std::memcpy(buf + sizeof(hdr), object_name.c_str(), name_len);
+    u64 lsn = write_record(WalType::kDdl, 0, buf, total);
+    std::free(buf);
+    // DDL audit records are durable BY THE TIME the DDL call returns, so the
+    // user can rely on "if minidb ack'd the DROP, the log knows about it".
+    // Buffered-only would let a kill-9 between log_ddl and any later fsync
+    // throw away the marker.
+    if (lsn != 0) flush();
+    return lsn;
+}
+
 u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
     u32 key_size = key.serialized_size();
     if (key_size == 0 || key_size > 0xffff) return 0;

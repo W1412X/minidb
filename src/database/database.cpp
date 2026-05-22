@@ -313,6 +313,7 @@ bool Database::create_table(const String& name, const Schema& schema) {
     }
 
     save_catalog();
+    if (wal_) wal_->log_ddl(DdlOp::kCreateTable, tid, 0, name);
     return true;
 }
 
@@ -335,6 +336,7 @@ bool Database::drop_table(const String& name) {
     heap_files_.erase(table_id);
     page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
     save_catalog();
+    if (wal_) wal_->log_ddl(DdlOp::kDropTable, table_id, 0, name);
     return true;
 }
 
@@ -342,10 +344,12 @@ bool Database::drop_index(const String& name) {
     IndexEntry* index = catalog_.get_index(name);
     if (!index) return false;
     u32 index_id = index->index_id;
+    u32 table_id = index->table_id;
     if (!catalog_.drop_index(name)) return false;
     index_trees_.erase(index_id);
     page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
     save_catalog();
+    if (wal_) wal_->log_ddl(DdlOp::kDropIndex, table_id, index_id, name);
     return true;
 }
 
@@ -432,6 +436,7 @@ bool Database::create_index(const String& name, const String& table_name,
     IndexEntry* index = catalog_.get_index(name);
     rebuild_index(index);
     save_catalog();
+    if (wal_) wal_->log_ddl(DdlOp::kCreateIndex, table->table_id, index_id, name);
     return true;
 }
 
@@ -486,9 +491,15 @@ bool Database::alter_table_add_column(const String& table_name, const Column& co
         }
     }
 
+    u32 added_col_idx = table->schema.column_count();
     table->schema.add_column(column);
     save_catalog();
     checkpoint();
+    // log_ddl runs AFTER checkpoint because checkpoint truncates the WAL;
+    // writing the marker last guarantees it lives in the post-truncate
+    // region for any future repair pass to find.
+    if (wal_) wal_->log_ddl(DdlOp::kAlterAddColumn, table->table_id, added_col_idx,
+                            table_name + "." + column.name);
     return true;
 }
 
@@ -575,6 +586,8 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
     }
     save_catalog();
     checkpoint();
+    if (wal_) wal_->log_ddl(DdlOp::kAlterDropColumn, table->table_id, col_idx,
+                            table_name + "." + column_name);
     return true;
 }
 
@@ -597,6 +610,9 @@ bool Database::alter_table_rename_column(const String& table_name, const String&
     table->schema.rename_column(static_cast<u32>(old_idx), new_name);
     save_catalog();
     checkpoint();
+    if (wal_) wal_->log_ddl(DdlOp::kAlterRenameColumn, table->table_id,
+                            static_cast<u32>(old_idx),
+                            table_name + "." + old_name + "->" + new_name);
     return true;
 }
 

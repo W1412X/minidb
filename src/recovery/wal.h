@@ -25,6 +25,21 @@ enum class WalType : u16 {
     kIndexDelete = 14,
     kPageAlloc   = 20,
     kCheckpoint  = 30,
+    kDdl         = 40,    // DDL audit marker, see DdlOp below
+};
+
+// DDL operations that produce a kDdl record. The marker is purely an
+// audit trail today — recovery does not act on it yet — but it lets a
+// future repair pass detect orphaned files / half-finished schema
+// changes without scanning the entire filesystem. ACID_TODO D7.
+enum class DdlOp : u8 {
+    kCreateTable        = 1,
+    kDropTable          = 2,
+    kCreateIndex        = 3,
+    kDropIndex          = 4,
+    kAlterAddColumn     = 5,
+    kAlterDropColumn    = 6,
+    kAlterRenameColumn  = 7,
 };
 
 // Magic prefix on every WAL record. A torn or wild write that overwrites
@@ -63,6 +78,13 @@ public:
                    const byte* new_data, u16 size);
     u64 log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
     u64 log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
+    // Emit a kDdl audit record. `object_name` is the table/index/column
+    // affected by the operation; `aux` carries a secondary identifier
+    // (the column index for ALTER, the index id for CREATE/DROP INDEX,
+    // 0 otherwise). Records are written ON SUCCESS so a kDdl in the log
+    // means the operation reached its in-memory completion point — a
+    // future recovery pass can use that to repair orphaned files.
+    u64 log_ddl(DdlOp op, u32 table_id, u32 aux, const String& object_name);
 
     // Hook invoked inside `checkpoint()` while the WAL latch is held, after
     // the kCheckpoint record has been fsynced and before the log is
