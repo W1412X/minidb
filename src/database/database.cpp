@@ -85,6 +85,12 @@ Database::Database(const String& db_dir, const DbConfig& config)
                                                 config_.wal_group_commit,
                                                 config_.wal_group_commit_delay_ms));
     pool_->set_wal_manager(wal_.get());
+    // A1: hand the transaction manager its persistent CLOG. Lives next to
+    // the WAL directory so backups copy it together. Loading it here means
+    // any visibility check during recovery (e.g. via rebuild_all_indexes)
+    // already sees historical commit/abort state.
+    txn_manager_.set_status_log(
+        UniquePtr<TxnStatusLog>(new TxnStatusLog(db_dir + "/wal")));
     load_catalog();
     bool has_control = load_control_file();
     if (wal_->recover(this)) {

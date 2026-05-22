@@ -7,8 +7,10 @@
 #include "common/defs.h"
 #include "common/mutex.h"
 #include "container/vector.h"
+#include "container/unique_ptr.h"
 #include "index/btree.h"
 #include "record/value.h"
+#include "transaction/txn_status_log.h"
 
 namespace minidb {
 
@@ -104,6 +106,12 @@ public:
     TxnSlot* txn_slots() { return txn_slots_.data(); }
     u32 txn_slot_count() const { return txn_slots_.size(); }
 
+    // Access to the persistent xid → final-state log (A1). Lives behind a
+    // UniquePtr so the Database constructor can hand in the db_dir; nullptr
+    // when the manager runs without a backing directory (tests).
+    TxnStatusLog* status_log() const { return status_log_.get(); }
+    void set_status_log(UniquePtr<TxnStatusLog> log);
+
 private:
     TxnSlot* find_slot(u64 txn_id);
     TxnSlot* find_active_slot(u64 txn_id);
@@ -114,6 +122,7 @@ private:
     mutable Mutex latch_;
     Database* db_;
     u64 next_txn_id_;
+    UniquePtr<TxnStatusLog> status_log_;
 };
 
 } // namespace minidb

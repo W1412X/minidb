@@ -183,6 +183,10 @@ bool TransactionManager::commit(Transaction* txn) {
     txn->set_state(TxnState::kCommitted);
     latch_.unlock();
 
+    // A1: append to the persistent xid → status log so a later restart
+    // can still answer "did txn N commit?" after the slot is recycled.
+    if (status_log_) status_log_->record(txn_id, TxnFinalState::kCommitted);
+
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (u32 i = 0; i < undo_records.size(); i++) {
         const UndoRecord& rec = undo_records[i];
@@ -245,10 +249,16 @@ bool TransactionManager::rollback(Transaction* txn) {
     }
 
     txn->set_state(TxnState::kAborted);
+    u64 aborted_xid = txn->id();
     bool release_resource = txn->resource_acquired();
     delete txn;
     g_current_txn = nullptr;
     if (release_resource) db_->resources().release_transaction();
+    // A1: persist the abort. Doing this AFTER the slot is freed means a
+    // crash between rollback() returning and the next operation cannot lose
+    // the fact that the txn was aborted, even if the slot has since been
+    // reused.
+    if (status_log_) status_log_->record(aborted_xid, TxnFinalState::kAborted);
     return true;
 }
 
@@ -326,12 +336,18 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
     if (xmin_found) {
         if (xmin_state == TxnState::kActive) return false;   // not committed
         if (xmin_state == TxnState::kAborted) return false;  // rolled back
+    } else if (status_log_) {
+        // Slot recycled: ask the persistent CLOG (A1). A recorded ABORTED
+        // means we must not surface the tuple even though its xmin slot
+        // is gone — closing the "recycled slot defaults to committed" hole.
+        TxnFinalState s;
+        if (status_log_->status(xmin, &s) && s == TxnFinalState::kAborted) {
+            return false;
+        }
     }
-    // If the slot was recycled (txn_id reused by a newer txn) xmin_found
-    // is true but the state may be stale. Since slot recycling changes the
-
-    // stored txn_id, in practice the lookup fails and we treat it as 'not found'.
-    // A transaction that was active when our snapshot was taken is invisible.
+    // If the slot was recycled (txn_id reused by a newer txn) xmin_found is
+    // false here and neither the CLOG nor the snapshot mark it aborted —
+    // safe to treat as a long-since-committed transaction.
     if (was_active_in_snapshot(xmin)) return false;
 
     // Rule 1b: xmin must precede T's snapshot id.
@@ -410,6 +426,10 @@ void TransactionManager::ensure_next_txn_id_at_least(u64 next_id) {
 u64 TransactionManager::next_txn_id() const {
     LockGuard guard(latch_);
     return next_txn_id_;
+}
+
+void TransactionManager::set_status_log(UniquePtr<TxnStatusLog> log) {
+    status_log_ = static_cast<UniquePtr<TxnStatusLog>&&>(log);
 }
 
 } // namespace minidb
