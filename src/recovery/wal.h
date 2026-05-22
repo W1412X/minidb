@@ -27,7 +27,15 @@ enum class WalType : u16 {
     kCheckpoint  = 30,
 };
 
+// Magic prefix on every WAL record. A torn or wild write that overwrites
+// part of the log will almost certainly produce a header whose first four
+// bytes do not match this constant, so replay can stop cleanly instead of
+// re-interpreting garbage as a record.
+static constexpr u32 kWalRecordMagic = 0xD8BA110Cu;
+
 struct WalRecord {
+    u32     magic;     // == kWalRecordMagic
+    u32     crc;       // CRC32 over the header (with crc=0) and the payload
     u64     lsn;       // Log Sequence Number
     u64     txn_id;
     WalType type;

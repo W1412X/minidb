@@ -16,6 +16,29 @@
 
 namespace minidb {
 
+// Standard reflected CRC32 (IEEE 802.3 polynomial 0xEDB88320). The lookup
+// table is initialised once on first use. All WAL writes happen under the
+// WAL latch and recovery is single-threaded at startup, so the lazy
+// initialisation needs no extra synchronisation.
+static u32 wal_crc32(const byte* a, u32 la, const byte* b, u32 lb) {
+    static u32 table[256];
+    static bool inited = false;
+    if (!inited) {
+        for (u32 i = 0; i < 256; i++) {
+            u32 c = i;
+            for (int k = 0; k < 8; k++) {
+                c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            }
+            table[i] = c;
+        }
+        inited = true;
+    }
+    u32 crc = 0xFFFFFFFFu;
+    for (u32 i = 0; i < la; i++) crc = table[(crc ^ a[i]) & 0xff] ^ (crc >> 8);
+    for (u32 i = 0; i < lb; i++) crc = table[(crc ^ b[i]) & 0xff] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
+}
+
 static u32 value_to_wal_bytes(const Value& key, byte* out, u32 cap) {
     if (!out || cap < 1) return 0;
     u32 size = key.serialized_size();
@@ -97,10 +120,14 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     if (fd_ < 0) return 0;
 
     WalRecord hdr;
+    hdr.magic = kWalRecordMagic;
+    hdr.crc = 0;     // placeholder — included in the CRC as zero
     hdr.lsn = next_lsn_;
     hdr.txn_id = txn_id;
     hdr.type = type;
     hdr.data_len = data_len;
+    hdr.crc = wal_crc32(reinterpret_cast<const byte*>(&hdr), sizeof(hdr),
+                        data_len > 0 ? data : nullptr, data_len);
 
     if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) {
         return 0;
@@ -270,10 +297,13 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // log is truncated, so no other writer can sneak in records that
     // would later get clobbered by the truncate.
     WalRecord hdr;
+    hdr.magic = kWalRecordMagic;
+    hdr.crc = 0;
     hdr.lsn = next_lsn_;
     hdr.txn_id = 0;
     hdr.type = WalType::kCheckpoint;
     hdr.data_len = 0;
+    hdr.crc = wal_crc32(reinterpret_cast<const byte*>(&hdr), sizeof(hdr), nullptr, 0);
     if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) return 0;
     bytes_since_checkpoint_ += sizeof(hdr);
     next_lsn_++;
@@ -430,6 +460,31 @@ bool WalManager::recover(Database* db) {
 
     constexpr u32 kMaxReplayDataLen = kPageSize + 256;
 
+    // Reads one record header + payload from `fd`, verifies magic and CRC.
+    // Returns true only when the record is structurally intact; the caller
+    // stops the replay loop on false so a torn or corrupt tail is treated
+    // as end-of-log rather than re-interpreted as records.
+    auto read_record = [&](int read_fd, WalRecord* hdr_out,
+                           Vector<byte>* payload_out) -> bool {
+        if (!read_exact(read_fd, hdr_out, sizeof(WalRecord))) return false;
+        if (hdr_out->magic != kWalRecordMagic) return false;
+        if (hdr_out->data_len > kMaxReplayDataLen) return false;
+        payload_out->resize(hdr_out->data_len);
+        if (hdr_out->data_len > 0 &&
+            !read_exact(read_fd, payload_out->data(), hdr_out->data_len)) {
+            return false;
+        }
+        u32 stored_crc = hdr_out->crc;
+        WalRecord hdr_zero = *hdr_out;
+        hdr_zero.crc = 0;
+        u32 actual = wal_crc32(reinterpret_cast<const byte*>(&hdr_zero),
+                               sizeof(hdr_zero),
+                               hdr_out->data_len > 0 ? payload_out->data() : nullptr,
+                               hdr_out->data_len);
+        return actual == stored_crc;
+    };
+    (void)skip_bytes;   // skip_bytes kept for readability — every code path now reads payload
+
     auto page_lsn_at = [db](PageId page_id, LSN* out) -> bool {
         if (!db || !out || page_id == kNullPageId) return false;
         auto res = db->pool().fetch_page(page_id);
@@ -441,10 +496,10 @@ bool WalManager::recover(Database* db) {
     };
 
     WalRecord hdr;
-    while (read_exact(fd, &hdr, sizeof(hdr))) {
+    Vector<byte> scratch_payload;
+    while (read_record(fd, &hdr, &scratch_payload)) {
         max_lsn = hdr.lsn;
         if (hdr.txn_id > max_txn_id) max_txn_id = hdr.txn_id;
-        if (hdr.data_len > kMaxReplayDataLen || !skip_bytes(fd, hdr.data_len)) break;
         if (hdr.type == WalType::kTxnCommit) {
             committed[hdr.txn_id] = true;
         } else if (hdr.type == WalType::kTxnAbort) {
@@ -459,20 +514,16 @@ bool WalManager::recover(Database* db) {
             return false;
         }
 
-        while (read_exact(fd, &hdr, sizeof(hdr))) {
-            if (hdr.data_len > kMaxReplayDataLen) break;
-            off_t data_offset = lseek(fd, 0, SEEK_CUR);
+        Vector<byte> data;
+        while (read_record(fd, &hdr, &data)) {
+            off_t data_offset = lseek(fd, 0, SEEK_CUR) -
+                                static_cast<off_t>(hdr.data_len);
             bool is_data_record = hdr.type == WalType::kInsert ||
                                   hdr.type == WalType::kDelete ||
                                   hdr.type == WalType::kUpdate;
             if (!is_data_record) {
-                if (!skip_bytes(fd, hdr.data_len)) break;
                 continue;
             }
-
-            Vector<byte> data;
-            data.resize(hdr.data_len);
-            if (hdr.data_len > 0 && !read_exact(fd, data.data(), hdr.data_len)) break;
             const bool* is_committed = committed.find(hdr.txn_id);
             if (!(is_committed && *is_committed)) {
                 ReplayRef ref;
