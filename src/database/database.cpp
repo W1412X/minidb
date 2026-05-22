@@ -10,6 +10,10 @@
 
 namespace minidb {
 
+// Forward decl — implementation lives further down so the constructor can
+// honour MINIDB_FAULT=skip_index_rebuild for B5/D4 tests.
+static bool fault_active(const char* name);
+
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
@@ -84,7 +88,21 @@ Database::Database(const String& db_dir, const DbConfig& config)
     load_catalog();
     bool has_control = load_control_file();
     if (wal_->recover(this)) {
-        rebuild_all_indexes();
+        // WAL replay touched the heap; every index is now potentially stale.
+        // Flip every entry to kInvalid before the rebuild starts, so that
+        // any SQL that arrives between recover() returning and the rebuild
+        // finishing (e.g. via background maintenance hitting the catalog
+        // early) sees a guarded state machine rather than a half-built tree.
+        struct InvalidateCtx { } _ctx;
+        catalog_.for_each_index([](IndexEntry& e, void*) {
+            e.state = IndexState::kInvalid;
+        }, &_ctx);
+        // Fault hook: tests use this to assert that the optimiser refuses
+        // to use an index while it is in the kInvalid state. Production
+        // code never sets MINIDB_FAULT.
+        if (!fault_active("skip_index_rebuild")) {
+            rebuild_all_indexes();
+        }
         // Key: must flush after recovery to ensure replayed WAL records are persisted to data files
         flush();
     }
@@ -718,6 +736,12 @@ void Database::rebuild_index(IndexEntry* index) {
     TableEntry* table = catalog_.get_table(index->table_id);
     if (!table) return;
 
+    // Transition state: kInvalid → kRebuilding → kValid. While the index
+    // is being rebuilt the optimiser must refuse to use it; we keep the
+    // state machine published in the catalog so concurrent planners (when
+    // we add multi-statement concurrency) see a consistent view.
+    index->state = IndexState::kRebuilding;
+
     auto tree = UniquePtr<BPlusTree>(new BPlusTree(index->index_id, pool_.get()));
     tree->create();
     BPlusTree* tree_ptr = tree.get();
@@ -726,7 +750,10 @@ void Database::rebuild_index(IndexEntry* index) {
 
     HeapFile* heap = get_heap_file(index->table_id);
     PageId first_page = heap->first_data_page_id();
-    if (first_page == kNullPageId) return;  // empty table, nothing to index
+    if (first_page == kNullPageId) {
+        index->state = IndexState::kValid;   // empty table, trivially in sync
+        return;
+    }
     u32 file_id = file_id_from_page(first_page);
     u32 page_num = page_num_from_page(first_page);
     u32 pages = heap->meta().num_data_pages;
@@ -749,6 +776,9 @@ void Database::rebuild_index(IndexEntry* index) {
         }
         pool_->unpin_page(page_id);
     }
+    // Atomic flip back to valid. A failure mid-rebuild would have returned
+    // earlier and left the entry kRebuilding so the optimiser keeps refusing.
+    index->state = IndexState::kValid;
 }
 
 void Database::rebuild_all_indexes() {

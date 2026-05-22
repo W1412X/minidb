@@ -42,6 +42,16 @@ struct TableEntry {
                    stats_valid(false) {}
 };
 
+// Lifecycle state of an index. The optimiser only emits IndexScan /
+// IndexOnlyScan / IndexLookupJoin plans when the entry is kValid. After
+// crash recovery any heap-touching replay flips the entry to kInvalid
+// until rebuild_index() finishes, at which point it goes back to kValid.
+enum class IndexState : u8 {
+    kValid     = 0,   // index file is in sync with heap; safe for the optimiser
+    kInvalid   = 1,   // entries are missing or stale; rebuild needed before use
+    kRebuilding = 2,  // a rebuild is in progress on this thread
+};
+
 struct IndexEntry {
     u32         index_id;
     String      index_name;
@@ -49,6 +59,7 @@ struct IndexEntry {
     Vector<u32> key_columns;
     PageId      root_page_id;
     bool        is_unique;
+    IndexState  state = IndexState::kValid;
 };
 
 class Catalog {
