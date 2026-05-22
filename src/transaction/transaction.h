@@ -29,6 +29,7 @@ enum class UndoType : u8 {
     kDdlCreateIndex     = 12,   // undo = drop index + file
     kDdlDropIndex       = 13,   // undo = restore index + rebuild from heap
     kDdlAlterAddColumn  = 14,   // undo = remove the added column
+    kDdlAlterDropColumn = 15,   // undo = clear is_dropped flag on the column
     kDdlAlterRenameColumn = 16, // undo = rename column back to original
 };
 

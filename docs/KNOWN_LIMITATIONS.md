@@ -35,14 +35,17 @@ This list is intentionally explicit so production users know where MiniDB still 
 
 ## DDL semantics
 
-- DDL is **transactional** for most operations. `CREATE TABLE`,
-  `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE ADD COLUMN`,
-  and `ALTER TABLE RENAME COLUMN` inside a `BEGIN..ROLLBACK` block are
-  fully undone: catalog entries are restored, physical files are cleaned
-  up (or restored from deferred deletion).
-- `ALTER TABLE DROP COLUMN` is the exception: it rewrites heap data
-  in-place and requires an **implicit commit** before execution. A
-  `ROLLBACK` after this DDL reports "no active transaction".
+- DDL is **fully transactional**. `CREATE TABLE`, `DROP TABLE`,
+  `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE ADD COLUMN`,
+  `ALTER TABLE DROP COLUMN`, and `ALTER TABLE RENAME COLUMN` inside a
+  `BEGIN..ROLLBACK` block are fully undone: catalog entries are
+  restored, physical files are cleaned up (or restored from deferred
+  deletion).
+- `ALTER TABLE DROP COLUMN` uses PostgreSQL-style **metadata-only
+  deletion**: the column is marked as logically dropped (`is_dropped`
+  flag) without rewriting heap data. Physical tuple slots are preserved;
+  new rows store NULL in dropped slots. This makes the operation O(1)
+  regardless of table size and fully transactional.
 - Crash between DDL execution and COMMIT/ROLLBACK may leave the catalog
   in the post-DDL state even if the transaction was never committed.
   This is a documented limitation for single-node educational use.

@@ -475,19 +475,8 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
 
-    // Transactional DDL: most DDL operations now participate in the
-    // active transaction and can be rolled back. Only ALTER TABLE DROP
-    // COLUMN requires an implicit commit because it rewrites heap data
-    // in-place and cannot be undone.
-    if (stmt.type == StmtType::kAlterTable && stmt.alter_table &&
-        stmt.alter_table->alter_type == AlterType::kDropColumn &&
-        db_.txn_manager().current()) {
-        Transaction* txn = db_.txn_manager().current();
-        if (!db_.txn_manager().commit(txn)) {
-            printf("Error: implicit commit before DDL failed.\n\n");
-            return;
-        }
-    }
+    // Transactional DDL: all DDL including ALTER TABLE DROP COLUMN is
+    // now fully transactional (metadata-only drop, no implicit commit).
 
     // DESC TABLE
     if (stmt.type == StmtType::kDescTable && stmt.desc_table) {
@@ -502,6 +491,7 @@ void REPL::execute_sql(const String& sql) {
         printf("---- -------------------- ---------- -------- -------- --------\n");
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* type_str = "?";
             switch (c.type) {
                 case TypeId::kBool:    type_str = "BOOL"; break;

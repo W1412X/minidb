@@ -82,6 +82,7 @@ public:
     void undo_create_index(u32 table_id, const DdlUndoInfo& info);
     void undo_drop_index(u32 table_id, const DdlUndoInfo& info);
     void undo_alter_add_column(u32 table_id, const DdlUndoInfo& info);
+    void undo_alter_drop_column(u32 table_id, const DdlUndoInfo& info);
     void undo_alter_rename_column(u32 table_id, const DdlUndoInfo& info);
     // Delete files deferred by DROP TABLE/INDEX inside a committed txn.
     void commit_ddl_deferred(const Vector<DdlUndoInfo>& ddl_infos);

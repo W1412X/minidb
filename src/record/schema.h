@@ -18,6 +18,13 @@ struct Column {
     bool   not_null;
     bool   is_primary;
     bool   is_unique;
+    // PostgreSQL-style logical column deletion. When true the column is
+    // invisible to user queries (SELECT *, column name lookup, INSERT
+    // implicit column list, DESC TABLE) but the physical tuple slot is
+    // preserved — existing data stays untouched, new rows store NULL in
+    // the dropped slot. This makes ALTER TABLE DROP COLUMN a metadata-only
+    // O(1) operation and fully transactional (rollback just clears the flag).
+    bool   is_dropped;
     // Declared maximum length for VARCHAR(n). 0 means "unbounded" — either
     // TEXT or VARCHAR with no length (lexer parses both into kVarchar).
     // Stored as u32 so it round-trips through schema serialisation; the
@@ -31,10 +38,10 @@ struct Column {
     String check_expr;
 
     Column() : type(TypeId::kNull), not_null(false), is_primary(false),
-               is_unique(false), varchar_length(0) {}
+               is_unique(false), is_dropped(false), varchar_length(0) {}
     Column(const String& n, TypeId t, bool nn = false, bool pk = false)
         : name(n), type(t), not_null(nn), is_primary(pk),
-          is_unique(false), varchar_length(0) {}
+          is_unique(false), is_dropped(false), varchar_length(0) {}
 
     // Parse the textual default into a Value of this column's type. Returns
     // an explicit NULL Value when no default is declared so callers can
@@ -54,6 +61,9 @@ public:
     int get_column_index(const String& name) const;
     int get_column_index(const String& table, const String& column) const;
     u32 column_count() const { return columns_.size(); }
+    // Number of user-visible (non-dropped) columns.
+    u32 visible_column_count() const;
+    bool has_dropped_columns() const;
     bool empty() const { return columns_.empty(); }
 
     // Check a row against per-column constraints. Returns nullptr when the

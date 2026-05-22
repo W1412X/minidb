@@ -605,12 +605,17 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
         set_alter_error(error, "table not found");
         return false;
     }
+    // get_column_index already skips is_dropped columns, so re-dropping
+    // a previously dropped column is rejected ("column not found").
     int col_idx_raw = table->schema.get_column_index(column_name);
     if (col_idx_raw < 0) {
         set_alter_error(error, "column not found");
         return false;
     }
     u32 col_idx = static_cast<u32>(col_idx_raw);
+
+    // Reject dropping a column that participates in an index — user must
+    // DROP INDEX first, same as PostgreSQL.
     Vector<IndexEntry*> indexes = catalog_.get_indexes(table->table_id);
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
@@ -623,66 +628,28 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
         }
     }
 
-    Schema old_schema = table->schema;
-    HeapFile* heap = get_heap_file(table->table_id);
-    PageId first_page = heap->first_data_page_id();
-    if (first_page != kNullPageId) {
-        u32 file_id = file_id_from_page(first_page);
-        u32 page_num = page_num_from_page(first_page);
-        u32 pages = heap->meta().num_data_pages;
-        for (u32 p = 0; p < pages; p++, page_num++) {
-            PageId page_id = make_page_id(file_id, page_num);
-            auto result = pool_->fetch_page(page_id, true);
-            if (!result.ok()) continue;
-            Page* page = result.value();
-            u16 num_tuples = page->header()->num_tuples;
-            for (u16 slot = 0; slot < num_tuples; slot++) {
-                LinePointer* lp = page->line_pointer(slot);
-                if (!lp || !lp->is_valid()) continue;
-                Tuple old_tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
-                                                               old_schema, lp->length);
-                Vector<Value> values;
-                for (u32 c = 0; c < old_tuple.column_count(); c++) {
-                    if (c == col_idx) continue;
-                    values.push_back(old_tuple.get_value(c));
-                }
-                Tuple new_tuple;
-                Schema new_schema = old_schema;
-                new_schema.remove_column(col_idx);
-                new_tuple = Tuple(new_schema, values);
-                new_tuple.set_xmin(old_tuple.xmin());
-                new_tuple.set_xmax(old_tuple.xmax());
-                new_tuple.set_next_version(old_tuple.next_version_page(),
-                                           old_tuple.next_version_slot());
-                u32 serialized_size = new_tuple.serialized_size();
-                if (serialized_size > lp->length || serialized_size > kPageSize) {
-                    pool_->unpin_page(page_id);
-                    set_alter_error(error, "failed to rewrite tuple layout");
-                    return false;
-                }
-                byte buffer[kPageSize];
-                byte* end = new_tuple.serialize_to_page(buffer);
-                u16 len = static_cast<u16>(end - buffer);
-                std::memcpy(page->data() + lp->offset, buffer, len);
-                lp->length = len;
-            }
-            pool_->mark_dirty(page_id);
-            pool_->unpin_page(page_id);
-        }
-    }
-
-    table->schema.remove_column(col_idx);
-    for (u32 i = 0; i < indexes.size(); i++) {
-        IndexEntry* index = indexes[i];
-        if (!index) continue;
-        for (u32 k = 0; k < index->key_columns.size(); k++) {
-            if (index->key_columns[k] > col_idx) index->key_columns[k]--;
-        }
-    }
+    // PostgreSQL-style metadata-only DROP COLUMN: mark the column as
+    // logically dropped. Physical tuple data stays unchanged — existing
+    // rows still carry the old value, new rows store NULL in this slot.
+    // No heap scan required, O(1) regardless of table size.
+    // Column positions (used by indexes, tuple layout, etc.) do NOT shift.
+    u32 tid = table->table_id;
+    Column& col = const_cast<Column&>(table->schema.get_column(col_idx));
+    col.is_dropped = true;
     save_catalog();
     checkpoint();
-    if (wal_) wal_->log_ddl(DdlOp::kAlterDropColumn, table->table_id, col_idx,
+    if (wal_) wal_->log_ddl(DdlOp::kAlterDropColumn, tid, col_idx,
                             table_name + "." + column_name);
+
+    // Record DDL undo if inside a transaction — rollback clears is_dropped.
+    Transaction* txn = txn_manager_.current();
+    if (txn) {
+        DdlUndoInfo info;
+        info.table_name = table_name;
+        info.column_position = col_idx;
+        txn->record_ddl(UndoType::kDdlAlterDropColumn, tid,
+                        static_cast<DdlUndoInfo&&>(info));
+    }
     return true;
 }
 
@@ -787,7 +754,20 @@ void Database::undo_alter_add_column(u32 table_id, const DdlUndoInfo& info) {
         table->schema.remove_column(info.column_position);
     }
     save_catalog();
-    checkpoint();
+    // No checkpoint() here — undo runs under the TransactionManager latch
+    // and checkpoint() acquires the WAL latch, risking deadlock with the
+    // background maintenance thread. The next regular checkpoint persists
+    // the catalog change.
+}
+
+void Database::undo_alter_drop_column(u32 table_id, const DdlUndoInfo& info) {
+    // Reverse a metadata-only DROP COLUMN: clear the is_dropped flag.
+    TableEntry* table = catalog_.get_table(table_id);
+    if (table && info.column_position < table->schema.column_count()) {
+        Column& col = const_cast<Column&>(table->schema.get_column(info.column_position));
+        col.is_dropped = false;
+    }
+    save_catalog();
 }
 
 void Database::undo_alter_rename_column(u32 table_id, const DdlUndoInfo& info) {
@@ -796,7 +776,6 @@ void Database::undo_alter_rename_column(u32 table_id, const DdlUndoInfo& info) {
         table->schema.rename_column(info.column_position, info.rename_from);
     }
     save_catalog();
-    checkpoint();
 }
 
 void Database::commit_ddl_deferred(const Vector<DdlUndoInfo>& ddl_infos) {

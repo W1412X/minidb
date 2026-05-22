@@ -29,7 +29,8 @@ user-facing summary; this file is the engineering plan.
        — covered by tests/acid/durability/recovery_smoke.sh
 [x] DDL transactionality: PostgreSQL-style transactional DDL (reverse-op undo)
        — tests/acid/atomicity/ddl_implicit_commit.py
-       — ALTER TABLE DROP COLUMN still requires implicit commit (heap rewrite)
+       — All DDL fully transactional including ALTER TABLE DROP COLUMN
+         (metadata-only, PostgreSQL-style is_dropped flag)
 [~] ALTER TABLE crash-safety: limited (see LSN watermark fix, DROP COLUMN works after restart)
 [~] UNIQUE/PK semantics under concurrency + crash: documented per case
 [ ] HOT semantics: documented as "HOT-style same-page chain, indexes
@@ -144,8 +145,8 @@ user-facing summary; this file is the engineering plan.
 [ ] Undo for unique reservation
 [ ] Undo for page allocation
 [x] Undo for catalog create / drop / alter (DDL undo via reverse-op log)
-       — CREATE/DROP TABLE/INDEX, ALTER ADD/RENAME COLUMN rolled back on ROLLBACK
-       — ALTER DROP COLUMN still uses implicit commit (irreversible heap rewrite)
+       — All DDL rolled back on ROLLBACK including DROP COLUMN
+         (metadata-only is_dropped flag, no heap rewrite)
 [ ] Mid-rollback crash continuation (currently restart redoes the abort,
     which is idempotent — formalise + test)
 [x] rollback releases row + table + key locks (LockManager::unlock_all)
@@ -556,10 +557,11 @@ user-facing summary; this file is the engineering plan.
 [ ] ADD COLUMN NOT NULL validation: rejects when table has rows w/o default
 [x] ADD COLUMN rollback (transactional DDL undo)
 [~] ADD COLUMN crash recovery
-[~] DROP COLUMN tuple layout rewrite in place
+[x] DROP COLUMN metadata-only (PostgreSQL-style is_dropped flag, O(1))
 [x] DROP COLUMN crash-safe across restart
        — tests/regression/lsn_watermark_restart.py
-[~] DROP COLUMN rollback (irreversible heap rewrite; implicit commit used)
+[x] DROP COLUMN rollback (transactional DDL undo — clears is_dropped)
+       — tests/acid/atomicity/ddl_implicit_commit.py
 [ ] RENAME COLUMN dependency update (expressions reparse on next plan)
 [x] RENAME COLUMN rollback (transactional DDL undo)
 [ ] ALTER TABLE schema version bumped on success

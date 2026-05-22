@@ -564,18 +564,10 @@ String Server::execute_sql(const String& sql) {
         return result;
     }
 
-    // Transactional DDL: most DDL operations now participate in the
-    // active transaction and can be rolled back. Only ALTER TABLE DROP
-    // COLUMN requires an implicit commit because it rewrites heap data
-    // in-place and cannot be undone.
-    if (stmt.type == StmtType::kAlterTable && stmt.alter_table &&
-        stmt.alter_table->alter_type == AlterType::kDropColumn &&
-        db_.txn_manager().current()) {
-        Transaction* txn = db_.txn_manager().current();
-        if (!db_.txn_manager().commit(txn)) {
-            return String("Error: implicit commit before DDL failed.\n");
-        }
-    }
+    // Transactional DDL: all DDL operations including ALTER TABLE DROP
+    // COLUMN now participate in the active transaction. DROP COLUMN uses
+    // PostgreSQL-style metadata-only deletion (is_dropped flag) and no
+    // longer requires an implicit commit.
 
     if (stmt.type == StmtType::kShowTables) {
         result = String("Tables:\n");
@@ -752,6 +744,7 @@ String Server::execute_sql(const String& sql) {
         result += buf;
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* type_str = "?";
             switch (c.type) {
                 case TypeId::kBool: type_str = "BOOL"; break;
@@ -914,17 +907,8 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         else send_str("Error: no active transaction.\n");
         return 0;
     }
-    // Transactional DDL: only ALTER TABLE DROP COLUMN needs implicit
-    // commit (see the non-streaming sibling path for the rationale).
-    if (stmt.type == StmtType::kAlterTable && stmt.alter_table &&
-        stmt.alter_table->alter_type == AlterType::kDropColumn &&
-        db_.txn_manager().current()) {
-        Transaction* txn = db_.txn_manager().current();
-        if (!db_.txn_manager().commit(txn)) {
-            send_str("Error: implicit commit before DDL failed.\n");
-            return 0;
-        }
-    }
+    // Transactional DDL: all DDL including ALTER TABLE DROP COLUMN is
+    // now fully transactional (metadata-only drop, no implicit commit).
 
     if (stmt.type == StmtType::kShowTables) {
         String result = "Tables:\n";
@@ -1054,6 +1038,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         result += buf;
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* ts = "?";
             switch (c.type) { case TypeId::kBool: ts="BOOL"; break; case TypeId::kInt32: ts="INT"; break; case TypeId::kInt64: ts="BIGINT"; break; case TypeId::kFloat: ts="FLOAT"; break; case TypeId::kDouble: ts="DOUBLE"; break; case TypeId::kVarchar: ts="VARCHAR"; break; default: ts="UNKNOWN"; break; }
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n", i, c.name.c_str(), ts, c.not_null?"YES":"NO", c.is_primary?"YES":"NO", c.is_unique?"YES":"NO");

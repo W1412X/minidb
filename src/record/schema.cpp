@@ -35,12 +35,29 @@ void Schema::add_column(const Column& col) {
     columns_.push_back(col);
 }
 
+u32 Schema::visible_column_count() const {
+    u32 count = 0;
+    for (u32 i = 0; i < columns_.size(); i++) {
+        if (!columns_[i].is_dropped) count++;
+    }
+    return count;
+}
+
+bool Schema::has_dropped_columns() const {
+    for (u32 i = 0; i < columns_.size(); i++) {
+        if (columns_[i].is_dropped) return true;
+    }
+    return false;
+}
+
 const char* Schema::validate_row(const Vector<Value>& row) const {
     if (row.size() != columns_.size()) {
         return "row column count does not match table schema";
     }
     for (u32 i = 0; i < columns_.size(); i++) {
         const Column& col = columns_[i];
+        // Dropped columns hold NULL — skip constraint checks.
+        if (col.is_dropped) continue;
         if (col.not_null && row[i].is_null()) {
             return "NOT NULL constraint violated";
         }
@@ -72,6 +89,7 @@ const Column& Schema::get_column(u32 idx) const {
 
 int Schema::get_column_index(const String& name) const {
     for (u32 i = 0; i < columns_.size(); i++) {
+        if (columns_[i].is_dropped) continue;
         if (columns_[i].name == name) return static_cast<int>(i);
     }
     return -1;
@@ -79,6 +97,7 @@ int Schema::get_column_index(const String& name) const {
 
 int Schema::get_column_index(const String& table, const String& column) const {
     for (u32 i = 0; i < columns_.size(); i++) {
+        if (columns_[i].is_dropped) continue;
         if (columns_[i].name == column) {
             if (columns_[i].table_name.empty() || columns_[i].table_name == table) {
                 return static_cast<int>(i);
@@ -111,9 +130,10 @@ byte* Schema::serialize(byte* buf) const {
         // type
         *buf = static_cast<byte>(col.type);
         buf++;
-        // flags
+        // flags — bit 0: not_null, bit 1: is_primary, bit 2: is_unique,
+        //         bit 3: is_dropped (PostgreSQL-style logical deletion)
         byte flags = (col.not_null ? 1 : 0) | (col.is_primary ? 2 : 0) |
-                     (col.is_unique ? 4 : 0);
+                     (col.is_unique ? 4 : 0) | (col.is_dropped ? 8 : 0);
         *buf = flags;
         buf++;
         // default_value
@@ -179,6 +199,7 @@ Schema Schema::deserialize(const byte* buf, u32 length) {
         col.not_null = (flags & 1) != 0;
         col.is_primary = (flags & 2) != 0;
         col.is_unique = (flags & 4) != 0;
+        col.is_dropped = (flags & 8) != 0;
         // default_value
         if (cur + 2 > end) { schema.add_column(col); continue; }
         u16 def_len;

@@ -333,6 +333,9 @@ static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn
             case UndoType::kDdlAlterAddColumn:
                 db->undo_alter_add_column(rec.table_id, *ddl_info);
                 break;
+            case UndoType::kDdlAlterDropColumn:
+                db->undo_alter_drop_column(rec.table_id, *ddl_info);
+                break;
             case UndoType::kDdlAlterRenameColumn:
                 db->undo_alter_rename_column(rec.table_id, *ddl_info);
                 break;

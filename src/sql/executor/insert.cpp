@@ -53,6 +53,7 @@ static const char* check_constraint_violation(const Schema& schema,
     Tuple candidate(schema, row);
     for (u32 c = 0; c < schema.column_count(); c++) {
         const Column& col = schema.get_column(c);
+        if (col.is_dropped) continue;
         if (col.check_expr.empty()) continue;
         String wrapped("SELECT ");
         wrapped += col.check_expr;

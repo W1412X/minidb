@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Transactional DDL: CREATE/DROP TABLE/INDEX participate in transactions.
+"""Transactional DDL: all DDL operations participate in transactions.
 
-MiniDB now supports PostgreSQL-style transactional DDL: schema changes
+MiniDB supports PostgreSQL-style transactional DDL: schema changes
 inside BEGIN..COMMIT/ROLLBACK are part of the transaction and can be
 undone on rollback.
+
+ALTER TABLE DROP COLUMN uses metadata-only deletion (is_dropped flag)
+like PostgreSQL — no heap rewrite, O(1), fully transactional.
 
 The test pins:
   1. CREATE TABLE inside a transaction is rolled back: table does not exist.
@@ -11,7 +14,9 @@ The test pins:
   3. CREATE INDEX inside a transaction is rolled back: index does not exist.
   4. INSERT + CREATE TABLE interleaved, then ROLLBACK: both undone.
   5. DDL outside a transaction still works (auto-committed).
-  6. ALTER TABLE DROP COLUMN still does implicit commit (heap rewrite is irreversible).
+  6. ALTER TABLE DROP COLUMN is transactional: column reappears after ROLLBACK.
+  7. DROP COLUMN + DML interleaved, then ROLLBACK: all undone.
+  8. DROP COLUMN + COMMIT: column stays dropped, new rows work.
 """
 
 from __future__ import annotations
@@ -115,28 +120,62 @@ def main() -> int:
         if "Error" in baz_check:
             raise AssertionError(f"baz table not accessible: {baz_check}")
 
-        # ---- 6. ALTER TABLE DROP COLUMN still does implicit commit -------
+        # ---- 6. ALTER TABLE DROP COLUMN + ROLLBACK → column reappears ----
+        # DROP COLUMN is now metadata-only (PostgreSQL-style) and fully
+        # transactional. The column should reappear after ROLLBACK with
+        # all original data intact.
         run_minidb(args.bin, db, [
             "ALTER TABLE baz ADD COLUMN a INT;",
             "ALTER TABLE baz ADD COLUMN b INT;",
+            "INSERT INTO baz VALUES (1, 10, 20);",
         ])
         out7 = run_minidb(args.bin, db, [
             "BEGIN;",
-            "INSERT INTO baz VALUES (1, 10, 20);",
-            "ALTER TABLE baz DROP COLUMN b;",   # implicit commit here
-            "ROLLBACK;",                         # no active txn -> error msg
+            "ALTER TABLE baz DROP COLUMN b;",
+            "ROLLBACK;",
         ])
-        if "no active transaction" not in out7:
+        if "rolled back" not in out7.lower():
             raise AssertionError(
-                f"ALTER DROP COLUMN should still do implicit commit: {out7}")
-        # The INSERT committed via implicit commit.
-        rows = minidb_query(args.bin, db, "SELECT z FROM baz;", seed)
-        if rows != [("1",)]:
+                f"DROP COLUMN transaction did not rollback cleanly: {out7}")
+        # After rollback, column b should still be visible.
+        rows = minidb_query(args.bin, db, "SELECT b FROM baz;", seed)
+        if rows != [("20",)]:
             raise AssertionError(
-                f"pre-DDL INSERT was lost after implicit commit: {rows}")
+                f"DROP COLUMN was not rolled back — column b missing or wrong: {rows}")
+
+        # ---- 7. DROP COLUMN + DML interleaved + ROLLBACK → all undone ----
+        out8 = run_minidb(args.bin, db, [
+            "BEGIN;",
+            "INSERT INTO baz VALUES (2, 30, 40);",
+            "ALTER TABLE baz DROP COLUMN a;",
+            "INSERT INTO baz VALUES (3, 50);",    # only z and b after drop
+            "ROLLBACK;",
+        ])
+        # All changes should be rolled back: only the original row remains.
+        rows = minidb_query(args.bin, db, "SELECT z, a, b FROM baz ORDER BY z;", seed)
+        if rows != [("1", "10", "20")]:
+            raise AssertionError(
+                f"Interleaved DML+DROP COLUMN not fully rolled back: {rows}")
+
+        # ---- 8. DROP COLUMN + COMMIT → column stays dropped, new rows work
+        out9 = run_minidb(args.bin, db, [
+            "BEGIN;",
+            "ALTER TABLE baz DROP COLUMN b;",
+            "INSERT INTO baz VALUES (4, 60);",    # only z and a after drop
+            "COMMIT;",
+        ])
+        rows = minidb_query(args.bin, db, "SELECT z, a FROM baz ORDER BY z;", seed)
+        if ("4", "60") not in rows:
+            raise AssertionError(
+                f"DROP COLUMN + COMMIT did not persist: {rows}")
+        # Column b should no longer be accessible.
+        b_check = run_minidb(args.bin, db, ["SELECT b FROM baz;"])
+        if "Error" not in b_check and "not found" not in b_check.lower():
+            raise AssertionError(
+                f"Dropped column b still accessible after COMMIT: {b_check}")
 
         print(f"ddl_implicit_commit PASS seed={seed} "
-              f"(transactional DDL: CREATE/DROP rollback works)")
+              f"(all DDL transactional, including metadata-only DROP COLUMN)")
         return 0
     except Exception as exc:
         print(f"ddl_implicit_commit FAIL seed={seed}: {exc}", file=sys.stderr)

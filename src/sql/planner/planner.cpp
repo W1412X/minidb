@@ -473,6 +473,34 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         order_applied_before_projection = true;
     }
 
+    // SELECT * with dropped columns: expand into an explicit projection
+    // that skips the invisible columns. This keeps the rest of the planner
+    // and executor unaware of dropped columns — they only see visible ones.
+    // Note: is_star stays true so the existing non-star projection block
+    // (which re-processes stmt.select_list) is correctly skipped.
+    if (is_star && merged_schema.has_dropped_columns()) {
+        Vector<UniquePtr<Expression>> exprs;
+        Schema out_schema;
+        for (u32 i = 0; i < merged_schema.column_count(); i++) {
+            const Column& col = merged_schema.get_column(i);
+            if (col.is_dropped) continue;
+            auto e = make_unique<Expression>();
+            e->type = ExprType::kColumnRef;
+            e->column_name = col.name;
+            e->table_name = col.table_name;
+            exprs.push_back(UniquePtr<Expression>(e.release()));
+            out_schema.add_column(col);
+        }
+        if (!exprs.empty()) {
+            auto proj = make_unique<ProjectPlan>();
+            proj->child = UniquePtr<PlanNode>(current.release());
+            proj->expressions = static_cast<Vector<UniquePtr<Expression>>&&>(exprs);
+            proj->output_schema = out_schema;
+            current = UniquePtr<PlanNode>(proj.release());
+            merged_schema = out_schema;
+        }
+    }
+
     if (!is_star && !has_aggregate(stmt.select_list)) {
         Vector<UniquePtr<Expression>> exprs;
         Schema out_schema;
@@ -485,12 +513,14 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
                 } else {
                     idx = merged_schema.get_column_index(expr->column_name);
                 }
-                if (idx >= 0) {
-                    exprs.push_back(UniquePtr<Expression>(expr->clone()));
-                    Column out_col = merged_schema.get_column(static_cast<u32>(idx));
-                    if (!expr->alias.empty()) out_col.name = expr->alias;
-                    out_schema.add_column(out_col);
+                if (idx < 0) {
+                    // Column not found (or dropped) — reject the query.
+                    return UniquePtr<PlanNode>();
                 }
+                exprs.push_back(UniquePtr<Expression>(expr->clone()));
+                Column out_col = merged_schema.get_column(static_cast<u32>(idx));
+                if (!expr->alias.empty()) out_col.name = expr->alias;
+                out_schema.add_column(out_col);
             } else {
                 // Table expression projection (a+1, b*2, function calls, etc.)
                 exprs.push_back(UniquePtr<Expression>(expr->clone()));
@@ -555,8 +585,13 @@ UniquePtr<PlanNode> Planner::plan_insert(const InsertStmt& stmt) {
 
     Vector<u32> target_columns;
     if (stmt.columns.empty()) {
+        // Implicit column list: only visible (non-dropped) columns.
+        // Dropped columns keep their physical slot but are invisible to
+        // the user — new rows store NULL in those positions.
         for (u32 i = 0; i < table->schema.column_count(); i++) {
-            target_columns.push_back(i);
+            if (!table->schema.get_column(i).is_dropped) {
+                target_columns.push_back(i);
+            }
         }
     } else {
         for (u32 i = 0; i < stmt.columns.size(); i++) {
