@@ -8,6 +8,7 @@
 #include "record/tuple.h"
 #include "record/schema.h"
 #include "index/btree.h"
+#include <atomic>
 #include <chrono>
 
 namespace minidb {
@@ -15,6 +16,12 @@ namespace minidb {
 inline thread_local const char* g_executor_error_message = nullptr;
 inline thread_local bool g_executor_has_deadline = false;
 inline thread_local std::chrono::steady_clock::time_point g_executor_deadline;
+
+// SIGINT-driven cancellation flag. Lives in a global atomic so a signal
+// handler can poke it safely, while the executor loop polls it on every
+// `executor_cancelled()` call (already on the per-row hot path). Cleared
+// by `clear_executor_interrupt()` before each statement.
+inline std::atomic<bool> g_executor_interrupted{false};
 
 inline void clear_executor_error() {
     g_executor_error_message = nullptr;
@@ -38,7 +45,20 @@ inline void set_executor_deadline_ms(u64 timeout_ms) {
                           std::chrono::milliseconds(timeout_ms);
 }
 
+// SIGINT entry point. async-signal-safe: only sets an atomic bool.
+inline void request_executor_interrupt() {
+    g_executor_interrupted.store(true, std::memory_order_relaxed);
+}
+
+inline void clear_executor_interrupt() {
+    g_executor_interrupted.store(false, std::memory_order_relaxed);
+}
+
 inline bool executor_cancelled() {
+    if (g_executor_interrupted.load(std::memory_order_relaxed)) {
+        set_executor_error("interrupted");
+        return true;
+    }
     if (!g_executor_has_deadline) return false;
     if (std::chrono::steady_clock::now() < g_executor_deadline) return false;
     set_executor_error("statement timeout");

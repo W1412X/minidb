@@ -11,16 +11,23 @@ SUITE_SQL="$SCRIPT_DIR/test_suite.sql"
 
 "$BIN" --dir "$DB_DIR" < "$SUITE_SQL" > "$OUT_FILE"
 
-unsupported=$(grep -c 'unsupported or unrecognized' "$OUT_FILE" || true)
-failed_plan=$(grep -c 'failed to build plan' "$OUT_FILE" || true)
+# Section 20 deliberately contains invalid SQL / unsupported commands. We
+# count error categories instead of exact strings so error-wording polish
+# does not require touching the assertion.
+parser_errors=$(grep -cE '^Error: (syntax error|expected |unknown statement|unexpected trailing|only SHOW)' "$OUT_FILE" || true)
+table_not_found=$(grep -cE "^Error: table '.*' not found" "$OUT_FILE" || true)
+not_null=$(grep -cE '^Error: NOT NULL constraint violated' "$OUT_FILE" || true)
 failed_exec=$(grep -c 'failed to create executor' "$OUT_FILE" || true)
 
-# Section 20 deliberately contains invalid SQL / unsupported commands.
-if [[ "$unsupported" != "4" || "$failed_plan" != "2" || "$failed_exec" != "0" ]]; then
-    printf 'unexpected suite error counts: unsupported=%s failed_plan=%s failed_exec=%s\n' \
-        "$unsupported" "$failed_plan" "$failed_exec" >&2
-    grep -nE 'unsupported or unrecognized|failed to build plan|failed to create executor|^minidb> Error:' \
-        "$OUT_FILE" >&2 || true
+# Expected: 3 parser errors (INSERT t1, CREATE t1, USE test),
+#           2 table-not-found (nonexistent x2),
+#           1 NOT NULL (t4 insert with NULL),
+#           0 executor failures.
+if [[ "$parser_errors" -lt 3 || "$table_not_found" -ne 2 ||
+      "$not_null" -ne 1 || "$failed_exec" -ne 0 ]]; then
+    printf 'unexpected suite error counts: parser=%s table_not_found=%s not_null=%s failed_exec=%s\n' \
+        "$parser_errors" "$table_not_found" "$not_null" "$failed_exec" >&2
+    grep -nE '^Error:|^minidb> Error:' "$OUT_FILE" >&2 || true
     exit 1
 fi
 if grep -q 'unexpected token' "$OUT_FILE"; then

@@ -3,6 +3,7 @@
  * @brief HeapFile implementation — PostgreSQL style: MVCC mark-deleted + page-level pruning
  */
 #include "storage/heap_file.h"
+#include "transaction/transaction.h"
 #include <cstring>
 
 namespace minidb {
@@ -137,7 +138,7 @@ Result<Pair<PageId, SlotIdx>> HeapFile::insert_tuple(const byte* data, u16 lengt
 }
 
 // ============================================================
-// predict_slot — 预测页面下一个可用 slot (不Modify页面)
+// predict_slot — predict the next free slot on a page WITHOUT mutating it.
 // ============================================================
 
 SlotIdx HeapFile::predict_slot(Page* page, u16 length) const {
@@ -146,7 +147,7 @@ SlotIdx HeapFile::predict_slot(Page* page, u16 length) const {
     u16 aligned_len = max_align(length);
     SlotIdx reusable_slot = kNullSlot;
 
-    // 完全复刻 Page::insert_tuple 的 slot 选择逻辑
+    // Mirrors Page::insert_tuple's slot-selection logic exactly.
     // Strategy 1: reuse reclaimable slot
     for (u16 i = 0; i < num; i++) {
         const LinePointer* lp = page->line_pointer(i);
@@ -160,22 +161,24 @@ SlotIdx HeapFile::predict_slot(Page* page, u16 length) const {
         }
     }
 
-    // Strategy:2: 追加 (使用 UNUSED slot 或新 slot)
+    // Strategy 2: append (reuse a free slot or grow into a new one).
     return (reusable_slot == kNullSlot) ? num : reusable_slot;
 }
 
 // ============================================================
-// prepare_insert — WAL-first: 预定插入位置 (不Modify页面)
+// prepare_insert — WAL-first: reserve a slot, return RAII reservation.
+// The latch is held by the returned InsertReservation and released
+// automatically on destruction or commit.
 // ============================================================
 
-Result<HeapFile::InsertPlan> HeapFile::prepare_insert(u16 length) {
+Result<HeapFile::InsertReservation> HeapFile::prepare_insert(u16 length) {
     latch_.lock();
     ensure_meta_loaded();
 
-    // 没有数据页 → 将分配新页
+    // No data page yet -> a new page will be allocated.
     if (meta_.last_data_page_id == kNullPageId) {
         PageId new_pid = allocate_new_page_id();
-        return InsertPlan{new_pid, true, 0};
+        return InsertReservation{this, new_pid, true, 0};
     }
 
     // Attempt insert on last page
@@ -188,96 +191,138 @@ Result<HeapFile::InsertPlan> HeapFile::prepare_insert(u16 length) {
 
     Page* last_page = last_result.value();
 
-    // Prune DEAD tuples first, 释放可回收空间
+    // Prune DEAD tuples first to reclaim recyclable space.
     last_page->prune();
     pool_->mark_dirty(last_pid);
 
     if (last_page->has_enough_space(length)) {
         SlotIdx slot = predict_slot(last_page, length);
         pool_->unpin_page(last_pid);
-        return InsertPlan{last_pid, false, slot};
+        return InsertReservation{this, last_pid, false, slot};
+    }
+    pool_->unpin_page(last_pid);
+
+    // Last page is full — consult the FSM for a page with space.
+    PageId fsm_pid = fsm_.find_page(length);
+    if (fsm_pid != kNullPageId && fsm_pid != last_pid) {
+        auto fsm_result = pool_->fetch_page(fsm_pid);
+        if (fsm_result.ok()) {
+            Page* fsm_page = fsm_result.value();
+            fsm_page->prune();
+            pool_->mark_dirty(fsm_pid);
+            if (fsm_page->has_enough_space(length)) {
+                SlotIdx slot = predict_slot(fsm_page, length);
+                pool_->unpin_page(fsm_pid);
+                return InsertReservation{this, fsm_pid, false, slot};
+            }
+            // FSM was stale — update it.
+            fsm_.update(fsm_pid, fsm_page->get_free_space());
+            pool_->unpin_page(fsm_pid);
+        }
     }
 
-    // 最后一页满 → 将分配新页
-    pool_->unpin_page(last_pid);
+    // No existing page has space — allocate a new page.
     PageId new_pid = allocate_new_page_id();
-    return InsertPlan{new_pid, true, 0};
+    return InsertReservation{this, new_pid, true, 0};
 }
 
 // ============================================================
-// commit_insert — WAL-first: 提交插入 (Settings LSN + 写入数据)
+// InsertReservation::commit — materialise the tuple, release latch.
 // ============================================================
 
-Result<Pair<PageId, SlotIdx>> HeapFile::commit_insert(PageId page_id, bool is_new_page,
-                                                       SlotIdx predicted_slot,
-                                                       const byte* data, u16 length, u64 lsn) {
+Result<Pair<PageId, SlotIdx>> HeapFile::InsertReservation::commit(
+        const byte* data, u16 length, u64 lsn) {
+    if (!heap_) return Status(ErrorCode::kInternal, "reservation already consumed");
+    HeapFile* h = heap_;
+    h->ensure_meta_loaded();
+
+    // Mark committed so the destructor won't double-unlock.
+    committed_ = true;
+    heap_ = nullptr;
+
+    // RAII unlock: released at the end of this scope no matter what.
     struct UnlockOnExit {
         Mutex& latch;
         ~UnlockOnExit() { latch.unlock(); }
-    } unlock{latch_};
-    ensure_meta_loaded();
+    } unlock{h->latch_};
 
-    if (is_new_page) {
-        auto new_result = pool_->new_page(page_id, PageType::kHeapData);
+    if (is_new_page_) {
+        auto new_result = h->pool_->new_page(page_id_, PageType::kHeapData);
         if (!new_result.ok()) return new_result.error();
 
         Page* new_page = new_result.value();
-        new_page->init(page_id, PageType::kHeapData);
-        if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
+        new_page->init(page_id_, PageType::kHeapData);
+        if (lsn != 0) h->pool_->set_page_lsn(page_id_, lsn);
 
         u64 null_next = kNullPageId;
         std::memcpy(new_page->data() + kPageSize - sizeof(u64), &null_next, sizeof(u64));
 
         SlotIdx slot = new_page->insert_tuple(data, length);
         if (slot == kNullSlot) {
-            pool_->unpin_page(page_id);
+            h->pool_->unpin_page(page_id_);
             return Status(ErrorCode::kPageFull, "failed to insert tuple into new page");
         }
-        pool_->mark_dirty(page_id);
-        pool_->unpin_page(page_id);
+        h->pool_->mark_dirty(page_id_);
+        h->pool_->unpin_page(page_id_);
 
-        // Update old last page's next_page_id (also set LSN to ensure linked list consistency)
-        if (meta_.last_data_page_id != kNullPageId) {
-            auto old_result = pool_->fetch_page(meta_.last_data_page_id);
+        // Update old last page's next_page_id
+        if (h->meta_.last_data_page_id != kNullPageId) {
+            auto old_result = h->pool_->fetch_page(h->meta_.last_data_page_id);
             if (old_result.ok()) {
                 Page* old_page = old_result.value();
-                u64 next_ptr = page_id;
+                u64 next_ptr = page_id_;
                 std::memcpy(old_page->data() + kPageSize - sizeof(u64), &next_ptr, sizeof(u64));
-                if (lsn != 0) pool_->set_page_lsn(meta_.last_data_page_id, lsn);
-                pool_->mark_dirty(meta_.last_data_page_id);
-                pool_->unpin_page(meta_.last_data_page_id);
+                if (lsn != 0) h->pool_->set_page_lsn(h->meta_.last_data_page_id, lsn);
+                h->pool_->mark_dirty(h->meta_.last_data_page_id);
+                h->pool_->unpin_page(h->meta_.last_data_page_id);
             }
         }
 
-        meta_.last_data_page_id = page_id;
-        if (meta_.first_data_page_id == kNullPageId) meta_.first_data_page_id = page_id;
-        meta_.num_data_pages++;
-        meta_.num_tuples++;
-        note_meta_changed();
-        return Pair<PageId, SlotIdx>(page_id, slot);
+        h->meta_.last_data_page_id = page_id_;
+        if (h->meta_.first_data_page_id == kNullPageId) h->meta_.first_data_page_id = page_id_;
+        h->meta_.num_data_pages++;
+        h->meta_.num_tuples++;
+        h->note_meta_changed();
+
+        // Update FSM + clear VM for the new page.
+        {
+            auto pg = h->pool_->fetch_page(page_id_);
+            if (pg.ok()) {
+                h->fsm_.update(page_id_, pg.value()->get_free_space());
+                h->pool_->unpin_page(page_id_);
+            }
+        }
+        h->vm_.clear_page(page_id_);
+
+        return Pair<PageId, SlotIdx>(page_id_, slot);
     }
 
-    auto result = pool_->fetch_page(page_id);
+    auto result = h->pool_->fetch_page(page_id_);
     if (!result.ok()) return result.error();
 
     Page* page = result.value();
-    SlotIdx slot = page->insert_tuple_at(data, length, predicted_slot);
+    SlotIdx slot = page->insert_tuple_at(data, length, predicted_slot_);
     if (slot == kNullSlot) {
-        pool_->unpin_page(page_id);
+        h->pool_->unpin_page(page_id_);
         return Status(ErrorCode::kPageFull, "commit_insert: predicted slot unavailable");
     }
-    if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
-    pool_->mark_dirty(page_id);
-    pool_->unpin_page(page_id);
+    if (lsn != 0) h->pool_->set_page_lsn(page_id_, lsn);
+    // Update FSM with remaining free space.
+    h->fsm_.update(page_id_, page->get_free_space());
+    h->pool_->mark_dirty(page_id_);
+    h->pool_->unpin_page(page_id_);
 
-    meta_.num_tuples++;
-    note_meta_changed();
-    return Pair<PageId, SlotIdx>(page_id, slot);
+    // Any INSERT invalidates the page's all-visible status.
+    h->vm_.clear_page(page_id_);
+
+    h->meta_.num_tuples++;
+    h->note_meta_changed();
+    return Pair<PageId, SlotIdx>(page_id_, slot);
 }
 
 // ============================================================
-// commit_old_tuple — 原子化: set_next_version + mark_deleted + set_lsn
-// 确保所有Modify在同一次 pinned-page 操作中完成, LSN 在 unpin 前Settings
+// commit_old_tuple — atomic: set_next_version + mark_deleted + set_lsn,
+// done in a single pinned-page operation so the LSN is stamped before unpin.
 // ============================================================
 
 bool HeapFile::commit_old_tuple(PageId page_id, SlotIdx slot_idx,
@@ -307,7 +352,7 @@ bool HeapFile::commit_old_tuple(PageId page_id, SlotIdx slot_idx,
     // Settings xmax at offset +8
     std::memcpy(base + 8, &xmax, 8);
 
-    // Settings LSN (在 unpin 前!)
+    // Stamp the page LSN before unpinning.
     if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
     pool_->mark_dirty(page_id);
     pool_->unpin_page(page_id);
@@ -315,7 +360,7 @@ bool HeapFile::commit_old_tuple(PageId page_id, SlotIdx slot_idx,
 }
 
 // ============================================================
-// set_page_lsn — 兜底: 在外部无法原子化时使用
+// set_page_lsn — fallback for callers that cannot stamp atomically.
 // ============================================================
 
 void HeapFile::set_page_lsn(PageId page_id, u64 lsn) {
@@ -324,10 +369,11 @@ void HeapFile::set_page_lsn(PageId page_id, u64 lsn) {
 }
 
 // ============================================================
-// prepare_insert_in_page — WAL-first HOT: 预定同页插入
+// prepare_insert_in_page — WAL-first HOT: reserve a same-page slot,
+// return RAII InPageReservation.
 // ============================================================
 
-Result<SlotIdx> HeapFile::prepare_insert_in_page(PageId page_id, u16 length) {
+Result<HeapFile::InPageReservation> HeapFile::prepare_insert_in_page(PageId page_id, u16 length) {
     latch_.lock();
     auto result = pool_->fetch_page(page_id);
     if (!result.ok()) {
@@ -337,7 +383,7 @@ Result<SlotIdx> HeapFile::prepare_insert_in_page(PageId page_id, u16 length) {
 
     Page* page = result.value();
 
-    // Prune DEAD tuples first, 释放可回收空间
+    // Prune DEAD tuples first to free up reclaimable space.
     page->prune();
     pool_->mark_dirty(page_id);
 
@@ -349,39 +395,45 @@ Result<SlotIdx> HeapFile::prepare_insert_in_page(PageId page_id, u16 length) {
 
     SlotIdx slot = predict_slot(page, length);
     pool_->unpin_page(page_id);
-    return slot;
+    return InPageReservation{this, page_id, slot};
 }
 
 // ============================================================
-// commit_insert_in_page — WAL-first HOT: 提交同页插入
+// InPageReservation::commit — materialise the HOT tuple, release latch.
 // ============================================================
 
-Result<Pair<PageId, SlotIdx>> HeapFile::commit_insert_in_page(PageId page_id, SlotIdx slot_idx,
-                                                              const byte* data, u16 length, u64 lsn) {
+Result<Pair<PageId, SlotIdx>> HeapFile::InPageReservation::commit(
+        const byte* data, u16 length, u64 lsn) {
+    if (!heap_) return Status(ErrorCode::kInternal, "reservation already consumed");
+    HeapFile* h = heap_;
+    committed_ = true;
+    heap_ = nullptr;
+
     struct UnlockOnExit {
         Mutex& latch;
         ~UnlockOnExit() { latch.unlock(); }
-    } unlock{latch_};
-    auto result = pool_->fetch_page(page_id);
+    } unlock{h->latch_};
+
+    auto result = h->pool_->fetch_page(page_id_);
     if (!result.ok()) return Status(ErrorCode::kIOError);
 
     Page* page = result.value();
-    SlotIdx actual_slot = page->insert_tuple_at(data, length, slot_idx);
+    SlotIdx actual_slot = page->insert_tuple_at(data, length, predicted_slot_);
     if (actual_slot == kNullSlot) {
-        pool_->unpin_page(page_id);
+        h->pool_->unpin_page(page_id_);
         return Status(ErrorCode::kPageFull, "commit_insert_in_page failed");
     }
-    if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
-    pool_->mark_dirty(page_id);
-    pool_->unpin_page(page_id);
+    if (lsn != 0) h->pool_->set_page_lsn(page_id_, lsn);
+    h->pool_->mark_dirty(page_id_);
+    h->pool_->unpin_page(page_id_);
 
-    meta_.num_tuples++;
-    note_meta_changed();
-    return Pair<PageId, SlotIdx>(page_id, actual_slot);
+    h->meta_.num_tuples++;
+    h->note_meta_changed();
+    return Pair<PageId, SlotIdx>(page_id_, actual_slot);
 }
 
 // ============================================================
-// insert_tuple_in_page — HOT: 在指定页插入, 失败返回 kNullSlot
+// insert_tuple_in_page — HOT: insert into a specific page; returns kNullSlot on failure.
 // ============================================================
 
 Result<Pair<PageId, SlotIdx>> HeapFile::insert_tuple_in_page(PageId page_id,
@@ -417,7 +469,7 @@ Result<Pair<PageId, SlotIdx>> HeapFile::insert_tuple_in_page(PageId page_id,
 }
 
 // ============================================================
-// mark_deleted — MVCC 标记删除 (只设 xmax, 不动 LinePointer)
+// mark_deleted — MVCC soft-delete: only stamp xmax; line pointer is preserved.
 // ============================================================
 
 bool HeapFile::mark_deleted(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn) {
@@ -437,16 +489,20 @@ bool HeapFile::mark_deleted(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn)
         return false;
     }
 
-    // xmax 在 tuple 头部偏移 8 (跳过 xmin)
+    // xmax sits at tuple-header offset 8 (after xmin).
     byte* xmax_ptr = page->data() + lp->offset + 8;
     std::memcpy(xmax_ptr, &xmax, 8);
 
     if (lsn != 0) {
-        // 只能前进, 不能回退 page LSN (防止恢复 undo 覆盖已提交的高 LSN)
+        // page_lsn must only move forward: never overwrite a committed higher LSN.
         u64 current_lsn = page->header()->lsn;
         if (lsn > current_lsn) pool_->set_page_lsn(page_id, lsn);
     }
     pool_->mark_dirty(page_id);
+
+    // DELETE invalidates the page's all-visible status.
+    vm_.clear_page(page_id);
+
     pool_->unpin_page(page_id);
     return true;
 }
@@ -475,6 +531,10 @@ bool HeapFile::set_xmin(PageId page_id, SlotIdx slot_idx, u64 xmin, u64 lsn) {
     pool_->mark_dirty(page_id);
     pool_->unpin_page(page_id);
     return true;
+}
+
+bool HeapFile::freeze_tuple(PageId page_id, SlotIdx slot_idx, u64 lsn) {
+    return set_xmin(page_id, slot_idx, kFrozenTxnId, lsn);
 }
 
 bool HeapFile::set_next_version(PageId page_id, SlotIdx slot_idx,
@@ -506,7 +566,7 @@ bool HeapFile::set_next_version(PageId page_id, SlotIdx slot_idx,
 }
 
 // ============================================================
-// mark_dead — GC 标记 LinePointer 为 DEAD
+// mark_dead — GC marks the line pointer DEAD.
 // ============================================================
 
 bool HeapFile::mark_dead(PageId page_id, SlotIdx slot_idx, u64 lsn) {
@@ -519,6 +579,8 @@ bool HeapFile::mark_dead(PageId page_id, SlotIdx slot_idx, u64 lsn) {
     if (ok) {
         if (lsn != 0) pool_->set_page_lsn(page_id, lsn);
         pool_->mark_dirty(page_id);
+        // GC freed space — update FSM so future INSERTs can reuse it.
+        fsm_.update(page_id, page->get_free_space());
     }
     pool_->unpin_page(page_id);
     return ok;
@@ -569,7 +631,7 @@ bool HeapFile::prune_obsolete_version(PageId page_id, SlotIdx slot_idx,
 }
 
 // ============================================================
-// rollback_insert — 回滚: 标记为 UNUSED
+// rollback_insert — rollback: mark the slot UNUSED.
 // ============================================================
 
 bool HeapFile::rollback_insert(PageId page_id, SlotIdx slot_idx, u64 lsn) {
@@ -666,11 +728,11 @@ bool HeapFile::recover_insert_at(PageId page_id, SlotIdx slot_idx,
     }
     pool_->unpin_page(page_id);
 
-    // 元数据更新必须始终执行 (即使 LSN 匹配跳过了数据插入),
-    // 否则恢复中断后重做时页面会被孤立.
+    // The metadata update must always happen (even when an LSN match made us skip
+    // the data insert), otherwise the page is orphaned across a recovery retry.
     ensure_meta_loaded();
     if (page_id > meta_.last_data_page_id) {
-        // 链接旧最后一页 → 新页
+        // Link the previous last page to the new page.
         if (meta_.last_data_page_id != kNullPageId && meta_.last_data_page_id != page_id) {
             auto old_result = pool_->fetch_page(meta_.last_data_page_id);
             if (old_result.ok()) {
@@ -724,7 +786,7 @@ bool HeapFile::recover_update(PageId old_page_id, SlotIdx old_slot_idx,
 }
 
 // ============================================================
-// 元数据
+// Metadata helpers.
 // ============================================================
 
 PageId HeapFile::first_data_page_id() const {

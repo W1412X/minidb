@@ -176,14 +176,14 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
             Value right = expr.right ? evaluate(*expr.right, tuple) : Value();
             const String& op = expr.op;
 
-            // SQL NULL propagation: Compare运算遇到 NULL 返回 NULL
+            // SQL NULL propagation: comparison with NULL yields NULL.
             if (op == "=" || op == "<>" || op == "!=" || op == "<" || op == ">" ||
                 op == "<=" || op == ">=") {
                 if (is_null(left) || is_null(right)) return Value();
                 return compare_result(left, right, op);
             }
 
-            // AND: SQL 三值逻辑
+            // AND: SQL three-valued logic.
             if (op == "AND") {
                 if (is_null(left) || is_null(right)) {
                     if (!is_null(left) && !left.get_bool()) return Value(false);
@@ -193,7 +193,7 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
                 return Value(left.get_bool() && right.get_bool());
             }
 
-            // OR: SQL 三值逻辑
+            // OR: SQL three-valued logic.
             if (op == "OR") {
                 if (is_null(left) || is_null(right)) {
                     if (!is_null(left) && left.get_bool()) return Value(true);
@@ -203,7 +203,7 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
                 return Value(left.get_bool() || right.get_bool());
             }
 
-            // 算术: NULL propagation
+            // Arithmetic: NULL propagation.
             if (op == "+") { if (is_null(left) || is_null(right)) return Value(); return left + right; }
             if (op == "-") { if (is_null(left) || is_null(right)) return Value(); return left - right; }
             if (op == "*") { if (is_null(left) || is_null(right)) return Value(); return left * right; }
@@ -228,7 +228,7 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
                 return left;
             }
             if (op == "IN_SUBQUERY") {
-                // 已由 SubqueryInExecutor 处理
+                // Already handled by SubqueryInExecutor.
                 return Value();
             }
             return Value();
@@ -290,6 +290,13 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
                 return evaluate(*expr.else_expr, tuple);
             }
             return Value();
+        }
+
+        case ExprType::kCast: {
+            if (!expr.child) return Value();
+            Value v = evaluate(*expr.child, tuple);
+            if (v.is_null()) return Value();  // CAST(NULL AS T) = NULL
+            return v.cast_to(expr.cast_target);
         }
     }
 

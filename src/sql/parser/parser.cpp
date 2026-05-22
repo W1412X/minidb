@@ -54,6 +54,7 @@ Statement Parser::parse() {
                     inner->insert = parse_insert();
                     break;
                 default:
+                    set_error_at(String("EXPLAIN requires SELECT/INSERT/UPDATE/DELETE"), next);
                     return Statement();
             }
             stmt.explain_stmt = static_cast<UniquePtr<Statement>&&>(inner);
@@ -109,6 +110,8 @@ Statement Parser::parse() {
             if (match_keyword(TokenType::KW_TABLES)) {
                 stmt.type = StmtType::kShowTables;
             } else {
+                Token after_show = peek();
+                set_error_at(String("only SHOW TABLES is supported"), after_show);
                 return Statement();
             }
             break;
@@ -146,13 +149,28 @@ Statement Parser::parse() {
             stmt.type = StmtType::kDeallocate;
             stmt.deallocate_stmt = parse_deallocate();
             break;
-        default:
+        case TokenType::KW_VACUUM: {
+            lexer_.consume_token();
+            stmt.type = StmtType::kVacuum;
+            // Accept optional TABLE keyword: VACUUM [TABLE] [table_name]
+            match_keyword(TokenType::KW_TABLE);
+            Token next = peek();
+            if (next.type != TokenType::SEMICOLON && next.type != TokenType::END_OF_INPUT) {
+                Token table = expect_identifier();
+                stmt.vacuum_table_name = table.value;
+            }
             break;
+        }
+        default:
+            set_error_at(String("unknown statement"), t);
+            return Statement();
     }
 
     if (!ok_) return Statement();
     match(TokenType::SEMICOLON);
-    if (!check(TokenType::END_OF_INPUT)) {
+    Token trailing = peek();
+    if (trailing.type != TokenType::END_OF_INPUT) {
+        set_error_at(String("unexpected trailing token after statement"), trailing);
         return Statement();
     }
     return stmt;
@@ -170,7 +188,7 @@ UniquePtr<SelectStmt> Parser::parse_select() {
         if (stmt->union_rhs) {
             if (stmt->order_by.empty() && !stmt->union_rhs->order_by.empty()) {
                 for (u32 i = 0; i < stmt->union_rhs->order_by.size(); i++) {
-                    stmt->order_by.push_back(static_cast<Pair<UniquePtr<Expression>, bool>&&>(
+                    stmt->order_by.push_back(static_cast<OrderByItem&&>(
                         stmt->union_rhs->order_by[i]));
                 }
                 stmt->union_rhs->order_by.clear();
@@ -192,6 +210,39 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
     auto stmt = make_unique<SelectStmt>();
     expect_keyword(TokenType::KW_SELECT);
     stmt->distinct = match_keyword(TokenType::KW_DISTINCT);
+
+    // Reject keywords that introduce a downstream SELECT clause from
+    // appearing in the select list. is_identifier_token() accepts every
+    // keyword in the KW_SELECT..KW_DEALLOCATE range, so without this guard
+    // `SELECT FROM t` silently parses as "SELECT [column-named-FROM] FROM t"
+    // and yields an empty result with no diagnostic. Caught early so the
+    // REPL surfaces a precise line:col error.
+    {
+        Token next = peek();
+        switch (next.type) {
+            case TokenType::KW_FROM:
+            case TokenType::KW_WHERE:
+            case TokenType::KW_GROUP:
+            case TokenType::KW_HAVING:
+            case TokenType::KW_ORDER:
+            case TokenType::KW_LIMIT:
+            case TokenType::KW_OFFSET:
+            case TokenType::KW_UNION:
+            case TokenType::KW_JOIN:
+            case TokenType::KW_INNER:
+            case TokenType::KW_LEFT:
+            case TokenType::KW_RIGHT:
+            case TokenType::KW_CROSS:
+            case TokenType::KW_OUTER:
+            case TokenType::KW_ON:
+            case TokenType::SEMICOLON:
+            case TokenType::END_OF_INPUT:
+                set_error_at(String("expected select expression"), next);
+                return stmt;
+            default:
+                break;
+        }
+    }
 
     // select list
     if (check(TokenType::STAR)) {
@@ -233,15 +284,7 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
 
     // FROM
     if (match_keyword(TokenType::KW_FROM)) {
-        TableRef ref;
-        ref.name = expect_identifier().value;
-        if (match_keyword(TokenType::KW_AS)) {
-            ref.alias = expect_identifier().value;
-        } else if (check(TokenType::IDENTIFIER)) {
-            ref.alias = peek().value;
-            lexer_.consume_token();
-        }
-        stmt->from_tables.push_back(ref);
+        stmt->from_tables.push_back(parse_table_ref());
     }
 
     // JOINs
@@ -267,13 +310,7 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
             join.type = JoinType::kInner;
         }
         expect_keyword(TokenType::KW_JOIN);
-        join.table.name = expect_identifier().value;
-        if (match_keyword(TokenType::KW_AS)) {
-            join.table.alias = expect_identifier().value;
-        } else if (check(TokenType::IDENTIFIER)) {
-            join.table.alias = peek().value;
-            lexer_.consume_token();
-        }
+        join.table = parse_table_ref();
         if (!requires_on && check_keyword(TokenType::KW_ON)) {
             mark_error();
             break;
@@ -314,8 +351,17 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
             bool is_asc = true;
             if (match_keyword(TokenType::KW_ASC)) is_asc = true;
             else if (match_keyword(TokenType::KW_DESC)) is_asc = false;
-            stmt->order_by.push_back(Pair<UniquePtr<Expression>, bool>(
-                static_cast<UniquePtr<Expression>&&>(expr), is_asc));
+            // PostgreSQL default: NULLS LAST for ASC, NULLS FIRST for DESC
+            bool nf = !is_asc;
+            if (match_keyword(TokenType::KW_NULLS)) {
+                if (match_keyword(TokenType::KW_FIRST)) nf = true;
+                else { expect_keyword(TokenType::KW_LAST); nf = false; }
+            }
+            OrderByItem item;
+            item.expression = static_cast<UniquePtr<Expression>&&>(expr);
+            item.ascending = is_asc;
+            item.nulls_first = nf;
+            stmt->order_by.push_back(static_cast<OrderByItem&&>(item));
         } while (match(TokenType::COMMA));
     }
 
@@ -342,6 +388,28 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
     }
 
     return stmt;
+}
+
+TableRef Parser::parse_table_ref() {
+    TableRef ref;
+    if (match(TokenType::LPAREN)) {
+        if (!check_keyword(TokenType::KW_SELECT)) {
+            set_error_at(String("expected SELECT in derived table"), peek());
+            return ref;
+        }
+        ref.subquery = parse_select();
+        expect(TokenType::RPAREN);
+    } else {
+        ref.name = expect_identifier().value;
+    }
+
+    if (match_keyword(TokenType::KW_AS)) {
+        ref.alias = expect_identifier().value;
+    } else if (check(TokenType::IDENTIFIER)) {
+        ref.alias = peek().value;
+        lexer_.consume_token();
+    }
+    return ref;
 }
 
 // ============================================================
@@ -435,7 +503,7 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
 
     do {
         ColumnDef col;
-        // Compatible with column names conflicting with keywords (e.g., status)
+        // Allow column names that collide with reserved keywords (e.g. status).
         col.name = expect_alias().value;
 
         // type
@@ -469,8 +537,8 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
             }
         }
 
-        // constraints: order-agnostic, mirrors the ALTER TABLE ADD COLUMN
-        // grammar so PRIMARY KEY/NOT NULL/UNIQUE/DEFAULT can appear in any
+        // Constraints: order-agnostic, mirrors the ALTER TABLE ADD COLUMN
+        // grammar so PRIMARY KEY / NOT NULL / UNIQUE / DEFAULT can appear in
         // permutation. Each clause is recognised at most once.
         while (true) {
             if (match_keyword(TokenType::KW_PRIMARY)) {
@@ -486,6 +554,42 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
                 Token def = peek();
                 lexer_.consume_token();
                 col.default_value = def.value;
+            } else if (match_keyword(TokenType::KW_CHECK)) {
+                // Slice the original SQL between the `(` after CHECK and
+                // the matching `)`. Storing the raw text lets the catalog
+                // stay a simple string-keyed store and avoids carrying the
+                // parser AST through serialisation. Re-parsed at INSERT /
+                // UPDATE time.
+                expect(TokenType::LPAREN);
+                u32 start = lexer_.byte_pos();
+                int depth = 1;
+                while (depth > 0) {
+                    Token t = peek();
+                    if (t.type == TokenType::END_OF_INPUT) { mark_error(); break; }
+                    if (t.type == TokenType::LPAREN) depth++;
+                    else if (t.type == TokenType::RPAREN) {
+                        if (--depth == 0) break;
+                    }
+                    lexer_.consume_token();
+                }
+                if (ok_) {
+                    // The closing `)` was peeked but not consumed; byte_pos
+                    // sits PAST it, so end_pos = byte_pos - 1 gives the
+                    // index of `)` itself. Substring stops right before.
+                    u32 raw_end = lexer_.byte_pos();
+                    const String& sql = lexer_.source();
+                    u32 end_pos = raw_end;
+                    // Walk back past the `)` glyph and any trailing whitespace.
+                    while (end_pos > start && sql[end_pos - 1] != ')') end_pos--;
+                    if (end_pos > start && sql[end_pos - 1] == ')') end_pos--;
+                    while (end_pos > start &&
+                           (sql[end_pos - 1] == ' ' || sql[end_pos - 1] == '\t' ||
+                            sql[end_pos - 1] == '\n')) {
+                        end_pos--;
+                    }
+                    col.check_expr = sql.substr(start, end_pos - start);
+                    expect(TokenType::RPAREN);
+                }
             } else {
                 break;
             }
@@ -1043,6 +1147,28 @@ UniquePtr<Expression> Parser::parse_primary() {
         return expr;
     }
 
+    // CAST(expr AS type)
+    if (match_keyword(TokenType::KW_CAST)) {
+        expect(TokenType::LPAREN);
+        auto source = static_cast<UniquePtr<Expression>&&>(parse_expression());
+        expect_keyword(TokenType::KW_AS);
+        TypeId target = TypeId::kNull;
+        if (match_keyword(TokenType::KW_INT))         target = TypeId::kInt32;
+        else if (match_keyword(TokenType::KW_INT64))   target = TypeId::kInt64;
+        else if (match_keyword(TokenType::KW_FLOAT))   target = TypeId::kFloat;
+        else if (match_keyword(TokenType::KW_DOUBLE))  target = TypeId::kDouble;
+        else if (match_keyword(TokenType::KW_BOOL))    target = TypeId::kBool;
+        else if (match_keyword(TokenType::KW_VARCHAR))  { target = TypeId::kVarchar; if (match(TokenType::LPAREN)) { expect(TokenType::INT_LITERAL); expect(TokenType::RPAREN); } }
+        else if (match_keyword(TokenType::KW_TEXT))    target = TypeId::kVarchar;
+        else { set_error("expected type name after AS"); }
+        expect(TokenType::RPAREN);
+        auto expr = make_unique<Expression>();
+        expr->type = ExprType::kCast;
+        expr->child = static_cast<UniquePtr<Expression>&&>(source);
+        expr->cast_target = target;
+        return expr;
+    }
+
     // COALESCE(a, b, c) → left-fold
     if (match_keyword(TokenType::KW_COALESCE)) {
         expect(TokenType::LPAREN);
@@ -1123,7 +1249,7 @@ UniquePtr<Expression> Parser::parse_primary() {
         return expr;
     }
 
-    // 简单函数调用: LENGTH(expr). If LENGTH appears without parentheses,
+    // Simple function call: LENGTH(expr). If LENGTH appears without parentheses,
     // treat it as a normal identifier/column name.
     if (is_identifier_token(t.type) && upper_ascii(t.value) == "LENGTH") {
         lexer_.consume_token();
@@ -1170,14 +1296,14 @@ UniquePtr<Expression> Parser::parse_primary() {
 }
 
 // ============================================================
-// Utility方法
+// Utility helpers.
 // ============================================================
 
 Token Parser::expect(TokenType type) {
     Token t = peek();
     if (t.type != type) {
-        mark_error();
-        // 消费掉错误 token 防止死循环
+        set_error_at(String("expected different token"), t);
+        // Consume the bad token to avoid spinning.
         lexer_.consume_token();
         return Token(TokenType::ERROR, "unexpected token", t.line, t.column);
     }
@@ -1188,7 +1314,7 @@ Token Parser::expect(TokenType type) {
 Token Parser::expect_keyword(TokenType kw) {
     Token t = peek();
     if (t.type != kw) {
-        mark_error();
+        set_error_at(String("expected keyword"), t);
         lexer_.consume_token();
         return Token(TokenType::ERROR, "unexpected keyword", t.line, t.column);
     }
@@ -1202,7 +1328,7 @@ Token Parser::expect_alias() {
         lexer_.consume_token();
         return t;
     }
-    mark_error();
+    set_error_at(String("expected identifier"), t);
     lexer_.consume_token();
     return Token(TokenType::ERROR, "unexpected token", t.line, t.column);
 }
@@ -1249,7 +1375,40 @@ bool Parser::is_identifier_token(TokenType type) const {
 }
 
 void Parser::mark_error() {
-    ok_ = false;
+    if (ok_) {
+        // Capture the current token so the REPL can quote it. Callers that
+        // know more about the failure should use set_error_at().
+        Token t = peek();
+        set_error_at(String("syntax error"), t);
+    } else {
+        ok_ = false;
+    }
+}
+
+void Parser::set_error(const String& message) {
+    if (ok_) {
+        ok_ = false;
+        error_.message = message;
+        error_.near = String("");
+        error_.line = 0;
+        error_.column = 0;
+    }
+}
+
+void Parser::set_error_at(const String& message, const Token& tok) {
+    if (ok_) {
+        ok_ = false;
+        error_.message = message;
+        if (tok.type == TokenType::END_OF_INPUT) {
+            error_.near = String("<end of input>");
+        } else if (!tok.value.empty()) {
+            error_.near = tok.value;
+        } else {
+            error_.near = String("<unknown>");
+        }
+        error_.line = tok.line;
+        error_.column = tok.column;
+    }
 }
 
 } // namespace minidb

@@ -53,10 +53,10 @@ DiskManager::DiskManager(const String& db_path, bool doublewrite_enabled,
     : db_path_(db_path), doublewrite_path_(db_path + "/doublewrite.bin"), next_file_id_(1),
       doublewrite_enabled_(doublewrite_enabled), page_checksum_enabled_(page_checksum_enabled),
       fd_cache_limit_(fd_cache_limit == 0 ? 1 : fd_cache_limit) {
-    // Create database root directory
+    // Create the database root directory.
     mkdir(db_path_.c_str(), 0755);
 
-    // Create subdirectory
+    // Create the standard subdirectories.
     String catalog_dir = db_path_ + "/catalog";
     String tables_dir  = db_path_ + "/tables";
     String indexes_dir = db_path_ + "/indexes";
@@ -86,7 +86,7 @@ void DiskManager::read_page(PageId pid, byte* page_data) {
     if (page_checksum_enabled_ && page_has_checksum(page_data)) {
         const PageHeader* hdr = reinterpret_cast<const PageHeader*>(page_data);
         if (hdr->reserved != page_checksum(page_data)) {
-            // 读到 torn/corrupt page 时不向上暴露半页；恢复层可基于 WAL 重放修复。
+            // Torn/corrupt page: zero the buffer so callers never see half-written
             std::memset(page_data, 0, kPageSize);
         }
     }
@@ -241,8 +241,8 @@ String DiskManager::page_to_path(PageId pid) const {
     if (file_id == 1) {
         return db_path_ + "/catalog/1.cat";
     } else if (file_id < 1000) {
-        // 简化: file_id 直接作为表 ID
-        // 后续可通过 catalog 查找真实表名
+        // For now: file_id doubles as the table id.
+        // Future: resolve the real table name through the catalog.
         return db_path_ + "/tables/" + String(static_cast<u32>(file_id)) + ".heap";
     } else {
         return db_path_ + "/indexes/" + String(static_cast<u32>(file_id)) + ".btree";

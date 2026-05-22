@@ -98,6 +98,11 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("PREPARE", TokenType::KW_PREPARE);
     m.insert("EXECUTE", TokenType::KW_EXECUTE);
     m.insert("DEALLOCATE", TokenType::KW_DEALLOCATE);
+    m.insert("CHECK", TokenType::KW_CHECK);
+    m.insert("NULLS", TokenType::KW_NULLS);
+    m.insert("FIRST", TokenType::KW_FIRST);
+    m.insert("LAST", TokenType::KW_LAST);
+    m.insert("VACUUM", TokenType::KW_VACUUM);
     return m;
 }
 
@@ -223,7 +228,7 @@ void Lexer::skip_whitespace() {
 }
 
 void Lexer::skip_comment() {
-    // -- 单行注释
+    // -- line comment
     while (has_more() && peek_char() != '\n') {
         next_char();
     }
@@ -313,7 +318,7 @@ Token Lexer::read_identifier() {
 
     String word(sql_.c_str() + start, pos_ - start);
 
-    // 转大写检查关键词
+    // Upper-case for keyword lookup.
     String upper = word;
     for (u32 i = 0; i < upper.size(); i++) {
         char& ch = upper[i];

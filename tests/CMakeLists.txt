@@ -64,6 +64,10 @@ add_test(NAME sql_correctness_matrix
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/sql_correctness_matrix.py $<TARGET_FILE:minidb> --seed 12648430)
 add_test(NAME differential_sqlite
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/differential_sqlite.py $<TARGET_FILE:minidb> --seed 12648431)
+add_test(NAME select_empty_list
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/select_empty_list.py $<TARGET_FILE:minidb> --seed 12648444)
+add_test(NAME p1_features
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/p1_features_test.py $<TARGET_FILE:minidb> --seed 12648455)
 
 # ---------------------------------------------------------------------------
 # DDL and catalog
@@ -93,20 +97,56 @@ add_test(NAME mvcc_lock_regression
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/mvcc_lock_regression.py $<TARGET_FILE:minidb> --seed 12648433)
 add_test(NAME lost_update
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/lost_update.py $<TARGET_FILE:minidb> --seed 12648438)
+add_test(NAME mvcc_visibility_matrix
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/mvcc_visibility_matrix.py $<TARGET_FILE:minidb> --seed 12648446)
 add_test(NAME write_skew
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew.py $<TARGET_FILE:minidb> --seed 12648439)
+add_test(NAME write_skew_serializable
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew_serializable.py $<TARGET_FILE:minidb> --seed 12648460)
+add_test(NAME phantom_read
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/phantom_read.py $<TARGET_FILE:minidb> --seed 12648456)
+add_test(NAME long_snapshot_gc
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/long_snapshot_gc.py $<TARGET_FILE:minidb> --seed 12648458)
+add_test(NAME vacuum_concurrent
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/vacuum_concurrent.py $<TARGET_FILE:minidb> --seed 12648459)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
+add_test(NAME index_heap_atomic
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/index_heap_atomic.py $<TARGET_FILE:minidb> --seed 12648441)
+add_test(NAME clog_status_log
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/clog_status_log.py $<TARGET_FILE:minidb> --seed 12648450)
+add_test(NAME statement_savepoint
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/statement_savepoint.py $<TARGET_FILE:minidb> --seed 12648451)
+add_test(NAME ddl_implicit_commit
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/ddl_implicit_commit.py $<TARGET_FILE:minidb> --seed 12648453)
 add_test(NAME constraints_not_null_default
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/constraints_not_null_default.py $<TARGET_FILE:minidb> --seed 12648437)
+add_test(NAME post_recovery_verify
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/post_recovery_verify.py $<TARGET_FILE:minidb> --seed 12648442)
+add_test(NAME varchar_length
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/varchar_length.py $<TARGET_FILE:minidb> --seed 12648445)
+add_test(NAME check_constraint
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/check_constraint.py $<TARGET_FILE:minidb> --seed 12648452)
+add_test(NAME null_three_valued_logic
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/null_three_valued_logic.py $<TARGET_FILE:minidb> --seed 12648454)
 add_test(NAME recovery_smoke
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/recovery_smoke.sh $<TARGET_FILE:minidb>)
 add_test(NAME wal_replay_slot_reuse
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_replay_slot_reuse.sh $<TARGET_FILE:minidb>)
 add_test(NAME torn_page
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/torn_page.py $<TARGET_FILE:minidb> --seed 12648436)
+add_test(NAME checkpoint_barrier
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/checkpoint_barrier.py $<TARGET_FILE:minidb> --seed 12648440)
+add_test(NAME wal_record_corruption
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_record_corruption.py $<TARGET_FILE:minidb> --seed 12648447)
+add_test(NAME index_state_machine
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/index_state_machine.py $<TARGET_FILE:minidb> --seed 12648448)
+add_test(NAME ddl_wal
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/ddl_wal.py $<TARGET_FILE:minidb> --seed 12648449)
 add_test(NAME crash_recovery_harness
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/crash_recovery_harness.py $<TARGET_FILE:minidb> --seed 12648432)
+add_test(NAME ddl_crash_recovery
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/ddl_crash_recovery.py $<TARGET_FILE:minidb> --seed 12648457)
 
 # ---------------------------------------------------------------------------
 # Storage / page server
@@ -136,3 +176,7 @@ add_test(NAME production_regression
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/regression/production_regression.sh $<TARGET_FILE:minidb>)
 add_test(NAME resource_limits
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/regression/resource_limits.sh $<TARGET_FILE:minidb>)
+add_test(NAME update_halloween
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/regression/update_halloween.py $<TARGET_FILE:minidb> --seed 12648443)
+add_test(NAME lsn_watermark_restart
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/regression/lsn_watermark_restart.py $<TARGET_FILE:minidb> --seed 12648445)

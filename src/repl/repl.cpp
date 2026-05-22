@@ -6,11 +6,15 @@
 #include "sql/parser/parser.h"
 #include "sql/planner/planner.h"
 #include "sql/executor/executor_factory.h"
+#include "sql/executor/executor.h"
 #include "catalog/catalog.h"
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
+#include <csignal>
+#include <cerrno>
+#include <unistd.h>
 #include <unordered_map>
 
 namespace minidb {
@@ -50,6 +54,26 @@ static bool parse_statement_timeout(const String& sql, u64* out_ms) {
     if (end == p) return false;
     if (out_ms) *out_ms = static_cast<u64>(v);
     return true;
+}
+
+static bool parse_isolation_level(const String& sql, IsolationLevel* out) {
+    String t = trim_sql(sql);
+    String u = upper_sql(t);
+    const char* prefix = "SET ISOLATION_LEVEL";
+    u32 n = static_cast<u32>(std::strlen(prefix));
+    if (u.size() < n || std::strncmp(u.c_str(), prefix, n) != 0) return false;
+    const char* p = u.c_str() + n;
+    while (*p == ' ' || *p == '\t' || *p == '=') p++;
+    String value(p);
+    while (!value.empty() && (value[value.size() - 1] == ';' ||
+                              value[value.size() - 1] == ' ' ||
+                              value[value.size() - 1] == '\t' ||
+                              value[value.size() - 1] == '\n')) {
+        value = value.substr(0, value.size() - 1);
+    }
+    if (value == "SERIALIZABLE") { if (out) *out = IsolationLevel::kSerializable; return true; }
+    if (value == "SNAPSHOT")     { if (out) *out = IsolationLevel::kSnapshot;     return true; }
+    return false;
 }
 
 static bool parse_prepare(const String& sql, String* name, String* body) {
@@ -107,76 +131,231 @@ static bool is_write_statement_type(StmtType type) {
            type == StmtType::kRollback;
 }
 
-REPL::REPL(Database& db) : db_(db) {}
+REPL::REPL(Database& db) : db_(db) {
+    interactive_ = isatty(fileno(stdin)) != 0;
+}
 
-void REPL::run() {
-    printf("MiniADB v0.3.0 — Interactive SQL Shell\n");
-    printf("Type 'exit' to quit, 'help' for commands.\n\n");
+extern "C" void repl_sigint_handler(int) {
+    // Signal handler context: only async-signal-safe ops are allowed.
+    // request_executor_interrupt() does a single relaxed atomic store.
+    minidb::request_executor_interrupt();
+}
 
-    char line[4096];
-    while (true) {
-        printf("minidb> ");
-        fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) break;
+namespace {
 
-        u32 len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
-            line[--len] = '\0';
-        }
+// Walk `text` and track per-character quote state. Returns the index of the
+// first ';' that sits outside quotes, or text.size() if none.
+struct ScanState {
+    bool in_single = false;   // inside '...'
+    bool in_double = false;   // inside "..."
+    bool in_line_comment = false;
+};
 
-        if (len == 0) continue;
-        char* p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (p[0] == '-' && p[1] == '-') continue;
-        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) break;
-
-        if (strcmp(line, "help") == 0) {
-            printf("Commands:\n");
-            printf("  SQL statement ending with ;\n");
-            printf("  SHOW TABLES          — list all tables\n");
-            printf("  DESC <table>         — describe table schema\n");
-            printf("  EXPLAIN <statement>  — show query plan\n");
-            printf("  BEGIN / COMMIT / ROLLBACK — transactions\n");
-            printf("  exit / quit          — exit shell\n\n");
+u32 find_unquoted_semicolon(const String& text, u32 from, ScanState* state) {
+    for (u32 i = from; i < text.size(); i++) {
+        char c = text[i];
+        if (state->in_line_comment) {
+            if (c == '\n') state->in_line_comment = false;
             continue;
         }
+        if (state->in_single) {
+            if (c == '\'') state->in_single = false;
+            continue;
+        }
+        if (state->in_double) {
+            if (c == '"') state->in_double = false;
+            continue;
+        }
+        if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+            state->in_line_comment = true;
+            i++;
+            continue;
+        }
+        if (c == '\'') { state->in_single = true; continue; }
+        if (c == '"')  { state->in_double = true; continue; }
+        if (c == ';')  return i;
+    }
+    return text.size();
+}
 
-        // W25: Split multiple statements on one line by semicolons
-        bool in_sq = false, in_dq = false;
-        String line_str(line);
-        u32 stmt_start = 0;
-        for (u32 i = 0; i < line_str.size(); i++) {
-            if (line_str[i] == '\'' && !in_dq) in_sq = !in_sq;
-            else if (line_str[i] == '"' && !in_sq) in_dq = !in_dq;
-            else if (line_str[i] == ';' && !in_sq && !in_dq) {
-                String stmt = line_str.substr(stmt_start, i - stmt_start);
-                execute_sql(stmt);
-                stmt_start = i + 1;
-                while (stmt_start < line_str.size() &&
-                       (line_str[stmt_start] == ' ' || line_str[stmt_start] == '\t'))
-                    stmt_start++;
+bool statement_is_complete(const String& text) {
+    ScanState s;
+    u32 pos = find_unquoted_semicolon(text, 0, &s);
+    return pos < text.size();
+}
+
+String strip_leading_ws(const String& s) {
+    u32 i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+    return s.substr(i);
+}
+
+bool is_blank_or_comment(const String& s) {
+    String t = strip_leading_ws(s);
+    if (t.empty()) return true;
+    if (t.size() >= 2 && t[0] == '-' && t[1] == '-') return true;
+    return false;
+}
+
+bool starts_with_word_ci(const String& s, const char* word) {
+    String t = strip_leading_ws(s);
+    u32 n = static_cast<u32>(std::strlen(word));
+    if (t.size() < n) return false;
+    for (u32 i = 0; i < n; i++) {
+        char a = t[i];
+        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
+        if (a != word[i]) return false;
+    }
+    // word must be followed by end / ws / ';' so "exits" does not match "exit"
+    if (t.size() == n) return true;
+    char c = t[n];
+    return c == ' ' || c == '\t' || c == ';' || c == '\n';
+}
+
+}  // namespace
+
+void REPL::run() {
+    if (interactive_) {
+        // Ctrl-C cancels the current statement instead of killing the
+        // process. We install the handler only in interactive mode so
+        // scripted runs (pipes / shell tests) keep the standard
+        // terminate-on-SIGINT behaviour.
+        struct sigaction sa;
+        sa.sa_handler = repl_sigint_handler;
+        sigemptyset(&sa.sa_mask);
+        // Intentionally NOT SA_RESTART — when a Ctrl-C lands while we are
+        // blocked in fgets() the read should return EINTR so the loop can
+        // discard the half-typed line and re-prompt, psql-style.
+        sa.sa_flags = 0;
+        sigaction(SIGINT, &sa, nullptr);
+
+        printf("MiniDB v0.3.0 — Interactive SQL Shell\n");
+        printf("Type 'help' for commands, 'exit' to quit. Statements end with ';'.\n");
+        printf("Ctrl-C cancels the current statement.\n\n");
+    }
+
+    String buffer;
+    char line[4096];
+    while (true) {
+        const bool partial = !buffer.empty();
+        if (interactive_) {
+            const char* tail = ">";
+            if (partial) {
+                tail = "->";
+            } else if (db_.txn_manager().current()) {
+                tail = "*>";
+            }
+            printf("minidb%s ", tail);
+            fflush(stdout);
+        }
+        if (!fgets(line, sizeof(line), stdin)) {
+            if (interactive_ && errno == EINTR) {
+                // Ctrl-C at the prompt: drop any partial statement and start fresh.
+                clearerr(stdin);
+                buffer.clear();
+                clear_executor_interrupt();
+                printf("^C\n");
+                continue;
+            }
+            break;
+        }
+
+        // Top-level meta commands only apply when a fresh statement is starting.
+        if (!partial) {
+            String trimmed(line);
+            // Strip trailing newline for the meta-command check.
+            while (!trimmed.empty() &&
+                   (trimmed[trimmed.size() - 1] == '\n' ||
+                    trimmed[trimmed.size() - 1] == '\r')) {
+                trimmed = trimmed.substr(0, trimmed.size() - 1);
+            }
+            if (starts_with_word_ci(trimmed, "exit") ||
+                starts_with_word_ci(trimmed, "quit")) {
+                break;
+            }
+            if (starts_with_word_ci(trimmed, "help")) {
+                if (interactive_) {
+                    printf("Commands:\n");
+                    printf("  <SQL>;             one or more SQL statements terminated by ';'.\n");
+                    printf("                     Statements may span multiple lines.\n");
+                    printf("  SHOW TABLES;       list every table in the current database.\n");
+                    printf("  DESC <table>;      describe a table's schema.\n");
+                    printf("  EXPLAIN <stmt>;    show the query plan (read-only statements).\n");
+                    printf("  EXPLAIN ANALYZE <stmt>;  run the read-only statement and report timing.\n");
+                    printf("  BEGIN; COMMIT; ROLLBACK;   transaction control.\n");
+                    printf("  \\timing [on|off]   toggle per-statement timing.\n");
+                    printf("  help               this list.\n");
+                    printf("  exit | quit        leave the shell.\n\n");
+                }
+                continue;
+            }
+            if (interactive_ && trimmed.size() > 0 && trimmed[0] == '\\') {
+                String cmd = strip_leading_ws(trimmed.substr(1));
+                if (starts_with_word_ci(cmd, "timing")) {
+                    String arg = strip_leading_ws(cmd.substr(6));
+                    if (arg.empty()) {
+                        show_timing_ = !show_timing_;
+                    } else if (arg == "on" || arg == "ON") {
+                        show_timing_ = true;
+                    } else if (arg == "off" || arg == "OFF") {
+                        show_timing_ = false;
+                    } else {
+                        printf("Error: usage: \\timing [on|off]\n\n");
+                        continue;
+                    }
+                    printf("Timing is %s.\n\n", show_timing_ ? "on" : "off");
+                    continue;
+                }
+                printf("Error: unknown meta-command. Try '\\timing'.\n\n");
+                continue;
+            }
+            if (is_blank_or_comment(trimmed)) {
+                continue;
             }
         }
-        if (stmt_start < line_str.size()) {
-            String stmt = line_str.substr(stmt_start);
-            u32 s = 0;
-            while (s < stmt.size() && (stmt[s] == ' ' || stmt[s] == '\t')) s++;
-            if (s > 0) stmt = stmt.substr(s);
-            u32 e = stmt.size();
-            while (e > 0 && (stmt[e-1] == ' ' || stmt[e-1] == '\t')) e--;
-            if (e < stmt.size()) stmt = stmt.substr(0, e);
-            if (!stmt.empty()) {
-                execute_sql(stmt);
+
+        // Accumulate raw lines into the statement buffer.
+        buffer += line;
+
+        // Drain every complete statement (terminated by an unquoted ';').
+        while (true) {
+            ScanState scan;
+            u32 sc = find_unquoted_semicolon(buffer, 0, &scan);
+            if (sc >= buffer.size()) break;     // need more input
+            String stmt = buffer.substr(0, sc);
+            buffer = buffer.substr(sc + 1);
+            String trimmed_stmt = strip_leading_ws(stmt);
+            if (!trimmed_stmt.empty()) {
+                execute_sql(trimmed_stmt);
             }
+        }
+
+        // If the buffer is now just whitespace / line comments, clear it so we
+        // do not stay in a fake "partial" state forever.
+        if (is_blank_or_comment(buffer)) {
+            buffer.clear();
         }
     }
+    // Printed unconditionally — several tests in tests/regression/ grep for
+    // "Goodbye" as a clean-exit sentinel. testlib._clean_minidb_lines already
+    // filters this line out of result-row parsing, so the legacy shell tests
+    // that pipe input to minidb stay unaffected.
     printf("Goodbye.\n");
 }
 
 void REPL::execute_sql(const String& sql) {
+    // Each statement starts with a fresh cancellation flag so a SIGINT
+    // delivered between statements does not abort the next one.
+    clear_executor_interrupt();
     u64 timeout_ms = 0;
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_repl_statement_timeout_ms = timeout_ms;
+        printf("SET\n\n");
+        return;
+    }
+    IsolationLevel iso_level;
+    if (parse_isolation_level(sql, &iso_level)) {
+        db_.txn_manager().set_default_isolation(iso_level);
         printf("SET\n\n");
         return;
     }
@@ -213,6 +392,18 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
     Statement stmt = parser.parse();
+    if (!parser.ok()) {
+        const ParserError& e = parser.error();
+        if (e.line != 0 || e.column != 0) {
+            printf("Error: %s near \"%s\" at line %u column %u\n\n",
+                   e.message.c_str(), e.near.c_str(), e.line, e.column);
+        } else if (!e.message.empty()) {
+            printf("Error: %s\n\n", e.message.c_str());
+        } else {
+            printf("Error: failed to parse statement.\n\n");
+        }
+        return;
+    }
     QueryResourceGuard query_guard(db_.resources(), is_write_statement_type(stmt.type),
                                    db_.config().work_mem_bytes);
     if (!query_guard.acquired()) {
@@ -224,12 +415,10 @@ void REPL::execute_sql(const String& sql) {
                          stmt.type == StmtType::kUpdate;
     bool implicit_txn = false;
 
-    // Check empty/unknown statement
-    if (stmt.type == StmtType::kSelect && !stmt.select) {
-        printf("Error: unsupported or unrecognized command.\n");
-        printf("Type 'help' for available commands.\n\n");
-        return;
-    }
+    // After a successful parse, stmt.type+stmt.select are always consistent.
+    // The "empty SELECT" sentinel that the old code printed as
+    // "Error: unsupported or unrecognized command." can no longer occur:
+    // the parser sets a proper error before returning a default Statement.
 
     // SHOW TABLES
     if (stmt.type == StmtType::kShowTables) {
@@ -254,6 +443,20 @@ void REPL::execute_sql(const String& sql) {
         }
         db_.collect_statistics(table->table_id);
         printf("ANALYZE\n\n");
+        return;
+    }
+
+    // VACUUM [table_name]
+    if (stmt.type == StmtType::kVacuum) {
+        if (!stmt.vacuum_table_name.empty()) {
+            TableEntry* table = db_.get_table(stmt.vacuum_table_name);
+            if (!table) {
+                printf("Error: table '%s' not found\n\n", stmt.vacuum_table_name.c_str());
+                return;
+            }
+        }
+        db_.vacuum();
+        printf("VACUUM\n\n");
         return;
     }
 
@@ -286,6 +489,9 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
 
+    // Transactional DDL: all DDL including ALTER TABLE DROP COLUMN is
+    // now fully transactional (metadata-only drop, no implicit commit).
+
     // DESC TABLE
     if (stmt.type == StmtType::kDescTable && stmt.desc_table) {
         TableEntry* te = db_.get_table(stmt.desc_table->table_name);
@@ -299,6 +505,7 @@ void REPL::execute_sql(const String& sql) {
         printf("---- -------------------- ---------- -------- -------- --------\n");
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* type_str = "?";
             switch (c.type) {
                 case TypeId::kBool:    type_str = "BOOL"; break;
@@ -336,6 +543,13 @@ void REPL::execute_sql(const String& sql) {
             else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
             else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
             else c.type = TypeId::kVarchar;
+            // Only VARCHAR(n) carries a bound; TEXT and bare VARCHAR keep
+            // varchar_length = 0 (unbounded). Negative parser sentinel is
+            // mapped to 0 too.
+            if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
+                c.varchar_length = static_cast<u32>(col.varchar_length);
+            }
+            c.check_expr = col.check_expr;
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema)) {
@@ -377,6 +591,10 @@ void REPL::execute_sql(const String& sql) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
+                if (alt->new_column.type_name == "VARCHAR" &&
+                    alt->new_column.varchar_length > 0) {
+                    col.varchar_length = static_cast<u32>(alt->new_column.varchar_length);
+                }
                 String error;
                 if (db_.alter_table_add_column(alt->table_name, col, &error)) {
                     printf("Column '%s' added.\n\n", alt->new_column.name.c_str());
@@ -489,7 +707,29 @@ void REPL::execute_sql(const String& sql) {
     UniquePtr<PlanNode> plan = planner.plan(stmt);
     if (!plan) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
-        printf("Error: failed to build plan.\n\n");
+        // Most common cause: a referenced table does not exist. Catch that
+        // up front so the user gets a useful message instead of the generic
+        // "failed to build plan".
+        const String* missing = nullptr;
+        if (stmt.type == StmtType::kInsert && stmt.insert) {
+            if (!db_.get_table(stmt.insert->table.name)) missing = &stmt.insert->table.name;
+        } else if (stmt.type == StmtType::kUpdate && stmt.update) {
+            if (!db_.get_table(stmt.update->table.name)) missing = &stmt.update->table.name;
+        } else if (stmt.type == StmtType::kDelete && stmt.delete_stmt) {
+            if (!db_.get_table(stmt.delete_stmt->table.name)) missing = &stmt.delete_stmt->table.name;
+        } else if (stmt.type == StmtType::kSelect && stmt.select) {
+            for (u32 i = 0; i < stmt.select->from_tables.size(); i++) {
+                if (!db_.get_table(stmt.select->from_tables[i].name)) {
+                    missing = &stmt.select->from_tables[i].name;
+                    break;
+                }
+            }
+        }
+        if (missing) {
+            printf("Error: table '%s' not found.\n\n", missing->c_str());
+        } else {
+            printf("Error: failed to build plan (check column names and join conditions).\n\n");
+        }
         return;
     }
 
@@ -506,6 +746,14 @@ void REPL::execute_sql(const String& sql) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2): record where the undo log is
+    // right now so a mid-statement error inside an explicit transaction
+    // rolls back only this statement's writes. Implicit-txn errors fall
+    // through to the existing full rollback below.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
 
     const Schema& out = exec->output_schema();
@@ -513,40 +761,108 @@ void REPL::execute_sql(const String& sql) {
                     std::chrono::milliseconds(effective_timeout_ms);
     bool timed_out = false;
 
-    if (out.column_count() > 0) {
-        for (u32 i = 0; i < out.column_count(); i++) {
-            if (i > 0) printf(" | ");
-            printf("%s", out.get_column(i).name.c_str());
-        }
-        printf("\n");
-    }
-
-    u64 row_count = 0;
+    // Buffer the result rows first. Interactive mode then renders an
+    // aligned table; non-interactive mode falls back to the legacy
+    // pipe-separated stream, so shell tests are unaffected.
+    Vector<Vector<String>> rows;
+    bool row_limit_hit = false;
+    auto exec_start = std::chrono::steady_clock::now();
     while (true) {
+        if (executor_cancelled()) break;
         if (effective_timeout_ms != 0 && std::chrono::steady_clock::now() >= deadline) {
             timed_out = true;
             break;
         }
-        if (db_.config().max_result_rows != 0 && row_count >= db_.config().max_result_rows) {
-            printf("Error: result row limit exceeded.\n");
+        if (db_.config().max_result_rows != 0 && rows.size() >= db_.config().max_result_rows) {
+            row_limit_hit = true;
             break;
         }
         ExecResult r = exec->next();
         if (!r.ok()) break;
-        print_tuple(r.tuple, out);
-        row_count++;
+        Vector<String> cells;
+        for (u32 i = 0; i < out.column_count(); i++) {
+            Value v = r.tuple.get_value(i);
+            cells.push_back(v.is_null() ? String("NULL") : v.to_string());
+        }
+        rows.push_back(static_cast<Vector<String>&&>(cells));
     }
+    auto exec_end = std::chrono::steady_clock::now();
+    double elapsed_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count()) / 1000.0;
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         printf("Error: %s\n\n", executor_error());
         return;
     }
-
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         printf("Error: statement timeout.\n\n");
         return;
+    }
+
+    // DML statements report through a one-column tuple named
+    // "affected_rows" (insert/update) or "deleted_rows" (delete). In
+    // interactive mode we surface that as a friendly "INSERT N" /
+    // "UPDATE N" / "DELETE N" line, mirroring psql. Non-interactive
+    // mode keeps the legacy two-row column to avoid breaking tests.
+    bool is_dml_summary = out.column_count() == 1 &&
+        (out.get_column(0).name == String("affected_rows") ||
+         out.get_column(0).name == String("deleted_rows"));
+
+    if (interactive_) {
+        if (is_dml_summary) {
+            const char* verb = "RESULT";
+            switch (stmt.type) {
+                case StmtType::kInsert: verb = "INSERT"; break;
+                case StmtType::kUpdate: verb = "UPDATE"; break;
+                case StmtType::kDelete: verb = "DELETE"; break;
+                default: break;
+            }
+            const char* n = "0";
+            if (!rows.empty() && !rows[0].empty()) n = rows[0][0].c_str();
+            printf("%s %s\n", verb, n);
+        } else if (out.column_count() == 0) {
+            // Statements that succeed without a result tuple — nothing to print.
+        } else {
+            render_aligned_table(rows, out);
+            printf("(%llu row%s)\n",
+                   static_cast<unsigned long long>(rows.size()),
+                   rows.size() == 1 ? "" : "s");
+            if (row_limit_hit) {
+                printf("Note: result truncated at max_result_rows = %llu.\n",
+                       static_cast<unsigned long long>(db_.config().max_result_rows));
+            }
+        }
+        if (show_timing_) printf("Time: %.3f ms\n", elapsed_ms);
+    } else {
+        if (out.column_count() > 0) {
+            for (u32 i = 0; i < out.column_count(); i++) {
+                if (i > 0) printf(" | ");
+                printf("%s", out.get_column(i).name.c_str());
+            }
+            printf("\n");
+        }
+        for (u32 r = 0; r < rows.size(); r++) {
+            for (u32 i = 0; i < rows[r].size(); i++) {
+                if (i > 0) printf(" | ");
+                printf("%s", rows[r][i].c_str());
+            }
+            printf("\n");
+        }
+        if (row_limit_hit) {
+            printf("Error: result row limit exceeded.\n");
+        }
     }
 
     if (is_write_stmt) {
@@ -563,6 +879,42 @@ void REPL::execute_sql(const String& sql) {
     }
 
     printf("\n");
+}
+
+void REPL::render_aligned_table(const Vector<Vector<String>>& rows,
+                                const Schema& schema) {
+    u32 n = schema.column_count();
+    if (n == 0) return;
+    Vector<u32> widths;
+    widths.resize(n);
+    for (u32 i = 0; i < n; i++) widths[i] = schema.get_column(i).name.size();
+    for (u32 r = 0; r < rows.size(); r++) {
+        for (u32 i = 0; i < rows[r].size() && i < n; i++) {
+            u32 w = rows[r][i].size();
+            if (w > widths[i]) widths[i] = w;
+        }
+    }
+    // Header
+    for (u32 i = 0; i < n; i++) {
+        if (i > 0) printf(" | ");
+        printf("%-*s", static_cast<int>(widths[i]), schema.get_column(i).name.c_str());
+    }
+    printf("\n");
+    // Separator: dashes per column, "-+-" at boundaries.
+    for (u32 i = 0; i < n; i++) {
+        if (i > 0) printf("-+-");
+        for (u32 j = 0; j < widths[i]; j++) printf("-");
+    }
+    printf("\n");
+    // Rows
+    for (u32 r = 0; r < rows.size(); r++) {
+        for (u32 i = 0; i < n; i++) {
+            if (i > 0) printf(" | ");
+            const String& cell = i < rows[r].size() ? rows[r][i] : String("");
+            printf("%-*s", static_cast<int>(widths[i]), cell.c_str());
+        }
+        printf("\n");
+    }
 }
 
 void REPL::print_tuple(const Tuple& tuple, const Schema& schema) {

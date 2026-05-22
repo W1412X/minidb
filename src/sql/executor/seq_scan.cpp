@@ -72,6 +72,10 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
             return ExecResult::ok(static_cast<Tuple&&>(tuple));
         }
         if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
+            if (txn_mgr_->current()) {
+                txn_mgr_->current()->record_read(heap_->table_id(),
+                                                 RecordId(current_page_id_, target));
+            }
             return ExecResult::ok(static_cast<Tuple&&>(tuple));
         }
         return follow_version_chain(page, target);
@@ -95,6 +99,7 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
     // MVCC: Check if current version is visible to current transaction
     if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
         last_rid_ = RecordId(current_page_id_, slot);
+        txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
     }
 
@@ -132,6 +137,7 @@ ExecResult SeqScanExecutor::follow_version_chain(Page* page, u16 slot) {
         if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
             mark_skip_rid(ver_page, ver_slot);
             last_rid_ = RecordId(ver_page, ver_slot);
+            txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
             Tuple projected = Tuple::deserialize_projected_from_page(
                 prev_page->data() + prev_lp->offset, storage_schema_, output_schema_,
                 projected_columns_, prev_lp->length);
@@ -246,7 +252,7 @@ ExecResult SeqScanExecutor::next() {
             }
         }
 
-        // 所有 slot 处理完毕, 翻页
+        // Done with this page; advance to the next.
         pool_->unpin_page(current_page_id_);
         pages_remaining_--;
         current_slot_ = 0;

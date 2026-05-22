@@ -1,6 +1,6 @@
 /**
  * @file token.h
- * @brief Token definition — SQL Lexical analysis的输出单元
+ * @brief Token definition — output unit of SQL lexical analysis.
  */
 #pragma once
 
@@ -10,7 +10,7 @@
 namespace minidb {
 
 enum class TokenType : u16 {
-    // 关键字
+    // Keywords.
     KW_SELECT, KW_INSERT, KW_UPDATE, KW_DELETE, KW_EXPLAIN, KW_ANALYZE,
     KW_CREATE, KW_DROP, KW_TABLE, KW_INDEX, KW_ON,
     KW_FROM, KW_WHERE, KW_INTO, KW_VALUES, KW_SET,
@@ -30,6 +30,9 @@ enum class TokenType : u16 {
     KW_CASE, KW_WHEN, KW_THEN, KW_ELSE, KW_END, KW_CAST, KW_COALESCE, KW_NULLIF,
     KW_ALTER, KW_ADD, KW_COLUMN, KW_RENAME, KW_DEFAULT, KW_TO,
     KW_PREPARE, KW_EXECUTE, KW_DEALLOCATE,
+    KW_CHECK,
+    KW_NULLS, KW_FIRST, KW_LAST,
+    KW_VACUUM,
 
     // Symbol
     PLUS, MINUS, STAR, SLASH, PERCENT,
@@ -37,13 +40,13 @@ enum class TokenType : u16 {
     LPAREN, RPAREN, COMMA, SEMICOLON, DOT,
     ASSIGN,
 
-    // 字面量
+    // Literals.
     INT_LITERAL,
     FLOAT_LITERAL,
     STRING_LITERAL,
     IDENTIFIER,
 
-    // 特殊
+    // Special / punctuation.
     END_OF_INPUT,
     ERROR,
 };

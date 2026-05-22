@@ -76,24 +76,24 @@ public:
     // Create new blank page
     Result<Page*> new_page(PageId page_id, PageType type = PageType::kHeapData);
 
-    // 减少 pin_count
+    // Decrement pin_count.
     void unpin_page(PageId page_id);
 
-    // 标记脏页
+    // Mark the page dirty.
     void mark_dirty(PageId page_id);
     void set_page_lsn(PageId page_id, u64 lsn);
     void set_wal_manager(WalManager* wal_mgr) { wal_mgr_ = wal_mgr; }
 
-    // 刷盘
+    // Flush to disk.
     void flush_page(PageId page_id);
     void flush_all();
 
-    // State查询
+    // State queries.
     u32 pool_size() const { return pool_size_; }
     BufferPoolStats stats() const;
 
 private:
-    // Search可驱逐的帧
+    // Find an evictable frame.
     FrameIdx find_victim_frame(BufferPoolPartition& partition, u32 partition_idx);
 
     u32 partition_for(PageId page_id) const;
@@ -116,7 +116,7 @@ private:
     u32 flush_batch_size_;
     u64 wait_timeout_ms_;
     u32 max_waiters_;
-    Frame* frames_;                    // 固定大小帧Array
+    Frame* frames_;                    // fixed-size frame array
     BufferPoolPartition* partitions_;
     mutable Mutex wait_latch_;
     CondVar wait_cond_;

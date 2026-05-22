@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief MiniADB 程序入口 — Single database
+ * @brief MiniDB program entrypoint — single database mode
  */
 #include "database/database.h"
 #include "common/db_config.h"

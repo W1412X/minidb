@@ -1,12 +1,12 @@
 /**
  * @file lock_manager.h
- * @brief 锁管理器 — 表级锁, 兼容矩阵, 等待Queue, 死锁检测
+ * @brief Lock manager — table-level locks, compatibility matrix, wait queue, deadlock detection.
  *
- * 对齐 PostgreSQL LockManager 概念:
- *   - 锁模式: AccessShare, RowExclusive, Exclusive, AccessExclusive
- *   - 锁兼容矩阵控制并发
- *   - 等待Queue + 超时
- *   - wait-for graph 死锁检测
+ * Mirrors PostgreSQL LockManager concepts:
+ *   - lock modes: AccessShare, RowExclusive, Exclusive, AccessExclusive
+ *   - lock compatibility matrix governs concurrency
+ *   - wait queue + timeout
+ *   - wait-for graph for deadlock detection
  */
 #pragma once
 
@@ -21,37 +21,37 @@
 namespace minidb {
 
 // ============================================================
-// Lock模式 (对齐 PostgreSQL, 简化为 4 种)
+// Lock modes (PostgreSQL-aligned, simplified to 4 modes).
 // ============================================================
 
 enum class LockMode : u8 {
-    kAccessShare      = 0,  // SELECT (读)
-    kRowExclusive     = 1,  // INSERT/UPDATE/DELETE (写)
-    kExclusive        = 2,  // CREATE INDEX (独占但允许读)
-    kAccessExclusive  = 3,  // DROP TABLE/ALTER TABLE (完全独占)
+    kAccessShare      = 0,  // SELECT (read)
+    kRowExclusive     = 1,  // INSERT/UPDATE/DELETE (write)
+    kExclusive        = 2,  // CREATE INDEX (exclusive, still allows reads)
+    kAccessExclusive  = 3,  // DROP TABLE / ALTER TABLE (fully exclusive)
 };
 
 static constexpr u32 kNumLockModes = 4;
 
 // ============================================================
-// Lock请求
+// Lock request.
 // ============================================================
 
 struct LockRequest {
-    u64       txn_id;       // 请求事务 ID
-    LockMode  mode;         // 请求的锁模式
-    bool      granted;      // 是否已授予
-    bool      waiting;      // 是否正在等待
+    u64       txn_id;       // requesting transaction id
+    LockMode  mode;         // requested lock mode
+    bool      granted;      // true once granted
+    bool      waiting;      // true while waiting on the queue
 };
 
 // ============================================================
-// Lock对象 (每个表一个)
+// Lock object (one per table).
 // ============================================================
 
 struct LockObject {
     u32                    table_id;
-    Vector<LockRequest>    requests;     // 等待Queue
-    LockMode               granted_mask; // 当前已授予的最高锁模式
+    Vector<LockRequest>    requests;     // wait queue
+    LockMode               granted_mask; // strongest granted mode currently held
 };
 
 // ============================================================
@@ -63,20 +63,20 @@ public:
     LockManager();
     ~LockManager() = default;
 
-    // 请求锁 (阻塞直到Get或超时)
+    // Acquire a lock (blocks until granted or timed out).
     Status lock_table(u64 txn_id, u32 table_id, LockMode mode);
     Status lock_record(u64 txn_id, u32 table_id, const RecordId& rid, LockMode mode);
     Status lock_key(u64 txn_id, u32 table_id, const String& key, LockMode mode);
 
-    // Free锁
+    // Release a lock.
     void unlock_table(u64 txn_id, u32 table_id);
     void unlock_record(u64 txn_id, u32 table_id, const RecordId& rid);
     void unlock_key(u64 txn_id, u32 table_id, const String& key);
 
-    // Free all locks held by the transaction (事务结束时调用)
+    // Release every lock held by the transaction (called on commit/rollback).
     void unlock_all(u64 txn_id);
 
-    // Deadlock检测
+    // Deadlock detection.
     bool detect_deadlock(u64 txn_id);
 
 private:
@@ -88,7 +88,7 @@ private:
     Mutex latch_;
     CondVar cond_;
     HashMap<u32, LockObject> lock_table_;   // table_id → LockObject
-    HashMap<u64, Vector<u32>> txn_locks_;   // txn_id → 持有的 table_id 列表
+    HashMap<u64, Vector<u32>> txn_locks_;   // txn_id -> list of held table_ids
     HashMap<u64, LockObject> record_locks_; // record/key → LockObject
     HashMap<u64, Vector<u64>> txn_record_locks_;
 };

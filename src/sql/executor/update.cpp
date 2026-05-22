@@ -8,6 +8,7 @@
 #include "transaction/transaction.h"
 #include "recovery/wal.h"
 #include "sql/parser/ast.h"
+#include "sql/parser/parser.h"
 
 namespace minidb {
 
@@ -40,6 +41,40 @@ static bool build_unique_index_key(const Schema& schema, const Vector<Value>& ro
     }
     *key = IndexKey::from_values(values);
     return key->fits();
+}
+
+// Evaluate every column-level CHECK declared on this schema against the
+// proposed post-UPDATE row. Returns nullptr when all CHECKs hold, otherwise
+// a static reason string. NULL result is treated as UNKNOWN (passes), per
+// SQL standard CHECK semantics.
+static const char* check_constraint_violation(const Schema& schema,
+                                              const Vector<Value>& row) {
+    Tuple candidate(schema, row);
+    for (u32 c = 0; c < schema.column_count(); c++) {
+        const Column& col = schema.get_column(c);
+        if (col.check_expr.empty()) continue;
+        String wrapped("SELECT ");
+        wrapped += col.check_expr;
+        Parser p(wrapped);
+        Statement stmt = p.parse();
+        if (!p.ok() || !stmt.select || stmt.select->select_list.empty()) {
+            return "CHECK constraint expression invalid";
+        }
+        Value result = ExpressionEvaluator::evaluate(*stmt.select->select_list[0], candidate);
+        if (result.is_null()) continue;
+        bool ok = false;
+        if (result.type_id() == TypeId::kBool) {
+            ok = result.get_bool();
+        } else if (result.type_id() == TypeId::kInt32) {
+            ok = result.get_int32() != 0;
+        } else if (result.type_id() == TypeId::kInt64) {
+            ok = result.get_int64() != 0;
+        } else {
+            return "CHECK constraint produced non-boolean";
+        }
+        if (!ok) return "CHECK constraint violated";
+    }
+    return nullptr;
 }
 
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
@@ -83,12 +118,10 @@ void UpdateExecutor::init() {
 }
 
 bool UpdateExecutor::row_satisfies_schema(const Vector<Value>& row) const {
-    if (row.size() != schema_.column_count()) return false;
-    for (u32 i = 0; i < schema_.column_count(); i++) {
-        const Column& col = schema_.get_column(i);
-        if (col.not_null && row[i].is_null()) return false;
-    }
-    return true;
+    // Defers to Schema::validate_row so NOT NULL, VARCHAR(n), and future
+    // CHECK constraints all live in one place. The caller surfaces the
+    // returned message via set_executor_error.
+    return schema_.validate_row(row) == nullptr;
 }
 
 bool UpdateExecutor::violates_unique_constraints(const Vector<Value>& row,
@@ -235,9 +268,16 @@ ExecResult UpdateExecutor::next() {
         }
     }
     HashMap<String, bool> pending_unique_keys;
-    Vector<RecordId> materialized_targets;
 
-    if (!hot_eligible) {
+    // Drain the WHERE-side iterator into a frozen RID list BEFORE applying
+    // any updates. Streaming directly from `child_->next()` while mutating
+    // the heap is unsafe: the HOT path writes a new same-page version that
+    // satisfies "own write" visibility, so a subsequent child_->next() would
+    // see it and re-match the predicate, looping until the page fills up
+    // (the classic SQL "Halloween problem"). Materialising decouples scan
+    // from mutation in both the HOT and non-HOT branches.
+    Vector<RecordId> materialized_targets;
+    {
         HashMap<String, bool> seen_targets;
         while (true) {
             if (executor_cancelled()) break;
@@ -257,19 +297,14 @@ ExecResult UpdateExecutor::next() {
     u32 materialized_pos = 0;
     while (true) {
         if (executor_cancelled()) break;
-        RecordId old_rid;
+        if (materialized_pos >= materialized_targets.size()) break;
+        RecordId old_rid = materialized_targets[materialized_pos++];
         Tuple old_tuple;
-        if (hot_eligible) {
-            ExecResult result = child_->next();
-            if (!result.ok()) break;
-            old_tuple = static_cast<Tuple&&>(result.tuple);
-            if (!child_->last_record_id(&old_rid)) continue;
-        } else {
-            if (materialized_pos >= materialized_targets.size()) break;
-            old_rid = materialized_targets[materialized_pos++];
-            if (!db_ || !db_->read_tuple(table_id_, schema_, old_rid, &old_tuple)) continue;
-            if (old_tuple.xmax() != kInvalidTxnId) continue;
-        }
+        if (!db_ || !db_->read_tuple(table_id_, schema_, old_rid, &old_tuple)) continue;
+        // No silent skip on xmax!=0 here. A non-zero xmax means another
+        // transaction modified the row between our snapshot and now — the
+        // lock + xmax recheck below surfaces that as a serialization error
+        // (I2). Silently skipping would mask the lost-update conflict.
 
         Vector<Value> new_values;
         for (u32 i = 0; i < old_tuple.column_count(); i++) {
@@ -316,8 +351,12 @@ ExecResult UpdateExecutor::next() {
             }
         }
 
-        if (!row_satisfies_schema(new_values)) {
-            set_executor_error("NOT NULL constraint violated");
+        if (const char* reason = schema_.validate_row(new_values)) {
+            set_executor_error(reason);
+            return ExecResult::empty();
+        }
+        if (const char* reason = check_constraint_violation(schema_, new_values)) {
+            set_executor_error(reason);
             return ExecResult::empty();
         }
         if (violates_unique_constraints(new_values, old_rid)) continue;
@@ -338,12 +377,12 @@ ExecResult UpdateExecutor::next() {
         if (batch_unique_conflict) continue;
 
         // Build new version Tuple
-        // Version chain方向: old → new → end (对齐 PostgreSQL t_ctid)
-        // 新版本 next_ver = (0,0) 表示链尾
+        // Version chain direction: old -> new -> end (PostgreSQL t_ctid).
+        // New version's next_ver = (0,0) signals end of chain.
         Tuple new_tuple(schema_, new_values);
         new_tuple.set_xmin(txn_id);
         new_tuple.set_xmax(0);
-        new_tuple.set_next_version(kNullPageId, 0);  // 链尾
+        new_tuple.set_next_version(kNullPageId, 0);  // end of chain
         if (db_ && !db_->validate_index_keys(table_id_, new_tuple)) continue;
 
         u32 serialized_size = new_tuple.serialized_size();
@@ -355,29 +394,28 @@ ExecResult UpdateExecutor::next() {
         bool hot_used = false;
 
         // ============================================================
-        // HOT Update: WAL-first — 预定位置 → 写 WAL → 提交数据
+        // HOT Update: WAL-first — reserve slot (RAII), write WAL, commit.
         // ============================================================
         if (hot_eligible) {
             auto prepare = heap_->prepare_insert_in_page(old_rid.page_id, size);
             if (prepare.ok()) {
-                SlotIdx predicted_slot = prepare.value();
+                auto reservation = std::move(prepare.value());
                 u64 lsn = 0;
                 if (wal_) {
                     lsn = wal_->log_update(txn_id, table_id_,
                                            old_rid.page_id, old_rid.slot_idx,
-                                           old_rid.page_id, predicted_slot,
+                                           old_rid.page_id, reservation.predicted_slot(),
                                            buffer, size);
                 }
 
-                auto hot_result = heap_->commit_insert_in_page(
-                    old_rid.page_id, predicted_slot, buffer, size, lsn);
+                auto hot_result = reservation.commit(buffer, size, lsn);
                 if (hot_result.ok()) {
                     for (u32 k = 0; k < row_unique_keys.size(); k++) {
                         pending_unique_keys.insert(row_unique_keys[k], true);
                     }
                     Pair<PageId, SlotIdx> new_rid = hot_result.value();
 
-                    // 原子化: set_next_version + mark_deleted + set_lsn (LSN 在 unpin 前Settings)
+                    // Atomic: set_next_version + mark_deleted + set_lsn (LSN stamped before unpin).
                     heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                             new_rid.first, new_rid.second, txn_id, lsn);
 
@@ -393,42 +431,51 @@ ExecResult UpdateExecutor::next() {
         }
 
         // ============================================================
-        // 非 HOT (回退路径): WAL-first — 预定位置 → 写 WAL → 提交数据
+        // Non-HOT fallback: WAL-first — reserve slot (RAII), write WAL, commit.
         // ============================================================
         if (!hot_used) {
             auto prepare = heap_->prepare_insert(size);
             if (prepare.ok()) {
-                HeapFile::InsertPlan plan = prepare.value();
+                auto reservation = std::move(prepare.value());
                 u64 lsn = 0;
                 if (wal_) {
                     lsn = wal_->log_update(txn_id, table_id_,
                                            old_rid.page_id, old_rid.slot_idx,
-                                           plan.page_id, plan.predicted_slot,
+                                           reservation.page_id(), reservation.predicted_slot(),
                                            buffer, size);
                 }
 
-                auto ins_result = heap_->commit_insert(
-                    plan.page_id, plan.is_new_page, plan.predicted_slot, buffer, size, lsn);
+                auto ins_result = reservation.commit(buffer, size, lsn);
                 if (ins_result.ok()) {
-                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                        pending_unique_keys.insert(row_unique_keys[k], true);
-                    }
-                    count++;
                     Pair<PageId, SlotIdx> new_rid = ins_result.value();
                     RecordId new_record_id(new_rid.first, new_rid.second);
 
-                    // 原子化: set_next_version + mark_deleted + set_lsn
+                    // Atomic: set_next_version + mark_deleted + set_lsn.
                     heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                             new_rid.first, new_rid.second, txn_id, lsn);
 
+                    // Record undo BEFORE touching indexes so a failure in
+                    // insert_index_entries unwinds heap + partial indexes
+                    // via the transaction's rollback path.
                     if (txn_mgr_ && txn_mgr_->current()) {
                         txn_mgr_->record_delete(table_id_, old_rid);
                         txn_mgr_->record_insert(table_id_, new_record_id);
                     }
                     if (db_ && hot_eligible) {
-                        db_->delete_index_entries(table_id_, old_tuple, old_rid);
-                        db_->insert_index_entries(table_id_, new_tuple, new_record_id);
+                        // Do NOT eagerly remove the old version's index
+                        // entry — under SI an older snapshot may still need
+                        // to find the old row through this index. GC removes
+                        // it later. We still insert the new version's entry
+                        // so newer snapshots find the new row.
+                        if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
+                            set_executor_error("index insert failed");
+                            return ExecResult::empty();
+                        }
                     }
+                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
+                        pending_unique_keys.insert(row_unique_keys[k], true);
+                    }
+                    count++;
                 }
             }
         }

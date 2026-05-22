@@ -16,32 +16,32 @@ namespace minidb {
 // ============================================================
 
 struct TxnSlotShm {
-    u64 txn_id;           // 0 = 空闲
+    u64 txn_id;           // 0 = free slot
     u64 snapshot_id;
-    u64 commit_id;        // 0 = 未提交
+    u64 commit_id;        // 0 = not committed
     u8  state;            // 0=ACTIVE, 1=COMMITTED, 2=ABORTED
 };
 
 struct TableSlotShm {
     u32 table_id;
     char name[64];
-    u8  schema_buf[2048]; // Serialize后的 schema
+    u8  schema_buf[2048]; // serialised schema
     u32 schema_size;
     PageId first_page_id;
     u32 num_pages;
 };
 
 struct SharedMemoryHeader {
-    // 元数据
+    // Metadata.
     u32 magic;                    // 0x4D444243 = "MDBC"
     u32 version;
     Mutex catalog_latch;
     Mutex txn_latch;
 
-    // 全局事务 ID
+    // Global transaction id.
     u64 next_txn_id;
 
-    // Transaction槽
+    // Transaction slots.
     static constexpr u32 kMaxTxns = 256;
     TxnSlotShm txn_slots[kMaxTxns];
 
@@ -52,18 +52,18 @@ struct SharedMemoryHeader {
 };
 
 // ============================================================
-// SharedMemory 管理器
+// Shared-memory manager.
 // ============================================================
 
 class SharedMemory {
 public:
-    // Create新的Shared memory区域
+    // Create a new shared-memory region.
     static SharedMemory* create(const String& name, u32 size);
 
-    // 附加到已有Shared memory
+    // Attach to an existing shared-memory region.
     static SharedMemory* attach(const String& name);
 
-    // 销毁
+    // Destroy.
     static void destroy(const String& name);
 
     ~SharedMemory();

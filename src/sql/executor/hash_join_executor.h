@@ -59,7 +59,7 @@ private:
     // Hash Map: key hash → Linked List
     static constexpr u32 BUCKET_COUNT = 8192;
     HashJoinEntry* buckets_[BUCKET_COUNT];
-    Vector<HashJoinEntry*> all_entries_;  // Memory管理
+    Vector<HashJoinEntry*> all_entries_;  // owns entry storage
     Tuple current_left_;
     HashJoinEntry* current_entry_;
     Expression* left_key_expr_;

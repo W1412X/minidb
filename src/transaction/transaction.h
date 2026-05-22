@@ -7,8 +7,11 @@
 #include "common/defs.h"
 #include "common/mutex.h"
 #include "container/vector.h"
+#include "container/unique_ptr.h"
 #include "index/btree.h"
+#include "record/schema.h"
 #include "record/value.h"
+#include "transaction/txn_status_log.h"
 
 namespace minidb {
 
@@ -18,23 +21,80 @@ enum class UndoType : u8 {
     kInsert = 0,
     kDelete = 1,
     kHotInsert = 2,
-    kHotDelete = 3
+    kHotDelete = 3,
+    // DDL undo types — participate in the undo log for correct
+    // interleaving with DML undos during transaction rollback.
+    kDdlCreateTable     = 10,   // undo = drop table + auto-indexes + files
+    kDdlDropTable       = 11,   // undo = restore catalog entries from saved data
+    kDdlCreateIndex     = 12,   // undo = drop index + file
+    kDdlDropIndex       = 13,   // undo = restore index + rebuild from heap
+    kDdlAlterAddColumn  = 14,   // undo = remove the added column
+    kDdlAlterDropColumn = 15,   // undo = clear is_dropped flag on the column
+    kDdlAlterRenameColumn = 16, // undo = rename column back to original
 };
 
 struct UndoRecord {
     UndoType type;
+    u32 table_id;
+    RecordId rid;            // DML undo: the affected row
+    u32 ddl_info_idx;        // DDL undo: index into Transaction::ddl_undo_infos_
+};
+
+// Saved index metadata for DDL undo (DROP TABLE / DROP INDEX).
+struct DdlSavedIndex {
+    u32 index_id;
+    String index_name;
+    u32 table_id;
+    Vector<u32> key_columns;
+    bool is_unique;
+    DdlSavedIndex() : index_id(0), table_id(0), is_unique(false) {}
+};
+
+// Metadata for undoing one DDL operation. Stored in a parallel vector
+// in Transaction; the UndoRecord's ddl_info_idx indexes into it.
+struct DdlUndoInfo {
+    String table_name;                    // table involved
+    Schema saved_schema;                  // DROP TABLE: schema to restore
+    Vector<DdlSavedIndex> saved_indexes;  // DROP TABLE: indexes to restore
+    Vector<u32> auto_index_ids;           // CREATE TABLE: auto-created index IDs
+    DdlSavedIndex single_index;           // CREATE/DROP single INDEX
+    u32 column_position;                  // ALTER: column ordinal
+    String rename_from;                   // ALTER RENAME: original column name
+    Vector<String> deferred_deletes;      // files to delete on COMMIT
+    DdlUndoInfo() : column_position(0) {}
+};
+
+// SSI read-tracking entry. One per visible tuple emitted by a SeqScan /
+// IndexScan to a serializable transaction. Cheap to record; at commit
+// time we intersect this set against concurrent committed write sets to
+// detect rw-conflict dangerous structures (eliminates write skew).
+struct ReadRecord {
     u32 table_id;
     RecordId rid;
 };
 
 static constexpr u64 kInvalidTxnId = 0;
 
+/// Frozen transaction ID.  A tuple with xmin == kFrozenTxnId is considered
+/// committed and visible to every snapshot without any CLOG lookup.
+/// PostgreSQL uses FrozenTransactionId = 2 for the same purpose.
+static constexpr u64 kFrozenTxnId = 2;
+
 enum class TxnState : u8 { kActive = 0, kCommitted = 1, kAborted = 2 };
 
+// Per-transaction isolation level.
+//   kSnapshot      — default; SI semantics, write skew possible.
+//   kSerializable  — SSI-lite: read set tracked, commit aborts if any
+//                    concurrent committed txn wrote to a row we read.
+enum class IsolationLevel : u8 {
+    kSnapshot = 0,
+    kSerializable = 1,
+};
+
 struct TxnSlot {
-    u64     txn_id;          // Transaction unique ID
-    u64     snapshot_id;     // Snapshot: sees all versions committed before snapshot_id
-    u64     commit_id;       // Allocated at commit (0=uncommitted)
+    u64     txn_id;          // transaction unique id
+    u64     snapshot_id;     // snapshot: sees all versions committed before snapshot_id
+    u64     commit_id;       // assigned at commit (0 = uncommitted)
     TxnState state;
     PageId  home_page;       // Page lock holding info for the transaction's process (reserved)
 };
@@ -49,16 +109,33 @@ public:
     TxnState state() const { return state_; }
     u64 commit_id() const { return commit_id_; }
     const Vector<UndoRecord>& undo_records() const { return undo_records_; }
+    const Vector<ReadRecord>& read_set() const { return read_set_; }
     const Vector<u64>& active_snapshot() const { return active_snapshot_; }
+    IsolationLevel isolation() const { return isolation_; }
 
     void set_state(TxnState s) { state_ = s; }
     void set_commit_id(u64 id) { commit_id_ = id; }
     void set_resource_acquired(bool v) { resource_acquired_ = v; }
+    void set_isolation(IsolationLevel level) { isolation_ = level; }
     bool resource_acquired() const { return resource_acquired_; }
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
     void record_hot_insert(u32 table_id, const RecordId& rid);
     void record_hot_delete(u32 table_id, const RecordId& rid);
+    // SSI read tracking. No-op for snapshot-isolation transactions so the
+    // serializable cost stays opt-in. Bounded list — caller is expected
+    // to be a per-tuple emit point in a scan operator.
+    void record_read(u32 table_id, const RecordId& rid);
+    // Record a DDL operation in the undo log so it can be rolled back.
+    void record_ddl(UndoType type, u32 table_id, DdlUndoInfo&& info);
+    const Vector<DdlUndoInfo>& ddl_undo_infos() const { return ddl_undo_infos_; }
+
+    // Mark a point in the undo log that the statement-level rollback can
+    // restore. Returns the current undo log length.
+    u32 undo_mark() const { return undo_records_.size(); }
+    // Drop undo records past `mark`. Used by rollback_to_savepoint after
+    // it has applied them in reverse.
+    void truncate_undo(u32 mark);
 
 private:
     u64 txn_id_;
@@ -67,6 +144,9 @@ private:
     TxnState state_;
     Vector<u64> active_snapshot_;
     Vector<UndoRecord> undo_records_;
+    Vector<DdlUndoInfo> ddl_undo_infos_;
+    Vector<ReadRecord> read_set_;
+    IsolationLevel isolation_;
     bool resource_acquired_;
 };
 
@@ -79,6 +159,11 @@ public:
     Transaction* begin();
     bool commit(Transaction* txn);
     bool rollback(Transaction* txn);
+    // Undo every change recorded after `mark` in the txn's undo log, in
+    // reverse order, then truncate the log back to that point. The
+    // transaction stays ACTIVE — this is the engine behind statement-
+    // level atomicity inside an explicit BEGIN..COMMIT.
+    bool rollback_to_savepoint(Transaction* txn, u32 mark);
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
     void record_hot_insert(u32 table_id, const RecordId& rid);
@@ -88,10 +173,10 @@ public:
     Transaction* current() const;
     u64 next_snapshot_id();
 
-    // 可见性判断 (供 SeqScan 调用)
-    // 版本 V 对事务 T 可见 ⟺
-    //   1. V.xmin 已提交 且 V.xmin < T.snapshot
-    //   2. V.xmax == 0 或 V.xmax 未提交 或 V.xmax >= T.snapshot
+    // Visibility predicate (called by SeqScan etc.)
+    // A version V is visible to transaction T iff
+    //   1. V.xmin is committed AND V.xmin < T.snapshot, AND
+    //   2. V.xmax == 0, or V.xmax is not committed, or V.xmax >= T.snapshot
     bool is_visible(u64 xmin, u64 xmax, const Transaction& txn) const;
 
     bool is_txn_committed(u64 txn_id) const;
@@ -104,16 +189,43 @@ public:
     TxnSlot* txn_slots() { return txn_slots_.data(); }
     u32 txn_slot_count() const { return txn_slots_.size(); }
 
+    // Default isolation level new transactions inherit at begin(). Set via
+    // the SET command at the dispatch layer. Defaults to Snapshot so the
+    // existing test suite stays green; sessions opt in to Serializable.
+    void set_default_isolation(IsolationLevel level);
+    IsolationLevel default_isolation() const { return default_isolation_; }
+
+    // Access to the persistent xid → final-state log (A1). Lives behind a
+    // UniquePtr so the Database constructor can hand in the db_dir; nullptr
+    // when the manager runs without a backing directory (tests).
+    TxnStatusLog* status_log() const { return status_log_.get(); }
+    void set_status_log(UniquePtr<TxnStatusLog> log);
+
 private:
     TxnSlot* find_slot(u64 txn_id);
     TxnSlot* find_active_slot(u64 txn_id);
     TxnSlot* alloc_slot(u64 txn_id, u64 snapshot_id);
+
+    // Per-commit history retained for SSI conflict detection. Each entry
+    // is the write set of one committed transaction; live as long as some
+    // active txn could still serialise against it (commit_id > min active
+    // snapshot). Pruned at every commit so the list stays bounded.
+    struct CommittedWriteSet {
+        u64 commit_id;
+        u64 txn_id;
+        Vector<ReadRecord> writes;  // (table_id, rid) — UndoRecord reduced
+    };
+    Vector<CommittedWriteSet> committed_history_;
+    void prune_committed_history();
+    bool ssi_check_conflict(const Transaction& txn) const;
 
     Vector<TxnSlot> txn_slots_;
 
     mutable Mutex latch_;
     Database* db_;
     u64 next_txn_id_;
+    IsolationLevel default_isolation_;
+    UniquePtr<TxnStatusLog> status_log_;
 };
 
 } // namespace minidb

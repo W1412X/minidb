@@ -12,7 +12,7 @@ namespace minidb {
 constexpr u32 kPageSize        = 8192;
 constexpr u32 kPageHeaderSize  = 24;
 constexpr u32 kLinePointerSize = 6;  // offset(2) + length(2) + flags(2)
-constexpr u32 kPageTailReserved = 8;  // Page尾保留空间 (next_page_id)
+constexpr u32 kPageTailReserved = 8;  // bytes reserved at the page tail (next_page_id)
 
 // === Buffer poolConfig ===
 constexpr u32 kDefaultPoolFrames = 256;

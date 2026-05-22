@@ -236,6 +236,8 @@ static bool expr_can_eval_on(const Expression* expr, const Schema& schema) {
                     !expr_can_eval_on(expr->when_clauses[i].second.get(), schema)) return false;
             }
             return expr_can_eval_on(expr->else_expr.get(), schema);
+        case ExprType::kCast:
+            return expr_can_eval_on(expr->child.get(), schema);
         case ExprType::kSubquery:
             return false;
     }
@@ -517,7 +519,8 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
                 auto* scan = static_cast<IndexScanPlan*>(p->child.get());
                 IndexEntry* index = catalog_ ? catalog_->get_index(scan->index_id) : nullptr;
                 bool projects_index_key = false;
-                if (index && index->key_columns.size() == 1) {
+                if (index && index->state == IndexState::kValid &&     // B5/D4
+                    index->key_columns.size() == 1) {
                     if (p->column_indices.size() == 1 && p->expressions.empty()) {
                         projects_index_key = index->key_columns[0] == p->column_indices[0];
                     } else if (p->column_indices.empty() && p->expressions.size() == 1 &&
@@ -568,7 +571,8 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
                     ? static_cast<IndexScanPlan*>(p->child.get())->index_id
                     : static_cast<IndexOnlyScanPlan*>(p->child.get())->index_id;
                 IndexEntry* index = catalog_ ? catalog_->get_index(index_id) : nullptr;
-                if (index && index->key_columns.size() == 1) {
+                if (index && index->state == IndexState::kValid &&      // B5/D4
+                    index->key_columns.size() == 1) {
                     int sort_idx = p->keys[0].expression->table_name.empty()
                         ? p->child->output_schema.get_column_index(p->keys[0].expression->column_name)
                         : p->child->output_schema.get_column_index(p->keys[0].expression->table_name,
@@ -1178,10 +1182,11 @@ UniquePtr<PlanNode> Optimizer::choose_index_path(const SeqScanPlan* scan,
                                            : Vector<IndexEntry*>();
     for (u32 i = 0; i < indexes.size(); i++) {
         IndexEntry* index = indexes[i];
+        if (!index || index->state != IndexState::kValid) continue;   // B5/D4: skip invalid / rebuilding
         IndexKey search_key;
         bool covers_full_index = false;
-        if (!index || !build_composite_prefix_key(predicate, scan->output_schema,
-                                                  *index, &search_key, &covers_full_index)) {
+        if (!build_composite_prefix_key(predicate, scan->output_schema,
+                                        *index, &search_key, &covers_full_index)) {
             continue;
         }
 
@@ -1257,7 +1262,8 @@ bool Optimizer::has_usable_index(u32 table_id, u32 column_idx, u32* index_id) co
 
     Vector<IndexEntry*> indexes = catalog_->get_indexes(table_id);
     for (u32 i = 0; i < indexes.size(); i++) {
-        if (indexes[i] && indexes[i]->key_columns.size() == 1 &&
+        if (indexes[i] && indexes[i]->state == IndexState::kValid &&  // B5/D4: skip invalid
+            indexes[i]->key_columns.size() == 1 &&
             indexes[i]->key_columns[0] == column_idx) {
             if (index_id) *index_id = indexes[i]->index_id;
             return true;

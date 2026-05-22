@@ -99,11 +99,11 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
                 latch_.unlock();
                 return Status::ok_status();  // Already holding sufficient lock
             }
-            // Lock升级: 已持有较弱锁, 尝试原地升级 (避免死锁)
-            // 先检查新模式是否与所有其他已授予的锁兼容
+            // Lock upgrade: already hold a weaker mode, attempt in-place upgrade (avoids deadlock).
+            // First check the new mode is compatible with every other granted lock.
             bool can_upgrade = true;
             for (u32 j = 0; j < obj->requests.size(); j++) {
-                if (j == i) continue;  // 跳过自己
+                if (j == i) continue;  // skip self
                 if (obj->requests[j].granted &&
                     !is_compatible(obj->requests[j].mode, mode)) {
                     can_upgrade = false;
@@ -114,7 +114,7 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
                 obj->requests[i].mode = mode;
                 obj->requests[i].granted = true;
                 obj->requests[i].waiting = false;
-                // 重新计算 granted_mask
+                // Recompute granted_mask.
                 LockMode max_held = LockMode::kAccessShare;
                 for (u32 k = 0; k < obj->requests.size(); k++) {
                     if (obj->requests[k].granted) {
@@ -125,13 +125,13 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
                 latch_.unlock();
                 return Status::ok_status();
             }
-            // 无法升级: 其他事务持有不兼容锁, 返回锁冲突错误而非死锁
+            // Cannot upgrade: another txn holds an incompatible lock; surface conflict, not deadlock.
             latch_.unlock();
             return Status(ErrorCode::kLockConflict, "lock upgrade blocked by other holders");
         }
     }
 
-    // 添加请求
+    // Append the request.
     LockRequest req;
     req.txn_id = txn_id;
     req.mode = mode;
@@ -319,7 +319,7 @@ void LockManager::unlock_table(u64 txn_id, u32 table_id) {
     LockObject* obj = lock_table_.find(table_id);
     if (!obj) return;
 
-    // 移除该事务的所有请求
+    // Remove every request from this transaction.
     Vector<LockRequest> remaining;
     for (u32 i = 0; i < obj->requests.size(); i++) {
         if (obj->requests[i].txn_id != txn_id) {
@@ -328,12 +328,12 @@ void LockManager::unlock_table(u64 txn_id, u32 table_id) {
     }
     obj->requests = remaining;
 
-    // 重新计算 granted_mask 并授予等待中的请求
+    // Recompute granted_mask and grant waiting requests.
     obj->granted_mask = LockMode::kAccessShare;
     grant_pending(obj);
     cond_.broadcast();
 
-    // 从事务锁列表中移除
+    // Remove from the per-transaction lock list.
     Vector<u32>* txn_lock_list = txn_locks_.find(txn_id);
     if (txn_lock_list) {
         Vector<u32> remaining_ids;

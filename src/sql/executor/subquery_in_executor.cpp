@@ -55,11 +55,11 @@ ExecResult SubqueryInExecutor::next() {
         if (not_) {
             // NOT IN: SQL semantics
             // - If subquery contains NULL: result is always NULL (no rows), because x != NULL = UNKNOWN
-            // - 若子查询无 NULL: 正常判断
+            // - if the subquery result has no NULL: regular membership check.
             if (subquery_has_nulls_) continue;
             if (!found) return r;
         } else {
-            // IN: NULL 值不匹配, 仅精确非 NULL 匹配
+            // IN: NULL never matches; only exact non-NULL membership counts.
             if (found) return r;
         }
     }

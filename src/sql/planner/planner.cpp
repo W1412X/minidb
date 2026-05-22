@@ -25,6 +25,11 @@ static Schema schema_with_table_name(const Schema& schema, const String& table_n
     return out;
 }
 
+static Schema schema_with_alias_if_present(const Schema& schema, const String& alias) {
+    if (alias.empty()) return schema;
+    return schema_with_table_name(schema, alias);
+}
+
 Planner::Planner(Catalog* catalog) : catalog_(catalog), optimizer_config_() {}
 
 Planner::Planner(Catalog* catalog, const OptimizerConfig& optimizer_config)
@@ -104,6 +109,10 @@ static bool exprs_equivalent(const Expression* a, const Expression* b) {
             }
         }
         return exprs_equivalent(a->else_expr.get(), b->else_expr.get());
+    }
+    if (a->type == ExprType::kCast) {
+        return a->cast_target == b->cast_target &&
+               exprs_equivalent(a->child.get(), b->child.get());
     }
     return false;
 }
@@ -210,8 +219,9 @@ UniquePtr<PlanNode> Planner::plan_select(const SelectStmt& stmt) {
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = union_schema;
@@ -241,43 +251,60 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         one->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(one.release());
     } else {
-        TableEntry* table = catalog_->get_table(stmt.from_tables[0].name);
-        if (!table) return UniquePtr<PlanNode>();
+        const TableRef& from = stmt.from_tables[0];
+        if (from.subquery) {
+            current = plan_select(*from.subquery);
+            if (!current) return UniquePtr<PlanNode>();
+            merged_schema = schema_with_alias_if_present(current->output_schema, from.alias);
+            current->output_schema = merged_schema;
+        } else {
+            TableEntry* table = catalog_->get_table(from.name);
+            if (!table) return UniquePtr<PlanNode>();
 
-        String left_alias = stmt.from_tables[0].alias.empty()
-                            ? table->table_name : stmt.from_tables[0].alias;
+            String left_alias = from.alias.empty()
+                                ? table->table_name : from.alias;
 
-        merged_schema = schema_with_table_name(table->schema, left_alias);
+            merged_schema = schema_with_table_name(table->schema, left_alias);
 
-        current = plan_table_access(
-            table, merged_schema, stmt.joins.empty() ? stmt.where_clause.get() : nullptr,
-            &where_satisfied_by_index);
+            current = plan_table_access(
+                table, merged_schema, stmt.joins.empty() ? stmt.where_clause.get() : nullptr,
+                &where_satisfied_by_index);
+        }
     }
 
     // JOIN
     for (u32 j = 0; j < stmt.joins.size(); j++) {
         const JoinClause& join = stmt.joins[j];
-        TableEntry* right_table = catalog_->get_table(join.table.name);
-        if (!right_table) return UniquePtr<PlanNode>();
-        String right_alias = join.table.alias.empty() ? right_table->table_name : join.table.alias;
+        UniquePtr<PlanNode> right_plan;
+        Schema right_schema;
+        if (join.table.subquery) {
+            right_plan = plan_select(*join.table.subquery);
+            if (!right_plan) return UniquePtr<PlanNode>();
+            right_schema = schema_with_alias_if_present(right_plan->output_schema, join.table.alias);
+            right_plan->output_schema = right_schema;
+        } else {
+            TableEntry* right_table = catalog_->get_table(join.table.name);
+            if (!right_table) return UniquePtr<PlanNode>();
+            String right_alias = join.table.alias.empty() ? right_table->table_name : join.table.alias;
 
-        auto right_scan = make_unique<SeqScanPlan>();
-        right_scan->table_id = right_table->table_id;
-        right_scan->table_name = right_table->table_name;
-        right_scan->output_schema = schema_with_table_name(right_table->schema, right_alias);
+            auto right_scan = make_unique<SeqScanPlan>();
+            right_scan->table_id = right_table->table_id;
+            right_scan->table_name = right_table->table_name;
+            right_scan->output_schema = schema_with_table_name(right_table->schema, right_alias);
+            right_schema = right_scan->output_schema;
+            right_plan = UniquePtr<PlanNode>(right_scan.release());
+        }
 
         auto join_plan = make_unique<JoinPlan>();
         join_plan->left = UniquePtr<PlanNode>(current.release());
-        join_plan->right = UniquePtr<PlanNode>(right_scan.release());
+        join_plan->right = UniquePtr<PlanNode>(right_plan.release());
         join_plan->on_condition = join.on_condition
             ? UniquePtr<Expression>(join.on_condition->clone())
             : UniquePtr<Expression>();
         join_plan->join_type = join.type;
 
-        for (u32 i = 0; i < right_table->schema.column_count(); i++) {
-            Column col = right_table->schema.get_column(i);
-            col.table_name = right_alias;
-            merged_schema.add_column(col);
+        for (u32 i = 0; i < right_schema.column_count(); i++) {
+            merged_schema.add_column(right_schema.get_column(i));
         }
         join_plan->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(join_plan.release());
@@ -442,13 +469,42 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(sort.release());
         order_applied_before_projection = true;
+    }
+
+    // SELECT * with dropped columns: expand into an explicit projection
+    // that skips the invisible columns. This keeps the rest of the planner
+    // and executor unaware of dropped columns — they only see visible ones.
+    // Note: is_star stays true so the existing non-star projection block
+    // (which re-processes stmt.select_list) is correctly skipped.
+    if (is_star && merged_schema.has_dropped_columns()) {
+        Vector<UniquePtr<Expression>> exprs;
+        Schema out_schema;
+        for (u32 i = 0; i < merged_schema.column_count(); i++) {
+            const Column& col = merged_schema.get_column(i);
+            if (col.is_dropped) continue;
+            auto e = make_unique<Expression>();
+            e->type = ExprType::kColumnRef;
+            e->column_name = col.name;
+            e->table_name = col.table_name;
+            exprs.push_back(UniquePtr<Expression>(e.release()));
+            out_schema.add_column(col);
+        }
+        if (!exprs.empty()) {
+            auto proj = make_unique<ProjectPlan>();
+            proj->child = UniquePtr<PlanNode>(current.release());
+            proj->expressions = static_cast<Vector<UniquePtr<Expression>>&&>(exprs);
+            proj->output_schema = out_schema;
+            current = UniquePtr<PlanNode>(proj.release());
+            merged_schema = out_schema;
+        }
     }
 
     if (!is_star && !has_aggregate(stmt.select_list)) {
@@ -463,12 +519,14 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
                 } else {
                     idx = merged_schema.get_column_index(expr->column_name);
                 }
-                if (idx >= 0) {
-                    exprs.push_back(UniquePtr<Expression>(expr->clone()));
-                    Column out_col = merged_schema.get_column(static_cast<u32>(idx));
-                    if (!expr->alias.empty()) out_col.name = expr->alias;
-                    out_schema.add_column(out_col);
+                if (idx < 0) {
+                    // Column not found (or dropped) — reject the query.
+                    return UniquePtr<PlanNode>();
                 }
+                exprs.push_back(UniquePtr<Expression>(expr->clone()));
+                Column out_col = merged_schema.get_column(static_cast<u32>(idx));
+                if (!expr->alias.empty()) out_col.name = expr->alias;
+                out_schema.add_column(out_col);
             } else {
                 // Table expression projection (a+1, b*2, function calls, etc.)
                 exprs.push_back(UniquePtr<Expression>(expr->clone()));
@@ -503,8 +561,9 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = merged_schema;
@@ -533,8 +592,13 @@ UniquePtr<PlanNode> Planner::plan_insert(const InsertStmt& stmt) {
 
     Vector<u32> target_columns;
     if (stmt.columns.empty()) {
+        // Implicit column list: only visible (non-dropped) columns.
+        // Dropped columns keep their physical slot but are invisible to
+        // the user — new rows store NULL in those positions.
         for (u32 i = 0; i < table->schema.column_count(); i++) {
-            target_columns.push_back(i);
+            if (!table->schema.get_column(i).is_dropped) {
+                target_columns.push_back(i);
+            }
         }
     } else {
         for (u32 i = 0; i < stmt.columns.size(); i++) {

@@ -5,6 +5,8 @@
 #include "database/database.h"
 #include "transaction/transaction.h"
 #include "recovery/wal.h"
+#include "sql/executor/expression_evaluator.h"
+#include "sql/parser/parser.h"
 #include "index/btree.h"
 #include <cstring>
 
@@ -41,6 +43,45 @@ static bool build_unique_index_key(const Schema& schema, const Vector<Value>& ro
     return key->fits();
 }
 
+// Evaluate every column-level CHECK declared on this schema against the
+// candidate row. Returns nullptr when all CHECKs hold, otherwise a static
+// reason string suitable for set_executor_error. SQL semantics: a CHECK
+// fails only when the predicate evaluates to FALSE — NULL passes (UNKNOWN
+// is permitted), matching PostgreSQL / SQL standard behaviour.
+static const char* check_constraint_violation(const Schema& schema,
+                                              const Vector<Value>& row) {
+    Tuple candidate(schema, row);
+    for (u32 c = 0; c < schema.column_count(); c++) {
+        const Column& col = schema.get_column(c);
+        if (col.is_dropped) continue;
+        if (col.check_expr.empty()) continue;
+        String wrapped("SELECT ");
+        wrapped += col.check_expr;
+        Parser p(wrapped);
+        Statement stmt = p.parse();
+        if (!p.ok() || !stmt.select || stmt.select->select_list.empty()) {
+            return "CHECK constraint expression invalid";
+        }
+        Value result = ExpressionEvaluator::evaluate(*stmt.select->select_list[0], candidate);
+        if (result.is_null()) continue;  // NULL → UNKNOWN → passes.
+        bool ok = false;
+        if (result.type_id() == TypeId::kBool) {
+            ok = result.get_bool();
+        } else if (result.type_id() == TypeId::kInt32) {
+            ok = result.get_int32() != 0;
+        } else if (result.type_id() == TypeId::kInt64) {
+            ok = result.get_int64() != 0;
+        } else {
+            // Non-boolean, non-integer CHECK result: refuse the row rather
+            // than silently passing — callers should write predicates that
+            // produce a boolean.
+            return "CHECK constraint produced non-boolean";
+        }
+        if (!ok) return "CHECK constraint violated";
+    }
+    return nullptr;
+}
+
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
     if (tuple.xmax() == kInvalidTxnId) return true;
     Transaction* current = txn_mgr ? txn_mgr->current() : nullptr;
@@ -69,14 +110,10 @@ InsertExecutor::InsertExecutor(BufferPool* pool, HeapFile* heap, const Schema& s
 void InsertExecutor::init() { executed_ = false; }
 
 bool InsertExecutor::row_satisfies_schema(const Vector<Value>& row) const {
-    if (row.size() != schema_.column_count()) return false;
-    for (u32 i = 0; i < schema_.column_count(); i++) {
-        const Column& col = schema_.get_column(i);
-        if (col.not_null && row[i].is_null()) {
-            return false;
-        }
-    }
-    return true;
+    // Defers to Schema::validate_row so NOT NULL, VARCHAR(n), and future
+    // CHECK constraints all live in one place. The caller surfaces the
+    // returned message via set_executor_error.
+    return schema_.validate_row(row) == nullptr;
 }
 
 bool InsertExecutor::violates_unique_constraints(const Vector<Value>& row) const {
@@ -239,8 +276,12 @@ ExecResult InsertExecutor::next() {
     }
 
     for (u32 i = 0; i < values_.size(); i++) {
-        if (!row_satisfies_schema(values_[i])) {
-            set_executor_error("NOT NULL constraint violated");
+        if (const char* reason = schema_.validate_row(values_[i])) {
+            set_executor_error(reason);
+            return ExecResult::empty();
+        }
+        if (const char* reason = check_constraint_violation(schema_, values_[i])) {
+            set_executor_error(reason);
             return ExecResult::empty();
         }
         Vector<String> row_unique_keys;
@@ -282,37 +323,41 @@ ExecResult InsertExecutor::next() {
         byte* buf = tuple.serialize_to_page(buffer);
         u16 size = static_cast<u16>(buf - buffer);
 
-        // WAL-first: 1. Reserve position → 2. Write WAL → 3. Commit data
+        // WAL-first: 1. Reserve position (RAII) → 2. Write WAL → 3. Commit data
         auto prepare = heap_->prepare_insert(size);
         if (!prepare.ok()) continue;
 
-        HeapFile::InsertPlan plan = prepare.value();
-        RecordId predicted_rid(plan.page_id, plan.predicted_slot);
+        auto reservation = std::move(prepare.value());
+        RecordId predicted_rid(reservation.page_id(), reservation.predicted_slot());
         if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, predicted_rid,
                                                      LockMode::kRowExclusive).ok()) {
-            continue;
+            continue;  // reservation destructor releases the heap latch
         }
         if (!explicit_txn) autocommit_record_locks.push_back(predicted_rid);
         u64 lsn = 0;
         if (wal_) {
-            lsn = wal_->log_insert(txn_id, table_id_, plan.page_id, plan.predicted_slot, buffer, size);
+            lsn = wal_->log_insert(txn_id, table_id_, reservation.page_id(),
+                                    reservation.predicted_slot(), buffer, size);
         }
 
-        auto result = heap_->commit_insert(plan.page_id, plan.is_new_page,
-                                            plan.predicted_slot, buffer, size, lsn);
+        auto result = reservation.commit(buffer, size, lsn);
         if (result.ok()) {
+            Pair<PageId, SlotIdx> rid = result.value();
+            RecordId record_id(rid.first, rid.second);
+            // Record the heap-insert undo BEFORE touching indexes so the
+            // active transaction's rollback removes both the heap row and
+            // any partial index entries via delete_index_entries.
+            if (txn_mgr_ && txn_mgr_->current()) {
+                txn_mgr_->record_insert(table_id_, record_id);
+            }
+            if (db_ && !db_->insert_index_entries(table_id_, tuple, record_id)) {
+                set_executor_error("index insert failed");
+                return ExecResult::empty();
+            }
             for (u32 k = 0; k < row_unique_keys.size(); k++) {
                 pending_unique_keys.insert(row_unique_keys[k], true);
             }
             count++;
-            Pair<PageId, SlotIdx> rid = result.value();
-            RecordId record_id(rid.first, rid.second);
-            if (db_) {
-                db_->insert_index_entries(table_id_, tuple, record_id);
-            }
-            if (txn_mgr_ && txn_mgr_->current()) {
-                txn_mgr_->record_insert(table_id_, record_id);
-            }
         }
     }
 

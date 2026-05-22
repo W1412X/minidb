@@ -33,13 +33,23 @@ struct TableEntry {
 
     // Statistics (updated by ANALYZE)
     u64      stat_num_tuples;    // Estimated row count
-    u32      stat_num_pages;     // 估计页数
-    Vector<ColumnStats> col_stats;  // Column级统计
-    bool     stats_valid;        // 统计是否已收集
+    u32      stat_num_pages;     // estimated page count
+    Vector<ColumnStats> col_stats;  // per-column statistics
+    bool     stats_valid;        // whether statistics have been gathered
 
     TableEntry() : table_id(0), first_page_id(kNullPageId), num_pages(0),
                    num_tuples(0), stat_num_tuples(0), stat_num_pages(0),
                    stats_valid(false) {}
+};
+
+// Lifecycle state of an index. The optimiser only emits IndexScan /
+// IndexOnlyScan / IndexLookupJoin plans when the entry is kValid. After
+// crash recovery any heap-touching replay flips the entry to kInvalid
+// until rebuild_index() finishes, at which point it goes back to kValid.
+enum class IndexState : u8 {
+    kValid     = 0,   // index file is in sync with heap; safe for the optimiser
+    kInvalid   = 1,   // entries are missing or stale; rebuild needed before use
+    kRebuilding = 2,  // a rebuild is in progress on this thread
 };
 
 struct IndexEntry {
@@ -49,6 +59,7 @@ struct IndexEntry {
     Vector<u32> key_columns;
     PageId      root_page_id;
     bool        is_unique;
+    IndexState  state = IndexState::kValid;
 };
 
 class Catalog {
@@ -56,7 +67,7 @@ public:
     Catalog();
     ~Catalog() = default;
 
-    // Table操作
+    // Table operations.
     u32 create_table(const String& name, const Schema& schema);
     TableEntry* get_table(const String& name);
     TableEntry* get_table(u32 table_id);
@@ -64,7 +75,7 @@ public:
     void drop_indexes_for_table(u32 table_id);
     u32 table_count() const { return table_entries_.size(); }
 
-    // Index操作
+    // Index operations.
     u32 create_index(const String& name, u32 table_id,
                      const Vector<u32>& key_columns, bool unique);
     IndexEntry* get_index(const String& name);
@@ -72,12 +83,17 @@ public:
     Vector<IndexEntry*> get_indexes(u32 table_id);
     bool drop_index(const String& name);
 
-    // Query某列是否有索引
+    // Restore a previously dropped table/index entry (DDL undo).
+    void restore_table(u32 table_id, const String& name, const Schema& schema);
+    void restore_index(u32 index_id, const String& name, u32 table_id,
+                       const Vector<u32>& key_columns, bool is_unique);
+
+    // Query whether a specific column is indexed.
     bool is_column_indexed(u32 table_id, u32 col_idx) const;
-    // Query一组列中是否有任何列被索引
+    // Query whether any column in a group is indexed.
     bool any_column_indexed(u32 table_id, const Vector<u32>& col_indices) const;
 
-    // 持久化
+    // Persistence.
     void save(const String& path);
     void load(const String& path);
 

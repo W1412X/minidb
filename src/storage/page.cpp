@@ -71,7 +71,7 @@ SlotIdx Page::insert_tuple(const byte* tuple_data, u16 length) {
     // Strategy 2: append to page end
     u16 lp_end = kPageHeaderSize + ((reusable_slot == kNullSlot) ? (num + 1) : num) * kLinePointerSize;
 
-    // 找最小 tuple offset (最靠前的 tuple)
+    // Find the smallest tuple offset (the tuple closest to the page start).
     u16 min_tuple_offset = kDataUpperBound;
     for (u16 i = 0; i < num; i++) {
         const LinePointer* existing = line_pointer(i);
@@ -85,13 +85,13 @@ SlotIdx Page::insert_tuple(const byte* tuple_data, u16 length) {
 
     if (lp_end > tuple_offset) return kNullSlot;
 
-    // 写入 Line Pointer
+    // Write the line pointer.
     SlotIdx target_slot = (reusable_slot == kNullSlot) ? num : reusable_slot;
     LinePointer* lp = line_pointer(target_slot);
     if (!lp) return kNullSlot;
     lp->mark_normal(tuple_offset, length);
 
-    // 写入元组数据
+    // Write the tuple bytes.
     std::memcpy(data_ + tuple_offset, tuple_data, length);
 
     if (reusable_slot == kNullSlot) {
@@ -134,7 +134,7 @@ SlotIdx Page::insert_tuple_at(const byte* tuple_data, u16 length, SlotIdx target
 }
 
 // ============================================================
-// mark_dead — 标记为 DEAD (PostgreSQL 风格, 不物理删除)
+// mark_dead — flag the slot DEAD (PostgreSQL style, slot stays in place).
 // ============================================================
 
 bool Page::mark_dead(SlotIdx idx) {
@@ -149,7 +149,7 @@ bool Page::mark_dead(SlotIdx idx) {
 }
 
 // ============================================================
-// reclaim_slot — 物理回收 slot (GC/VACUUM 使用)
+// reclaim_slot — physically reclaim a slot (called by GC/VACUUM).
 // ============================================================
 
 bool Page::reclaim_slot(SlotIdx idx) {
@@ -179,11 +179,11 @@ SlotIdx Page::redirect_target(SlotIdx idx) const {
 }
 
 // ============================================================
-// prune — 页级修剪: 回收所有 DEAD tuple 的空间
+// prune — page-level prune: reclaim every DEAD tuple's space.
 //
-// PostgreSQL 风格: 在 INSERT/UPDATE 时自动调用,
-// 将 DEAD tuple 的 LinePointer 标记为 UNUSED,
-// 并将 tuple 数据区域标记为可重用。
+// PostgreSQL-style: invoked implicitly during INSERT/UPDATE.
+// Flags DEAD tuples' line pointers as UNUSED and
+// marks their tuple-data area as reusable.
 // ============================================================
 
 u16 Page::prune() {
@@ -198,7 +198,7 @@ u16 Page::prune() {
         }
     }
 
-    // 重新整理 tuple data 区，仅搬移 NORMAL tuple。
+    // Compact the tuple data area, keeping only NORMAL tuples.
     byte* tmp = new byte[kPageSize];
     u16 write_end = kDataUpperBound;
     for (u16 i = 0; i < hdr->num_tuples; i++) {
@@ -224,7 +224,7 @@ u16 Page::prune() {
 }
 
 // ============================================================
-// Tuple读取
+// Tuple reads.
 // ============================================================
 
 const byte* Page::get_tuple_data(SlotIdx idx) const {
@@ -240,7 +240,7 @@ u16 Page::get_tuple_length(SlotIdx idx) const {
 }
 
 // ============================================================
-// 空间管理
+// Space management.
 // ============================================================
 
 u16 Page::get_free_space() const {
@@ -264,7 +264,7 @@ bool Page::has_enough_space(u16 tuple_size) const {
     u16 aligned_len = max_align(tuple_size);
 
     bool has_unused_slot = false;
-    // Check是否有可复用 slot。DEAD slot 可原地复用；UNUSED slot 仍需要页内连续空闲空间。
+    // Check for reusable slots. DEAD slots can be reused in place; UNUSED slots still need contiguous free space.
     for (u16 i = 0; i < hdr->num_tuples; i++) {
         const LinePointer* lp = line_pointer(i);
         if (!lp || !lp->is_usable()) continue;
@@ -275,7 +275,7 @@ bool Page::has_enough_space(u16 tuple_size) const {
         if (lp->flags == LP_DEAD && aligned_len <= max_align(lp->length)) return true;
     }
 
-    // Check追加空间
+    // Check whether there is room to append.
     u16 lp_end = kPageHeaderSize +
                  (has_unused_slot ? hdr->num_tuples : hdr->num_tuples + 1) * kLinePointerSize;
     u16 min_tuple_offset = kDataUpperBound;

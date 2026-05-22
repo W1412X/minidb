@@ -162,6 +162,34 @@ bool Catalog::drop_index(const String& name) {
     return true;
 }
 
+void Catalog::restore_table(u32 table_id, const String& name, const Schema& schema) {
+    TableEntry entry;
+    entry.table_id = table_id;
+    entry.table_name = name;
+    entry.first_page_id = kNullPageId;
+    entry.num_pages = 0;
+    entry.num_tuples = 0;
+    entry.schema = schema;
+    table_entries_[table_id] = entry;
+    name_to_table_id_[name] = table_id;
+    if (table_id >= next_table_id_) next_table_id_ = table_id + 1;
+}
+
+void Catalog::restore_index(u32 index_id, const String& name, u32 table_id,
+                            const Vector<u32>& key_columns, bool is_unique) {
+    IndexEntry entry;
+    entry.index_id = index_id;
+    entry.index_name = name;
+    entry.table_id = table_id;
+    entry.key_columns = key_columns;
+    entry.root_page_id = kNullPageId;
+    entry.is_unique = is_unique;
+    entry.state = IndexState::kValid;
+    index_entries_[index_id] = entry;
+    name_to_index_id_[name] = index_id;
+    if (index_id >= next_index_id_) next_index_id_ = index_id + 1;
+}
+
 bool Catalog::is_column_indexed(u32 table_id, u32 col_idx) const {
     for (auto it = const_cast<HashMap<u32, IndexEntry>&>(index_entries_).begin();
          it; it = const_cast<HashMap<u32, IndexEntry>&>(index_entries_).next(it)) {

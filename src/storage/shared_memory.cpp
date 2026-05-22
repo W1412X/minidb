@@ -36,12 +36,12 @@ SharedMemory* SharedMemory::create(const String& name, u32 size) {
     u32 total_size = sizeof(ShmRegionHeader) + size;
     if (total_size < 4096) total_size = 4096;  // minimum 4KB
 
-    // CreateShared memory对象
+    // Create the shared-memory object.
     String shm_name = String("/") + name;
     int fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0666);
     if (fd < 0) return nullptr;
 
-    // Settings大小
+    // Set the size.
     if (ftruncate(fd, total_size) < 0) {
         close(fd);
         shm_unlink(shm_name.c_str());
@@ -75,7 +75,7 @@ SharedMemory* SharedMemory::create(const String& name, u32 size) {
     shm->header_->num_allocs = 0;
     shm->header_->num_frees = 0;
 
-    // Initialize第一个空闲块
+    // Initialise the first free block.
     auto* first_block = reinterpret_cast<ShmBlockHeader*>(shm->data_);
     first_block->size = size;
     first_block->next = 0;
@@ -89,7 +89,7 @@ SharedMemory* SharedMemory::attach(const String& name) {
     int fd = shm_open(shm_name.c_str(), O_RDWR, 0666);
     if (fd < 0) return nullptr;
 
-    // Get大小
+    // Get size.
     struct stat st;
     if (fstat(fd, &st) < 0) {
         close(fd);
@@ -132,16 +132,16 @@ u32 SharedMemory::allocate(u32 size) {
 
     u32 total_needed = size + kShmBlockSize;
 
-    // First-fit 搜索空闲Linked List
+    // First-fit search through the free list.
     u32 offset = header_->free_list_head;
     u32 prev_offset = 0;
 
     while (offset > 0 && offset < header_->total_size) {
         auto* block = reinterpret_cast<ShmBlockHeader*>(data_ + offset);
         if (block->is_free && block->size >= total_needed) {
-            // 找到合适的块
+            // Found a suitable block.
             if (block->size > total_needed + kShmBlockSize + 16) {
-                // Split块
+                // Split block.
                 u32 remaining_offset = offset + total_needed;
                 auto* remaining = reinterpret_cast<ShmBlockHeader*>(data_ + remaining_offset);
                 remaining->size = block->size - total_needed;
@@ -156,7 +156,7 @@ u32 SharedMemory::allocate(u32 size) {
             header_->used_size += block->size;
             header_->num_allocs++;
 
-            // 从空闲Linked List移除
+            // Remove from the free list.
             if (prev_offset == 0) {
                 header_->free_list_head = block->next;
             } else {
@@ -171,7 +171,7 @@ u32 SharedMemory::allocate(u32 size) {
         offset = block->next;
     }
 
-    return 0;  // 分配失败
+    return 0;  // allocation failed
 }
 
 void SharedMemory::deallocate(u32 offset) {
@@ -182,26 +182,26 @@ void SharedMemory::deallocate(u32 offset) {
     u32 block_offset = offset - kShmBlockSize;
     auto* block = reinterpret_cast<ShmBlockHeader*>(data_ + block_offset);
 
-    if (block->is_free) return;  // 已经是空闲的
+    if (block->is_free) return;  // already free
 
     block->is_free = true;
     header_->used_size -= block->size;
     header_->num_frees++;
 
-    // 添加到空闲Linked List头部
+    // Push to the head of the free list.
     block->next = header_->free_list_head;
     header_->free_list_head = block_offset;
 
-    // Merge相邻空闲块 (简化版: 只合并前向)
+    // Coalesce adjacent free blocks (simplified: forward-merge only).
     u32 prev_offset = 0;
     u32 scan_offset = header_->free_list_head;
     while (scan_offset > 0 && scan_offset < header_->total_size) {
         auto* scan_block = reinterpret_cast<ShmBlockHeader*>(data_ + scan_offset);
         if (scan_offset + scan_block->size == block_offset) {
-            // Merge: scan_block 紧邻 block 前面, 将 block 的空间合入 scan_block
+            // Merge: scan_block sits right before block; absorb block into scan_block.
             scan_block->size += block->size;
             scan_block->next = block->next;
-            // 从Linked List移除 block (刚被释放的小块), 保留合并后的 scan_block
+            // Remove block from the free list and keep the merged scan_block.
             if (prev_offset == 0) {
                 header_->free_list_head = scan_offset;
             } else {

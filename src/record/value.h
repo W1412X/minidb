@@ -35,18 +35,18 @@ public:
     explicit Value(const String& val);
     explicit Value(const char* val);
 
-    // 拷贝 / 移动
+    // Copy / move.
     Value(const Value& other);
     Value(Value&& other) noexcept;
     Value& operator=(const Value& other);
     Value& operator=(Value&& other) noexcept;
     ~Value();
 
-    // Type查询
+    // Type query.
     TypeId type_id() const { return type_id_; }
     bool is_null() const { return type_id_ == TypeId::kNull; }
 
-    // Type安全Get value
+    // Type-safe value accessors.
     bool    get_bool() const;
     i32     get_int32() const;
     i64     get_int64() const;
@@ -63,7 +63,7 @@ public:
     bool operator<=(const Value& other) const;
     bool operator>=(const Value& other) const;
 
-    // 算术运算
+    // Arithmetic operators.
     Value operator+(const Value& other) const;
     Value operator-(const Value& other) const;
     Value operator*(const Value& other) const;
@@ -75,10 +75,13 @@ public:
     static Value deserialize(const byte* buf, TypeId type);
     u32 serialized_size() const;
 
-    // 转String
+    // Type cast — returns NULL on failure instead of crashing.
+    Value cast_to(TypeId target) const;
+
+    // Convert to string.
     String to_string() const;
 
-    // Type大小
+    // Type size.
     static u32 type_size(TypeId type);
 
 private:

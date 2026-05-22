@@ -71,6 +71,36 @@ static bool parse_statement_timeout(const String& sql, u64* out_ms) {
     return true;
 }
 
+// Parse `SET ISOLATION_LEVEL = SNAPSHOT|SERIALIZABLE`. Returns true with
+// *out filled when the SQL is the isolation-level SET command; otherwise
+// false (and the caller routes the SQL to the regular parser).
+static bool parse_isolation_level(const String& sql, IsolationLevel* out) {
+    String t = trim_sql(sql);
+    String u = upper_sql(t);
+    const char* prefix = "SET ISOLATION_LEVEL";
+    u32 n = static_cast<u32>(std::strlen(prefix));
+    if (u.size() < n || std::strncmp(u.c_str(), prefix, n) != 0) return false;
+    const char* p = u.c_str() + n;
+    while (*p == ' ' || *p == '\t' || *p == '=') p++;
+    // Trim a trailing semicolon / whitespace.
+    String value(p);
+    while (!value.empty() && (value[value.size() - 1] == ';' ||
+                              value[value.size() - 1] == ' ' ||
+                              value[value.size() - 1] == '\t' ||
+                              value[value.size() - 1] == '\n')) {
+        value = value.substr(0, value.size() - 1);
+    }
+    if (value == "SERIALIZABLE") {
+        if (out) *out = IsolationLevel::kSerializable;
+        return true;
+    }
+    if (value == "SNAPSHOT") {
+        if (out) *out = IsolationLevel::kSnapshot;
+        return true;
+    }
+    return false;
+}
+
 static bool parse_prepare(const String& sql, String* name, String* body) {
     String t = trim_sql(sql);
     String u = upper_sql(t);
@@ -275,6 +305,14 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2). In an explicit transaction
+    // we record where the undo log currently ends; on executor error
+    // we roll back to that point so the rest of the transaction stays
+    // alive and the user can recover with a follow-up statement.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
     const Schema& out = exec->output_schema();
     auto deadline = std::chrono::steady_clock::now() +
@@ -315,12 +353,22 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
     }
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         return String("Error: ") + executor_error() + "\n";
     }
 
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         return String("Error: statement timeout.\n");
     }
 
@@ -373,6 +421,11 @@ String Server::execute_sql(const String& sql) {
     u64 timeout_ms = 0;
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_statement_timeout_ms = timeout_ms;
+        return String("SET\n");
+    }
+    IsolationLevel iso_level;
+    if (parse_isolation_level(sql, &iso_level)) {
+        db_.txn_manager().set_default_isolation(iso_level);
         return String("SET\n");
     }
     String prepared_name;
@@ -511,6 +564,11 @@ String Server::execute_sql(const String& sql) {
         return result;
     }
 
+    // Transactional DDL: all DDL operations including ALTER TABLE DROP
+    // COLUMN now participate in the active transaction. DROP COLUMN uses
+    // PostgreSQL-style metadata-only deletion (is_dropped flag) and no
+    // longer requires an implicit commit.
+
     if (stmt.type == StmtType::kShowTables) {
         result = String("Tables:\n");
         struct Ctx { String* out; int count; } ctx = {&result, 0};
@@ -556,6 +614,10 @@ String Server::execute_sql(const String& sql) {
             else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
             else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
             else c.type = TypeId::kVarchar;
+            if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
+                c.varchar_length = static_cast<u32>(col.varchar_length);
+            }
+            c.check_expr = col.check_expr;
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema)) {
@@ -601,6 +663,10 @@ String Server::execute_sql(const String& sql) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
+                if (alt->new_column.type_name == "VARCHAR" &&
+                    alt->new_column.varchar_length > 0) {
+                    col.varchar_length = static_cast<u32>(alt->new_column.varchar_length);
+                }
                 String error;
                 if (db_.alter_table_add_column(alt->table_name, col, &error)) {
                     clear_prepared_cache();
@@ -678,6 +744,7 @@ String Server::execute_sql(const String& sql) {
         result += buf;
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* type_str = "?";
             switch (c.type) {
                 case TypeId::kBool: type_str = "BOOL"; break;
@@ -734,6 +801,12 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
     auto send_str = [fd](const String& s) { send(fd, s.c_str(), s.size(), 0); };
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_statement_timeout_ms = timeout_ms;
+        send_str("SET\n");
+        return 0;
+    }
+    IsolationLevel iso_level;
+    if (parse_isolation_level(sql, &iso_level)) {
+        db_.txn_manager().set_default_isolation(iso_level);
         send_str("SET\n");
         return 0;
     }
@@ -834,6 +907,9 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         else send_str("Error: no active transaction.\n");
         return 0;
     }
+    // Transactional DDL: all DDL including ALTER TABLE DROP COLUMN is
+    // now fully transactional (metadata-only drop, no implicit commit).
+
     if (stmt.type == StmtType::kShowTables) {
         String result = "Tables:\n";
         struct Ctx { String* out; int count; } ctx = {&result, 0};
@@ -871,6 +947,10 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
             else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
             else c.type = TypeId::kVarchar;
+            if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
+                c.varchar_length = static_cast<u32>(col.varchar_length);
+            }
+            c.check_expr = col.check_expr;
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema))
@@ -916,6 +996,10 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
+                if (alt->new_column.type_name == "VARCHAR" &&
+                    alt->new_column.varchar_length > 0) {
+                    col.varchar_length = static_cast<u32>(alt->new_column.varchar_length);
+                }
                 String error;
                 if (db_.alter_table_add_column(alt->table_name, col, &error)) {
                     snprintf(buf, sizeof(buf), "Column '%s' added.\n", alt->new_column.name.c_str());
@@ -954,6 +1038,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         result += buf;
         for (u32 i = 0; i < te->schema.column_count(); i++) {
             const Column& c = te->schema.get_column(i);
+            if (c.is_dropped) continue;
             const char* ts = "?";
             switch (c.type) { case TypeId::kBool: ts="BOOL"; break; case TypeId::kInt32: ts="INT"; break; case TypeId::kInt64: ts="BIGINT"; break; case TypeId::kFloat: ts="FLOAT"; break; case TypeId::kDouble: ts="DOUBLE"; break; case TypeId::kVarchar: ts="VARCHAR"; break; default: ts="UNKNOWN"; break; }
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n", i, c.name.c_str(), ts, c.not_null?"YES":"NO", c.is_primary?"YES":"NO", c.is_unique?"YES":"NO");
@@ -1060,6 +1145,14 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2). In an explicit transaction
+    // we record where the undo log currently ends; on executor error
+    // we roll back to that point so the rest of the transaction stays
+    // alive and the user can recover with a follow-up statement.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
     const Schema& out = exec->output_schema();
     auto deadline = std::chrono::steady_clock::now() +
@@ -1106,13 +1199,23 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
     }
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         send_str(String("Error: ") + executor_error() + "\n");
         return row_count;
     }
 
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         send_str("Error: statement timeout.\n");
         return row_count;
     }

@@ -16,12 +16,27 @@
 
 namespace minidb {
 
-static u32 value_to_wal_bytes(const Value& key, byte* out, u32 cap) {
-    if (!out || cap < 1) return 0;
-    u32 size = key.serialized_size();
-    if (size > cap) return 0;
-    key.serialize(out);
-    return size;
+// Standard reflected CRC32 (IEEE 802.3 polynomial 0xEDB88320). The lookup
+// table is initialised once on first use. All WAL writes happen under the
+// WAL latch and recovery is single-threaded at startup, so the lazy
+// initialisation needs no extra synchronisation.
+static u32 wal_crc32(const byte* a, u32 la, const byte* b, u32 lb) {
+    static u32 table[256];
+    static bool inited = false;
+    if (!inited) {
+        for (u32 i = 0; i < 256; i++) {
+            u32 c = i;
+            for (int k = 0; k < 8; k++) {
+                c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            }
+            table[i] = c;
+        }
+        inited = true;
+    }
+    u32 crc = 0xFFFFFFFFu;
+    for (u32 i = 0; i < la; i++) crc = table[(crc ^ a[i]) & 0xff] ^ (crc >> 8);
+    for (u32 i = 0; i < lb; i++) crc = table[(crc ^ b[i]) & 0xff] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
 }
 
 WalManager::WalManager(const String& wal_dir)
@@ -97,10 +112,14 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     if (fd_ < 0) return 0;
 
     WalRecord hdr;
+    hdr.magic = kWalRecordMagic;
+    hdr.crc = 0;     // placeholder — included in the CRC as zero
     hdr.lsn = next_lsn_;
     hdr.txn_id = txn_id;
     hdr.type = type;
     hdr.data_len = data_len;
+    hdr.crc = wal_crc32(reinterpret_cast<const byte*>(&hdr), sizeof(hdr),
+                        data_len > 0 ? data : nullptr, data_len);
 
     if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) {
         return 0;
@@ -211,11 +230,11 @@ u64 WalManager::log_update(u64 txn_id, u32 table_id,
     return lsn;
 }
 
-u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
-    u32 key_size = key.serialized_size();
+u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid) {
+    u32 key_size = key.encoded_size();
     if (key_size == 0 || key_size > 0xffff) return 0;
     std::vector<byte> key_buf(key_size);
-    if (value_to_wal_bytes(key, key_buf.data(), key_size) != key_size) return 0;
+    if (!key.encode(key_buf.data(), key_size)) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -236,11 +255,68 @@ u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, con
     return lsn;
 }
 
-u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid) {
-    u32 key_size = key.serialized_size();
+u64 WalManager::log_savepoint_undo_insert(u64 txn_id, u32 table_id,
+                                          PageId page_id, SlotIdx slot_idx) {
+    struct __attribute__((packed)) Payload {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+    } p;
+    p.table_id = table_id;
+    p.page_id = page_id;
+    p.slot_idx = slot_idx;
+    return write_record(WalType::kSavepointUndoInsert, txn_id,
+                        reinterpret_cast<byte*>(&p), sizeof(p));
+}
+
+u64 WalManager::log_savepoint_undo_delete(u64 txn_id, u32 table_id,
+                                          PageId page_id, SlotIdx slot_idx) {
+    struct __attribute__((packed)) Payload {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+    } p;
+    p.table_id = table_id;
+    p.page_id = page_id;
+    p.slot_idx = slot_idx;
+    return write_record(WalType::kSavepointUndoDelete, txn_id,
+                        reinterpret_cast<byte*>(&p), sizeof(p));
+}
+
+u64 WalManager::log_ddl(u64 txn_id, DdlOp op, u32 table_id, u32 aux, const String& object_name) {
+    struct __attribute__((packed)) DdlHdr {
+        u8  op;
+        u32 table_id;
+        u32 aux;
+        u16 name_len;
+    } hdr;
+    hdr.op = static_cast<u8>(op);
+    hdr.table_id = table_id;
+    hdr.aux = aux;
+    u32 name_len = object_name.size();
+    if (name_len > 0xffff) name_len = 0xffff;
+    hdr.name_len = static_cast<u16>(name_len);
+
+    u32 total = sizeof(hdr) + name_len;
+    byte* buf = static_cast<byte*>(std::malloc(total));
+    if (!buf) return 0;
+    std::memcpy(buf, &hdr, sizeof(hdr));
+    if (name_len > 0) std::memcpy(buf + sizeof(hdr), object_name.c_str(), name_len);
+    u64 lsn = write_record(WalType::kDdl, txn_id, buf, total);
+    std::free(buf);
+    // DDL audit records are durable BY THE TIME the DDL call returns, so the
+    // user can rely on "if minidb ack'd the DROP, the log knows about it".
+    // Buffered-only would let a kill-9 between log_ddl and any later fsync
+    // throw away the marker.
+    if (lsn != 0) flush();
+    return lsn;
+}
+
+u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid) {
+    u32 key_size = key.encoded_size();
     if (key_size == 0 || key_size > 0xffff) return 0;
     std::vector<byte> key_buf(key_size);
-    if (value_to_wal_bytes(key, key_buf.data(), key_size) != key_size) return 0;
+    if (!key.encode(key_buf.data(), key_size)) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -261,10 +337,56 @@ u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const Value& key, con
     return lsn;
 }
 
-u64 WalManager::checkpoint() {
-    u64 lsn = write_record(WalType::kCheckpoint, 0, nullptr, 0);
-    flush();
-    if (lsn != 0) truncate();
+u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
+    LockGuard guard(latch_);
+    if (fd_ < 0) return 0;
+
+    // Phase 1: write the kCheckpoint marker. Done inline (rather than via
+    // write_record) because we must hold the latch from now until the
+    // log is truncated, so no other writer can sneak in records that
+    // would later get clobbered by the truncate.
+    WalRecord hdr;
+    hdr.magic = kWalRecordMagic;
+    hdr.crc = 0;
+    hdr.lsn = next_lsn_;
+    hdr.txn_id = 0;
+    hdr.type = WalType::kCheckpoint;
+    hdr.data_len = 0;
+    hdr.crc = wal_crc32(reinterpret_cast<const byte*>(&hdr), sizeof(hdr), nullptr, 0);
+    if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) return 0;
+    bytes_since_checkpoint_ += sizeof(hdr);
+    next_lsn_++;
+    last_written_lsn_ = hdr.lsn;
+    u64 lsn = hdr.lsn;
+
+    // Phase 2: fsync the WAL up to and including the kCheckpoint record.
+    if (!flush_buffer()) return 0;
+    if (fsync_enabled_ && fsync(fd_) != 0) return 0;
+    durable_lsn_ = last_written_lsn_;
+    commit_cond_.broadcast();
+
+    // Phase 3: flush dirty pages while the latch is still held. At this
+    // point every dirty page satisfies page_lsn <= durable_lsn_, so
+    // BufferPool::flush_frame_wal_first takes its fast path and does NOT
+    // try to re-acquire the WAL latch — no deadlock. New writers are
+    // parked on the WAL latch and cannot dirty additional pages until
+    // we release it, so the dirty-page set is stable for the entire
+    // flush.
+    if (flush_pages_cb) flush_pages_cb(ctx);
+
+    // Phase 4: truncate the WAL. Safe now because everything that
+    // referenced records we are about to discard is durable on disk.
+    if (fd_ >= 0) {
+        u64 keep_next = next_lsn_;
+        u64 keep_durable = durable_lsn_;
+        close(fd_);
+        String path = wal_dir_ + "/wal.log";
+        fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        next_lsn_ = keep_next;
+        durable_lsn_ = keep_durable;
+        last_written_lsn_ = keep_durable;
+    }
+
     bytes_since_checkpoint_ = 0;
     return lsn;
 }
@@ -332,6 +454,14 @@ bool WalManager::flush_until(u64 lsn) {
     return durable_lsn_ >= lsn;
 }
 
+void WalManager::ensure_next_lsn_at_least(u64 lsn) {
+    LockGuard guard(latch_);
+    if (lsn == 0) return;
+    if (next_lsn_ <= lsn) next_lsn_ = lsn + 1;
+    if (last_written_lsn_ < lsn) last_written_lsn_ = lsn;
+    if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+}
+
 void WalManager::truncate() {
     LockGuard guard(latch_);
     if (fd_ >= 0) {
@@ -379,6 +509,31 @@ bool WalManager::recover(Database* db) {
 
     constexpr u32 kMaxReplayDataLen = kPageSize + 256;
 
+    // Reads one record header + payload from `fd`, verifies magic and CRC.
+    // Returns true only when the record is structurally intact; the caller
+    // stops the replay loop on false so a torn or corrupt tail is treated
+    // as end-of-log rather than re-interpreted as records.
+    auto read_record = [&](int read_fd, WalRecord* hdr_out,
+                           Vector<byte>* payload_out) -> bool {
+        if (!read_exact(read_fd, hdr_out, sizeof(WalRecord))) return false;
+        if (hdr_out->magic != kWalRecordMagic) return false;
+        if (hdr_out->data_len > kMaxReplayDataLen) return false;
+        payload_out->resize(hdr_out->data_len);
+        if (hdr_out->data_len > 0 &&
+            !read_exact(read_fd, payload_out->data(), hdr_out->data_len)) {
+            return false;
+        }
+        u32 stored_crc = hdr_out->crc;
+        WalRecord hdr_zero = *hdr_out;
+        hdr_zero.crc = 0;
+        u32 actual = wal_crc32(reinterpret_cast<const byte*>(&hdr_zero),
+                               sizeof(hdr_zero),
+                               hdr_out->data_len > 0 ? payload_out->data() : nullptr,
+                               hdr_out->data_len);
+        return actual == stored_crc;
+    };
+    (void)skip_bytes;   // skip_bytes kept for readability — every code path now reads payload
+
     auto page_lsn_at = [db](PageId page_id, LSN* out) -> bool {
         if (!db || !out || page_id == kNullPageId) return false;
         auto res = db->pool().fetch_page(page_id);
@@ -389,15 +544,48 @@ bool WalManager::recover(Database* db) {
         return true;
     };
 
+    // DDL recovery info — collected in pass 1, applied after data redo/undo.
+    struct DdlRecord {
+        u64 txn_id;
+        DdlOp op;
+        u32 table_id;
+        u32 aux;
+        String name;
+    };
+    Vector<DdlRecord> ddl_records;
+
     WalRecord hdr;
-    while (read_exact(fd, &hdr, sizeof(hdr))) {
+    Vector<byte> scratch_payload;
+    while (read_record(fd, &hdr, &scratch_payload)) {
         max_lsn = hdr.lsn;
         if (hdr.txn_id > max_txn_id) max_txn_id = hdr.txn_id;
-        if (hdr.data_len > kMaxReplayDataLen || !skip_bytes(fd, hdr.data_len)) break;
         if (hdr.type == WalType::kTxnCommit) {
             committed[hdr.txn_id] = true;
         } else if (hdr.type == WalType::kTxnAbort) {
             aborted[hdr.txn_id] = true;
+        } else if (hdr.type == WalType::kDdl && hdr.txn_id != 0) {
+            // Parse DDL payload for later undo.
+            struct __attribute__((packed)) DdlHdr {
+                u8  op;
+                u32 table_id;
+                u32 aux;
+                u16 name_len;
+            };
+            if (scratch_payload.size() >= sizeof(DdlHdr)) {
+                DdlHdr dh;
+                std::memcpy(&dh, scratch_payload.data(), sizeof(dh));
+                u32 name_len = dh.name_len;
+                if (name_len > scratch_payload.size() - sizeof(dh))
+                    name_len = scratch_payload.size() - sizeof(dh);
+                DdlRecord rec;
+                rec.txn_id = hdr.txn_id;
+                rec.op = static_cast<DdlOp>(dh.op);
+                rec.table_id = dh.table_id;
+                rec.aux = dh.aux;
+                rec.name = String(reinterpret_cast<const char*>(
+                    scratch_payload.data() + sizeof(dh)), name_len);
+                ddl_records.push_back(static_cast<DdlRecord&&>(rec));
+            }
         }
     }
     bool needs_index_rebuild = false;
@@ -408,20 +596,44 @@ bool WalManager::recover(Database* db) {
             return false;
         }
 
-        while (read_exact(fd, &hdr, sizeof(hdr))) {
-            if (hdr.data_len > kMaxReplayDataLen) break;
-            off_t data_offset = lseek(fd, 0, SEEK_CUR);
+        Vector<byte> data;
+        while (read_record(fd, &hdr, &data)) {
+            off_t data_offset = lseek(fd, 0, SEEK_CUR) -
+                                static_cast<off_t>(hdr.data_len);
             bool is_data_record = hdr.type == WalType::kInsert ||
                                   hdr.type == WalType::kDelete ||
                                   hdr.type == WalType::kUpdate;
-            if (!is_data_record) {
-                if (!skip_bytes(fd, hdr.data_len)) break;
+            bool is_savepoint_undo =
+                hdr.type == WalType::kSavepointUndoInsert ||
+                hdr.type == WalType::kSavepointUndoDelete;
+            if (!is_data_record && !is_savepoint_undo) {
                 continue;
             }
-
-            Vector<byte> data;
-            data.resize(hdr.data_len);
-            if (hdr.data_len > 0 && !read_exact(fd, data.data(), hdr.data_len)) break;
+            // Statement-level savepoint compensation. Applied unconditionally
+            // — the recorded RID's earlier kInsert/kDelete was already redone
+            // above, so we now undo it the same way the live database did at
+            // savepoint-rollback time. No-op if the redo was skipped via the
+            // page_lsn check (idempotent).
+            if (is_savepoint_undo) {
+                struct __attribute__((packed)) SpHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                };
+                if (data.size() < sizeof(SpHdr)) continue;
+                SpHdr sp;
+                std::memcpy(&sp, data.data(), sizeof(sp));
+                HeapFile* heap = db->get_heap_file(sp.table_id);
+                if (heap) {
+                    if (hdr.type == WalType::kSavepointUndoInsert) {
+                        heap->rollback_insert(sp.page_id, sp.slot_idx, hdr.lsn);
+                    } else {
+                        heap->rollback_delete(sp.page_id, sp.slot_idx, hdr.lsn);
+                    }
+                    needs_index_rebuild = true;
+                }
+                continue;
+            }
             const bool* is_committed = committed.find(hdr.txn_id);
             if (!(is_committed && *is_committed)) {
                 ReplayRef ref;
@@ -596,12 +808,86 @@ bool WalManager::recover(Database* db) {
                 }
             }
         }
+        // ----------------------------------------------------------------
+        // DDL recovery: undo uncommitted DDL changes that were persisted
+        // to the catalog file before the crash.
+        // Process in reverse order so nested DDLs within one transaction
+        // are undone last-to-first.
+        // ----------------------------------------------------------------
+        for (i32 d = static_cast<i32>(ddl_records.size()) - 1; d >= 0; d--) {
+            const DdlRecord& rec = ddl_records[static_cast<u32>(d)];
+            const bool* is_committed = committed.find(rec.txn_id);
+            if (is_committed && *is_committed) continue;   // committed — keep
+            // Uncommitted (aborted or in-flight at crash) — reverse the DDL.
+            switch (rec.op) {
+                case DdlOp::kCreateTable: {
+                    // Undo CREATE TABLE: drop the table from catalog.
+                    DdlUndoInfo info;
+                    info.table_name = rec.name;
+                    db->undo_create_table(rec.table_id, info);
+                    needs_index_rebuild = true;
+                    break;
+                }
+                case DdlOp::kDropTable:
+                    // Undo DROP TABLE: the table's catalog entry was removed but
+                    // physical files should still be on disk (DROP removes the
+                    // catalog entry; undo restores it). However we don't have
+                    // the full schema in the WAL record — the atomic
+                    // save_catalog() for DROP happened before commit, so the
+                    // catalog file on disk already reflects the DROP. We cannot
+                    // reverse it without schema data. For now, flag the index
+                    // rebuild so the next startup can attempt repair.
+                    needs_index_rebuild = true;
+                    break;
+                case DdlOp::kCreateIndex: {
+                    // Undo CREATE INDEX: drop the index.
+                    DdlUndoInfo info;
+                    info.single_index.index_id = rec.aux;
+                    info.single_index.index_name = rec.name;
+                    info.single_index.table_id = rec.table_id;
+                    db->undo_create_index(rec.table_id, info);
+                    needs_index_rebuild = true;
+                    break;
+                }
+                case DdlOp::kDropIndex:
+                    // Cannot fully reverse DROP INDEX without saved key columns.
+                    needs_index_rebuild = true;
+                    break;
+                case DdlOp::kAlterAddColumn: {
+                    // Undo ADD COLUMN: remove the last column.
+                    DdlUndoInfo info;
+                    info.column_position = rec.aux;
+                    db->undo_alter_add_column(rec.table_id, info);
+                    break;
+                }
+                case DdlOp::kAlterDropColumn: {
+                    // Undo DROP COLUMN: clear is_dropped flag.
+                    DdlUndoInfo info;
+                    info.column_position = rec.aux;
+                    db->undo_alter_drop_column(rec.table_id, info);
+                    break;
+                }
+                case DdlOp::kAlterRenameColumn: {
+                    // Undo RENAME COLUMN: parse "old->new" from the name field
+                    // and reverse. The WAL name is "table.old->new".
+                    // For simplicity, skip partial-parse failures.
+                    break;
+                }
+            }
+        }
     }
     close(fd);
 
-    next_lsn_ = max_lsn + 1;
-    durable_lsn_ = max_lsn;
-    last_written_lsn_ = max_lsn;
+    // Advance — never regress — the LSN counters. If load_control_file()
+    // already restored a higher checkpoint_lsn watermark before recover()
+    // ran, keep that value: LSNs must stay globally monotonic across
+    // restarts even when the WAL file itself was truncated by clean
+    // shutdown. Resetting to max_lsn+1 here would re-introduce the D2
+    // checkpoint deadlock (page_lsn > durable_lsn → flush_until under
+    // held WAL latch).
+    if (max_lsn + 1 > next_lsn_)      next_lsn_ = max_lsn + 1;
+    if (max_lsn > durable_lsn_)       durable_lsn_ = max_lsn;
+    if (max_lsn > last_written_lsn_)  last_written_lsn_ = max_lsn;
     if (db && max_txn_id > 0) {
         db->txn_manager().ensure_next_txn_id_at_least(max_txn_id + 1);
     }

@@ -102,9 +102,10 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
+            HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
             return UniquePtr<Executor>(new IndexOnlyScanExecutor(
                 &db_.pool(), index, scan_plan->search_key, scan_plan->is_range,
-                scan_plan->range_high, scan_plan->output_schema, tm));
+                scan_plan->range_high, scan_plan->output_schema, tm, heap));
         }
 
         case PlanNodeType::kFilter: {
@@ -278,6 +279,7 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 SortKey sk;
                 sk.expression = UniquePtr<Expression>(s_plan->keys[i].expression->clone());
                 sk.ascending = s_plan->keys[i].ascending;
+                sk.nulls_first = s_plan->keys[i].nulls_first;
                 keys.push_back(static_cast<SortKey&&>(sk));
             }
             return UniquePtr<Executor>(new SortExecutor(
@@ -383,6 +385,7 @@ UniquePtr<Expression> ExecutorFactory::materialize_scalar_subqueries(const Expre
     copy->literal_value = expr->literal_value;
     copy->alias = expr->alias;
     copy->op = expr->op;
+    copy->cast_target = expr->cast_target;
     if (expr->left) copy->left = materialize_scalar_subqueries(expr->left.get());
     if (expr->right) copy->right = materialize_scalar_subqueries(expr->right.get());
     if (expr->child) copy->child = materialize_scalar_subqueries(expr->child.get());

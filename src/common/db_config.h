@@ -24,6 +24,12 @@ struct DbConfig {
     u32 recovery_parallelism = 4;
     bool recover_indexes_lazy = true;
     bool startup_scan_txn_watermark = false;
+    // When true, Database::Database() runs check_table_index_consistency
+    // after WAL recovery and refuses to open the DB if it finds heap/index
+    // disagreement. Off by default because the check is O(N) over all heap
+    // rows; turn it on in environments where silent corruption is a worse
+    // outcome than a longer startup.
+    bool consistency_check_on_startup = false;
     u64 checkpoint_timeout_ms = 60000;
     u64 checkpoint_wal_size_bytes = 256ULL * 1024ULL * 1024ULL;
 
