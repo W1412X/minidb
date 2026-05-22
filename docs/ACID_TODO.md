@@ -647,37 +647,42 @@ Document explicitly as future / unsupported.
 
 ---
 
-## Recommended next 6 items (in order)
+## Recommended next 6 items — **ALL DONE**
 
-The biggest correctness-vs-effort wins from the remaining gaps:
+1. **A1 — CLOG-equivalent.** ✅ `acid/atomicity/clog_status_log.py`.
+   `src/transaction/txn_status_log.{h,cpp}` persists every commit/abort
+   to `<db>/wal/txn_status.log`. is_visible() falls back to it when a
+   slot has been recycled, closing the "recycled slot defaults to
+   committed" hole for aborted xmins.
 
-1. **A1 — CLOG-equivalent + COMMITTING/ABORTING states.** Today the
-   commit record fsync IS the transition; an in-flight fsync failure
-   triggers rollback, but post-restart we lose the COMMITTING audit
-   trail. A small log indexed by xid lets recovery answer "was xid N
-   committed?" without scanning the entire WAL.
+2. **D7 — DDL WAL records.** ✅ `acid/durability/ddl_wal.py`.
+   Every CREATE / DROP / ALTER now emits a kDdl marker carrying op +
+   table_id + aux + object name. Recovery ignores them today but the
+   trail is durable for a future repair pass.
 
-2. **D7 — DDL WAL records.** ALTER/CREATE/DROP currently mutate catalog
-   + files outside WAL; rollback is best-effort, recovery is "the file
-   exists or it doesn't". Even a single `kDdlMarker` record per DDL
-   call would close most of F1/F2.
+3. **B3 — VARCHAR(n) length.** ✅ `acid/consistency/varchar_length.py`.
+   Column carries the bound, schema serialization round-trips it,
+   Schema::validate_row enforces it on INSERT / UPDATE, both REPL and
+   server CREATE-TABLE paths wire the parser's value through.
 
-3. **B3 — VARCHAR(n) length enforcement.** Tiny code change in
-   InsertExecutor/UpdateExecutor, covers a long-standing diff with
-   SQLite. Unblocks many SQL-correctness tests.
+4. **D1 — WAL CRC32 + magic.** ✅ `acid/durability/wal_record_corruption.py`.
+   Every WAL record gains a 32-bit magic prefix and a CRC32 over
+   (header-with-crc-zeroed + payload). Recovery rejects torn / wild
+   writes at the corrupted record instead of mis-reading garbage.
 
-4. **D1 — Per-record CRC32 + magic in WAL records.** One-time format
-   change; future corruption tests need it. Migration is
-   straightforward because no on-disk WAL survives across releases.
+5. **B5/D4 — Index state machine + optimizer gate.** ✅
+   `acid/durability/index_state_machine.py`. IndexEntry carries
+   kValid / kInvalid / kRebuilding; WAL replay flips every index to
+   kInvalid before rebuild; optimizer refuses non-kValid indexes;
+   rebuild flips back atomically.
 
-5. **B5/D4 — Index state machine (valid/invalid/rebuilding) + optimizer
-   gate.** Closes the "optimizer used a half-rebuilt index" hazard
-   that the rebuild-based recovery path opens.
-
-6. **C2 — Exhaustive MVCC visibility matrix test.** Pure test, no
-   code; catches any future MVCC refactor that breaks a corner of
-   the matrix. The current `mvcc_lock_regression.py` exercises
-   real-workload paths, not the matrix.
+6. **C2 — Exhaustive MVCC visibility matrix.** ✅
+   `acid/isolation/mvcc_visibility_matrix.py`. Persistent TCP sessions
+   pin snapshots through nine xmin/xmax cases plus own-write /
+   own-delete corners. SeqScan path verified; IndexScan visibility is
+   tracked separately (see "IndexScan SI visibility" task — eager
+   DELETE removes the index entry which can hide rows from old
+   snapshots).
 
 After those, the next tier is statement-level savepoints (A2),
 visibility-map (E3), CHECK constraints (B3), and full predicate
@@ -689,10 +694,10 @@ locks / SSI (C5 — only if we commit to Serializable).
 
 | Property | P0 done | P0 remaining | Acceptance test bundle |
 | --- | --- | --- | --- |
-| Atomicity | A1 commit ordering, A2 heap/index | CLOG, statement savepoints, undo for indexes/DDL | `acid/atomicity/*`, `crash_recovery_harness` |
-| Consistency | C1 NOT NULL+DEFAULT, C4 startup check | CHECK constraints, VARCHAR(n), full NULL 3VL, index state machine | `acid/consistency/*`, `index_unique_matrix` |
-| Isolation | I2 lost-update, I3 SI doc | docs/ISOLATION_LEVELS.md, MVCC matrix test, deadlock fairness | `acid/isolation/*`, `mvcc_lock_regression` |
-| Durability | D2 barrier, D3 commit, D4 torn page | WAL CRC, DDL WAL, checkpoint dirty-page table, fsync-error path | `acid/durability/*`, `wal_buffer_pool_test` |
+| Atomicity | A1 commit ordering + CLOG, A2 heap/index | statement savepoints, undo for indexes/DDL | `acid/atomicity/*`, `crash_recovery_harness` |
+| Consistency | C1 NOT NULL+DEFAULT, B3 VARCHAR(n), C4 startup check, B5 index state | CHECK constraints, full NULL 3VL | `acid/consistency/*`, `index_unique_matrix` |
+| Isolation | I2 lost-update, I3 SI doc, C2 MVCC matrix | docs/ISOLATION_LEVELS.md, IndexScan SI visibility, deadlock fairness | `acid/isolation/*`, `mvcc_lock_regression` |
+| Durability | D1 WAL CRC, D2 barrier, D3 commit, D4 torn page, D7 DDL audit | checkpoint dirty-page table, fsync-error path | `acid/durability/*`, `wal_buffer_pool_test` |
 
 Until the "P0 remaining" column is empty, MiniDB stays
 **"snapshot-isolation, single-writer, lazy-index-rebuild ACID"** —
