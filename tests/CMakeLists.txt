@@ -95,6 +95,8 @@ add_test(NAME mvcc_lock_regression
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/mvcc_lock_regression.py $<TARGET_FILE:minidb> --seed 12648433)
 add_test(NAME lost_update
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/lost_update.py $<TARGET_FILE:minidb> --seed 12648438)
+add_test(NAME mvcc_visibility_matrix
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/mvcc_visibility_matrix.py $<TARGET_FILE:minidb> --seed 12648446)
 add_test(NAME write_skew
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew.py $<TARGET_FILE:minidb> --seed 12648439)
 add_test(NAME commit_durability
