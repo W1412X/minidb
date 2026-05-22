@@ -23,8 +23,9 @@ user-facing summary; this file is the engineering plan.
        — docs/CONCURRENCY_CONTROL.md
 [x] Parser rejects SET TRANSACTION ISOLATION LEVEL (never emitted)
 [ ] README states "no full predicate/range lock"
-[~] IndexOnlyScan = heap-recheck fallback (no VM)
+[x] IndexOnlyScan = VM-optimized (skips heap fetch for all-visible pages)
        — covered by tests/sql/sql_correctness_matrix.py
+       — VM integration: src/sql/executor/index_scan_executor.cpp
 [~] Index recovery = lazy rebuild (no physical redo)
        — covered by tests/acid/durability/recovery_smoke.sh
 [x] DDL transactionality: PostgreSQL-style transactional DDL (reverse-op undo)
@@ -110,8 +111,9 @@ user-facing summary; this file is the engineering plan.
        — tests/acid/isolation/mvcc_lock_regression.py
 [x] DELETE rollback restores visibility
 [~] Index entry lifecycle after DELETE: kept until GC sweep
-[ ] Explicit test: long snapshot + DELETE + GC must not vacuum
+[x] Explicit test: long snapshot + DELETE + GC must not vacuum
     versions still visible to the snapshot
+       — tests/acid/isolation/long_snapshot_gc.py
 [~] DELETE WAL redo / undo idempotent
 [x] DELETE crash before commit → row still visible
 [x] DELETE crash after commit → row gone
@@ -290,7 +292,8 @@ user-facing summary; this file is the engineering plan.
 [ ] read-only transaction snapshot (no SET TRANSACTION READ ONLY today)
 [~] read-only compute storage_read_lsn semantics
        — docs/WAL_RECOVERY_PROTOCOL.md
-[ ] Phantom behaviour explicitly tested + documented
+[x] Phantom behaviour explicitly tested + documented
+       — tests/acid/isolation/phantom_read.py
 ```
 
 ### C2. MVCC visibility matrix
@@ -507,25 +510,40 @@ user-facing summary; this file is the engineering plan.
 [x] committed-deleted tuple cleanup
 [~] HOT chain pruning
 [~] LP_DEAD → LP_UNUSED transition
-[ ] Free-space-map (not implemented)
-[ ] Visibility-map (not implemented)
-[~] Index cleanup during GC (lazy)
-[ ] Long-transaction blocking-cleanup test
-[~] Vacuum-vs-old-snapshot correctness
-[~] Vacuum × concurrent scan
-[ ] Freeze / all-frozen — not supported, document
+[x] Free-space-map (FSM)
+       — src/storage/fsm.{h,cpp}, integrated into heap INSERT + GC
+[x] Visibility-map (VM)
+       — src/storage/visibility_map.{h,cpp}, 2 bits per page
+[x] Index cleanup during GC (lazy)
+       — GC calls Database::delete_index_entries before marking slot DEAD
+[x] Long-transaction blocking-cleanup test
+       — tests/acid/isolation/long_snapshot_gc.py
+[x] Vacuum-vs-old-snapshot correctness
+       — tests/acid/isolation/long_snapshot_gc.py
+[x] Vacuum × concurrent scan
+       — tests/acid/isolation/vacuum_concurrent.py
+[x] VACUUM SQL command
+       — VACUUM [TABLE] [table_name]; runs full GC + freeze pass
+[x] Freeze / all-frozen
+       — kFrozenTxnId (=2) replaces xmin for old committed tuples
+       — is_visible() fast-path for frozen tuples
+       — VACUUM freezes eligible tuples
 ```
 
 ### E3. Visibility Map / IndexOnlyScan
 
 ```text
-[ ] visibility-map file/fork — NOT IMPLEMENTED
-[ ] all-visible bit per page
-[ ] all-frozen bit (declare unsupported)
-[ ] heap insert/update/delete clears all-visible
-[ ] vacuum sets all-visible
-[~] IndexOnlyScan currently does heap recheck unconditionally
-[~] Recheck fallback safe (visibility-correct)
+[x] visibility-map per-page tracking
+       — src/storage/visibility_map.{h,cpp}
+[x] all-visible bit per page
+[x] all-frozen bit per page
+       — set by VACUUM when all tuples on page have xmin == kFrozenTxnId
+[x] heap insert/update/delete clears all-visible
+       — InsertReservation::commit, mark_deleted, GC prune
+[x] GC / VACUUM sets all-visible (or all-frozen)
+[x] IndexOnlyScan uses VM to skip heap fetch for all-visible pages
+       — src/sql/executor/index_scan_executor.cpp
+[x] Recheck fallback safe (visibility-correct when VM not set)
 ```
 
 ---
@@ -659,7 +677,9 @@ Document explicitly as future / unsupported.
 [ ] tests/acid/consistency/notin_null.py
 [x] tests/acid/isolation/mvcc_visibility_matrix.py — exhaustive matrix
 [x] tests/acid/isolation/write_skew_serializable.py — SSI-lite
-[ ] tests/acid/isolation/phantom.py
+[x] tests/acid/isolation/phantom_read.py — phantom prevented by SI
+[x] tests/acid/isolation/long_snapshot_gc.py — long snapshot survives GC/VACUUM
+[x] tests/acid/isolation/vacuum_concurrent.py — VACUUM concurrent correctness
 [ ] tests/acid/durability/wal_record_corruption.py
 [ ] tests/acid/durability/io_error_propagation.py
 [ ] tests/acid/durability/ddl_crash.py

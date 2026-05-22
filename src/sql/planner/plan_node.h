@@ -134,7 +134,8 @@ struct LimitPlan : PlanNode {
 struct SortKey {
     UniquePtr<Expression> expression;
     bool ascending;
-    SortKey() : ascending(true) {}
+    bool nulls_first;   // true = NULLs sort before non-NULLs
+    SortKey() : ascending(true), nulls_first(true) {}
 };
 
 struct SortPlan : PlanNode {

@@ -83,8 +83,8 @@ public:
                    PageId old_page_id, SlotIdx old_slot_idx,
                    PageId new_page_id, SlotIdx new_slot_idx,
                    const byte* new_data, u16 size);
-    u64 log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
-    u64 log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
+    u64 log_index_insert(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid);
+    u64 log_index_delete(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid);
     // Statement-level savepoint compensating records. Written when an
     // explicit-transaction statement bails out partway and its in-memory
     // writes are rolled back. Recovery re-applies the original WAL
@@ -92,13 +92,14 @@ public:
     // same shape that the live database has at commit time.
     u64 log_savepoint_undo_insert(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx);
     u64 log_savepoint_undo_delete(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx);
-    // Emit a kDdl audit record. `object_name` is the table/index/column
+    // Emit a kDdl record. `object_name` is the table/index/column
     // affected by the operation; `aux` carries a secondary identifier
     // (the column index for ALTER, the index id for CREATE/DROP INDEX,
     // 0 otherwise). Records are written ON SUCCESS so a kDdl in the log
-    // means the operation reached its in-memory completion point — a
-    // future recovery pass can use that to repair orphaned files.
-    u64 log_ddl(DdlOp op, u32 table_id, u32 aux, const String& object_name);
+    // means the operation reached its in-memory completion point.
+    // During recovery, uncommitted DDL records trigger the reverse
+    // operation to restore catalog consistency.
+    u64 log_ddl(u64 txn_id, DdlOp op, u32 table_id, u32 aux, const String& object_name);
 
     // Hook invoked inside `checkpoint()` while the WAL latch is held, after
     // the kCheckpoint record has been fsynced and before the log is

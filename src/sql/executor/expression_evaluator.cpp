@@ -291,6 +291,13 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
             }
             return Value();
         }
+
+        case ExprType::kCast: {
+            if (!expr.child) return Value();
+            Value v = evaluate(*expr.child, tuple);
+            if (v.is_null()) return Value();  // CAST(NULL AS T) = NULL
+            return v.cast_to(expr.cast_target);
+        }
     }
 
     return Value();

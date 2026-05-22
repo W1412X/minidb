@@ -394,22 +394,21 @@ ExecResult UpdateExecutor::next() {
         bool hot_used = false;
 
         // ============================================================
-        // HOT Update: WAL-first — reserve slot, write WAL, then commit data.
+        // HOT Update: WAL-first — reserve slot (RAII), write WAL, commit.
         // ============================================================
         if (hot_eligible) {
             auto prepare = heap_->prepare_insert_in_page(old_rid.page_id, size);
             if (prepare.ok()) {
-                SlotIdx predicted_slot = prepare.value();
+                auto reservation = std::move(prepare.value());
                 u64 lsn = 0;
                 if (wal_) {
                     lsn = wal_->log_update(txn_id, table_id_,
                                            old_rid.page_id, old_rid.slot_idx,
-                                           old_rid.page_id, predicted_slot,
+                                           old_rid.page_id, reservation.predicted_slot(),
                                            buffer, size);
                 }
 
-                auto hot_result = heap_->commit_insert_in_page(
-                    old_rid.page_id, predicted_slot, buffer, size, lsn);
+                auto hot_result = reservation.commit(buffer, size, lsn);
                 if (hot_result.ok()) {
                     for (u32 k = 0; k < row_unique_keys.size(); k++) {
                         pending_unique_keys.insert(row_unique_keys[k], true);
@@ -432,22 +431,21 @@ ExecResult UpdateExecutor::next() {
         }
 
         // ============================================================
-        // Non-HOT fallback path: WAL-first — reserve slot, write WAL, then commit data.
+        // Non-HOT fallback: WAL-first — reserve slot (RAII), write WAL, commit.
         // ============================================================
         if (!hot_used) {
             auto prepare = heap_->prepare_insert(size);
             if (prepare.ok()) {
-                HeapFile::InsertPlan plan = prepare.value();
+                auto reservation = std::move(prepare.value());
                 u64 lsn = 0;
                 if (wal_) {
                     lsn = wal_->log_update(txn_id, table_id_,
                                            old_rid.page_id, old_rid.slot_idx,
-                                           plan.page_id, plan.predicted_slot,
+                                           reservation.page_id(), reservation.predicted_slot(),
                                            buffer, size);
                 }
 
-                auto ins_result = heap_->commit_insert(
-                    plan.page_id, plan.is_new_page, plan.predicted_slot, buffer, size, lsn);
+                auto ins_result = reservation.commit(buffer, size, lsn);
                 if (ins_result.ok()) {
                     Pair<PageId, SlotIdx> new_rid = ins_result.value();
                     RecordId new_record_id(new_rid.first, new_rid.second);

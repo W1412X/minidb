@@ -99,6 +99,10 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("EXECUTE", TokenType::KW_EXECUTE);
     m.insert("DEALLOCATE", TokenType::KW_DEALLOCATE);
     m.insert("CHECK", TokenType::KW_CHECK);
+    m.insert("NULLS", TokenType::KW_NULLS);
+    m.insert("FIRST", TokenType::KW_FIRST);
+    m.insert("LAST", TokenType::KW_LAST);
+    m.insert("VACUUM", TokenType::KW_VACUUM);
     return m;
 }
 

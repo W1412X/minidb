@@ -842,6 +842,169 @@ struct ResourceSnapshot {
 
 ---
 
+## 9. Garbage Collection and VACUUM
+
+**Files**: `src/recovery/gc.h`, `src/recovery/gc.cpp`
+
+### Incremental GC (`run_gc`)
+
+The `GarbageCollector::run_gc(max_pages)` method performs an incremental
+pass over heap pages, processing at most `max_pages` pages per invocation.
+It is triggered automatically by `Database::maybe_gc()` after each DML
+statement (configurable via `gc_ops_threshold` and `gc_max_pages_per_cycle`).
+
+A tuple is **garbage** (eligible for reclamation) when:
+1. `xmin` is committed and `xmin < oldest_active_txn_id`
+2. `xmax != 0` (the row has been deleted/replaced)
+3. `xmax` is committed and `xmax < oldest_active_txn_id`
+
+This ensures no active or future transaction can see the version.
+
+**Incremental state**: `last_gc_page_[table_id]` tracks the last processed
+page per table. Each invocation resumes from where it left off, wrapping
+around when it reaches the end. This prevents repeated scanning of the same
+leading pages while the tail accumulates dead tuples.
+
+**Lazy index cleanup**: GC is the *only* path that removes B+ tree entries
+for deleted tuples. `DELETE` intentionally leaves index entries in place so
+older snapshots can still find and visibility-check the row through
+IndexScan. When GC determines a tuple is garbage, it calls
+`Database::delete_index_entries()` before marking the heap slot dead.
+
+**Same-page version chains**: if the garbage tuple's next-version pointer
+targets a slot on the same page, GC installs a `REDIRECT` line pointer
+(saves space). Cross-page chains mark the old slot `DEAD`.
+
+After processing each page:
+- If garbage was found: `page->prune()` to compact DEAD slots, update the
+  Free Space Map with reclaimed space, clear the Visibility Map entry.
+- If no garbage: mark the page all-visible in the Visibility Map.
+
+### Full VACUUM (`run_vacuum`)
+
+The `VACUUM` SQL command invokes `GarbageCollector::run_vacuum()`, which
+processes **every page** across all tables (no `max_pages` limit) and
+additionally **freezes** eligible tuples.
+
+```sql
+VACUUM;              -- vacuum all tables
+VACUUM table_name;   -- vacuum a specific table (same underlying pass)
+VACUUM TABLE t;      -- accepted for PostgreSQL compatibility
+```
+
+A tuple is **freeze-eligible** when:
+1. `xmin != kFrozenTxnId` (not already frozen)
+2. `xmin` is committed and `xmin < oldest_active_txn_id`
+3. `xmax == 0` (the row is live, not deleted)
+
+Freeze replaces `xmin` with `kFrozenTxnId (= 2)` directly on the page.
+This eliminates the need for CLOG lookups on old tuple headers, since the
+visibility fast-path in `is_visible()` short-circuits immediately:
+
+```cpp
+if (xmin == kFrozenTxnId) {
+    return xmax == kInvalidTxnId;  // visible if not deleted
+}
+```
+
+After processing each page in VACUUM:
+- Pages with garbage: prune, update FSM, clear VM (same as incremental GC).
+- Pages where all live tuples are now frozen: mark `all-frozen` in VM.
+- Pages where all live tuples are visible but not all frozen: mark
+  `all-visible` in VM.
+- Already all-frozen pages are skipped entirely.
+
+---
+
+## 10. Free Space Map (FSM)
+
+**Files**: `src/storage/fsm.h`, `src/storage/fsm.cpp`
+
+The Free Space Map tracks per-page free space so INSERT can find a page
+with sufficient room without scanning the entire heap.
+
+### Encoding
+
+Free space is encoded as a single byte: `category = min(free_bytes / 32, 255)`.
+A tuple of size N requires category `>= (N + sizeof(LinePointer)) / 32 + 1`.
+The 32-byte granularity matches PostgreSQL's FSM categories.
+
+### API
+
+```cpp
+void update(PageId page_id, u16 free_space);    // record current free space
+PageId find_page(u16 needed);                    // find page with enough room
+void remove(PageId page_id);                     // remove entry (DROP TABLE)
+void rebuild(BufferPool* pool, PageId first, u32 num_pages);  // full rebuild
+```
+
+### Integration Points
+
+- **INSERT path** (`HeapFile::prepare_insert`): when the last data page is
+  full, the FSM is queried before allocating a new page. If the FSM finds
+  an existing page with enough free space, that page is reused.
+- **INSERT commit** (`InsertReservation::commit`): after inserting, the FSM
+  is updated with the page's remaining free space.
+- **DELETE / mark_deleted**: FSM is not updated (space is not reclaimable
+  until GC runs).
+- **GC / VACUUM**: after pruning dead tuples, the FSM is updated with the
+  reclaimed space.
+
+---
+
+## 11. Visibility Map (VM)
+
+**Files**: `src/storage/visibility_map.h`, `src/storage/visibility_map.cpp`
+
+The Visibility Map uses 2 bits per page, mirroring PostgreSQL's design:
+
+| Bit       | Meaning                                                    |
+|-----------|------------------------------------------------------------|
+| `kVisible` | All live tuples on the page are visible to every snapshot  |
+| `kFrozen`  | All live tuples have been frozen (`xmin == kFrozenTxnId`)  |
+
+`kFrozen` implies `kVisible`. A page marked `kFrozen` by VACUUM will never
+need heap fetches during index-only scans and will never need re-scanning
+by future VACUUM passes.
+
+### API
+
+```cpp
+void set_visible(PageId);     // mark all-visible
+void set_frozen(PageId);      // mark all-frozen (implies all-visible)
+void clear_page(PageId);      // invalidate on INSERT/UPDATE/DELETE
+bool is_visible(PageId);      // check all-visible
+bool is_frozen(PageId);       // check all-frozen
+void stats(u32* vis, u32* frozen);  // counts for SHOW STATS
+```
+
+### Invalidation Rules
+
+The VM is cleared (`clear_page`) whenever a page is modified by DML:
+- `InsertReservation::commit()` — new tuple on the page
+- `mark_deleted()` — DELETE stamps xmax
+- GC prune — page layout changed
+
+### Index-Only Scan Optimization
+
+`IndexOnlyScanExecutor` checks the VM before fetching the heap page:
+
+```
+for each index entry (key, rid):
+    if VM says rid.page is all-visible:
+        → return key directly (skip heap fetch)
+    else:
+        → fetch heap page, check visibility via tuple header
+        → return key only if visible
+```
+
+This optimization is transparent to the query: correctness is guaranteed
+because an all-visible page, by definition, has every live tuple visible to
+every active snapshot. The index entry's key provides the column value
+without materializing the heap tuple.
+
+---
+
 ## Appendix: Key Invariants
 
 1. **WAL-before-state**: The `kTxnCommit` record is fsynced before the

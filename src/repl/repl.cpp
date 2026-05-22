@@ -446,6 +446,20 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
 
+    // VACUUM [table_name]
+    if (stmt.type == StmtType::kVacuum) {
+        if (!stmt.vacuum_table_name.empty()) {
+            TableEntry* table = db_.get_table(stmt.vacuum_table_name);
+            if (!table) {
+                printf("Error: table '%s' not found\n\n", stmt.vacuum_table_name.c_str());
+                return;
+            }
+        }
+        db_.vacuum();
+        printf("VACUUM\n\n");
+        return;
+    }
+
     // BEGIN / COMMIT / ROLLBACK
     if (stmt.type == StmtType::kBegin) {
         Transaction* txn = db_.txn_manager().begin();

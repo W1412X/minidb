@@ -24,6 +24,11 @@ public:
     // Execute one incremental GC (process max_pages pages)
     void run_gc(u32 max_pages = 64);
 
+    // Full VACUUM: process every page across all tables, freeze eligible
+    // tuples (committed xmin older than freeze horizon), and update
+    // FSM/VM. Unlike incremental GC, this does not stop after max_pages.
+    void run_vacuum();
+
 private:
     bool is_garbage(const Tuple& t, u64 oldest_active_txn);
 

@@ -66,6 +66,8 @@ add_test(NAME differential_sqlite
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/differential_sqlite.py $<TARGET_FILE:minidb> --seed 12648431)
 add_test(NAME select_empty_list
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/select_empty_list.py $<TARGET_FILE:minidb> --seed 12648444)
+add_test(NAME p1_features
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/sql/p1_features_test.py $<TARGET_FILE:minidb> --seed 12648455)
 
 # ---------------------------------------------------------------------------
 # DDL and catalog
@@ -101,6 +103,12 @@ add_test(NAME write_skew
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew.py $<TARGET_FILE:minidb> --seed 12648439)
 add_test(NAME write_skew_serializable
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/write_skew_serializable.py $<TARGET_FILE:minidb> --seed 12648460)
+add_test(NAME phantom_read
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/phantom_read.py $<TARGET_FILE:minidb> --seed 12648456)
+add_test(NAME long_snapshot_gc
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/long_snapshot_gc.py $<TARGET_FILE:minidb> --seed 12648458)
+add_test(NAME vacuum_concurrent
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/vacuum_concurrent.py $<TARGET_FILE:minidb> --seed 12648459)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
 add_test(NAME index_heap_atomic
@@ -137,6 +145,8 @@ add_test(NAME ddl_wal
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/ddl_wal.py $<TARGET_FILE:minidb> --seed 12648449)
 add_test(NAME crash_recovery_harness
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/crash_recovery_harness.py $<TARGET_FILE:minidb> --seed 12648432)
+add_test(NAME ddl_crash_recovery
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/ddl_crash_recovery.py $<TARGET_FILE:minidb> --seed 12648457)
 
 # ---------------------------------------------------------------------------
 # Storage / page server

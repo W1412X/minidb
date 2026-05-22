@@ -75,6 +75,11 @@ struct ReadRecord {
 
 static constexpr u64 kInvalidTxnId = 0;
 
+/// Frozen transaction ID.  A tuple with xmin == kFrozenTxnId is considered
+/// committed and visible to every snapshot without any CLOG lookup.
+/// PostgreSQL uses FrozenTransactionId = 2 for the same purpose.
+static constexpr u64 kFrozenTxnId = 2;
+
 enum class TxnState : u8 { kActive = 0, kCommitted = 1, kAborted = 2 };
 
 // Per-transaction isolation level.

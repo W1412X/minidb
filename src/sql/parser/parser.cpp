@@ -149,6 +149,18 @@ Statement Parser::parse() {
             stmt.type = StmtType::kDeallocate;
             stmt.deallocate_stmt = parse_deallocate();
             break;
+        case TokenType::KW_VACUUM: {
+            lexer_.consume_token();
+            stmt.type = StmtType::kVacuum;
+            // Accept optional TABLE keyword: VACUUM [TABLE] [table_name]
+            match_keyword(TokenType::KW_TABLE);
+            Token next = peek();
+            if (next.type != TokenType::SEMICOLON && next.type != TokenType::END_OF_INPUT) {
+                Token table = expect_identifier();
+                stmt.vacuum_table_name = table.value;
+            }
+            break;
+        }
         default:
             set_error_at(String("unknown statement"), t);
             return Statement();
@@ -176,7 +188,7 @@ UniquePtr<SelectStmt> Parser::parse_select() {
         if (stmt->union_rhs) {
             if (stmt->order_by.empty() && !stmt->union_rhs->order_by.empty()) {
                 for (u32 i = 0; i < stmt->union_rhs->order_by.size(); i++) {
-                    stmt->order_by.push_back(static_cast<Pair<UniquePtr<Expression>, bool>&&>(
+                    stmt->order_by.push_back(static_cast<OrderByItem&&>(
                         stmt->union_rhs->order_by[i]));
                 }
                 stmt->union_rhs->order_by.clear();
@@ -339,8 +351,17 @@ UniquePtr<SelectStmt> Parser::parse_select_body() {
             bool is_asc = true;
             if (match_keyword(TokenType::KW_ASC)) is_asc = true;
             else if (match_keyword(TokenType::KW_DESC)) is_asc = false;
-            stmt->order_by.push_back(Pair<UniquePtr<Expression>, bool>(
-                static_cast<UniquePtr<Expression>&&>(expr), is_asc));
+            // PostgreSQL default: NULLS LAST for ASC, NULLS FIRST for DESC
+            bool nf = !is_asc;
+            if (match_keyword(TokenType::KW_NULLS)) {
+                if (match_keyword(TokenType::KW_FIRST)) nf = true;
+                else { expect_keyword(TokenType::KW_LAST); nf = false; }
+            }
+            OrderByItem item;
+            item.expression = static_cast<UniquePtr<Expression>&&>(expr);
+            item.ascending = is_asc;
+            item.nulls_first = nf;
+            stmt->order_by.push_back(static_cast<OrderByItem&&>(item));
         } while (match(TokenType::COMMA));
     }
 
@@ -1123,6 +1144,28 @@ UniquePtr<Expression> Parser::parse_primary() {
             expr->else_expr = static_cast<UniquePtr<Expression>&&>(parse_expression());
         }
         expect_keyword(TokenType::KW_END);
+        return expr;
+    }
+
+    // CAST(expr AS type)
+    if (match_keyword(TokenType::KW_CAST)) {
+        expect(TokenType::LPAREN);
+        auto source = static_cast<UniquePtr<Expression>&&>(parse_expression());
+        expect_keyword(TokenType::KW_AS);
+        TypeId target = TypeId::kNull;
+        if (match_keyword(TokenType::KW_INT))         target = TypeId::kInt32;
+        else if (match_keyword(TokenType::KW_INT64))   target = TypeId::kInt64;
+        else if (match_keyword(TokenType::KW_FLOAT))   target = TypeId::kFloat;
+        else if (match_keyword(TokenType::KW_DOUBLE))  target = TypeId::kDouble;
+        else if (match_keyword(TokenType::KW_BOOL))    target = TypeId::kBool;
+        else if (match_keyword(TokenType::KW_VARCHAR))  { target = TypeId::kVarchar; if (match(TokenType::LPAREN)) { expect(TokenType::INT_LITERAL); expect(TokenType::RPAREN); } }
+        else if (match_keyword(TokenType::KW_TEXT))    target = TypeId::kVarchar;
+        else { set_error("expected type name after AS"); }
+        expect(TokenType::RPAREN);
+        auto expr = make_unique<Expression>();
+        expr->type = ExprType::kCast;
+        expr->child = static_cast<UniquePtr<Expression>&&>(source);
+        expr->cast_target = target;
         return expr;
     }
 

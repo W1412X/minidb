@@ -14,6 +14,8 @@
 #include "container/utility.h"
 #include "storage/page.h"
 #include "storage/buffer_pool.h"
+#include "storage/fsm.h"
+#include "storage/visibility_map.h"
 
 namespace minidb {
 
@@ -41,18 +43,86 @@ public:
     // Insert a tuple and return (page_id, slot_idx).
     Result<Pair<PageId, SlotIdx>> insert_tuple(const byte* data, u16 length, u64 lsn = 0);
 
-    // WAL-first: reserve an insert slot without modifying the page.
-    struct InsertPlan {
-        PageId page_id;
-        bool is_new_page;
-        SlotIdx predicted_slot;
-    };
-    Result<InsertPlan> prepare_insert(u16 length);
+    // WAL-first two-phase insert.
+    //
+    // InsertReservation is a move-only RAII guard.  prepare_insert()
+    // acquires the heap latch and returns a reservation.  The caller
+    // writes the WAL record, then calls commit() to materialise the
+    // tuple.  If the reservation is destroyed without commit(), the
+    // latch is automatically released — no dangling lock on error paths.
+    class InsertReservation {
+    public:
+        InsertReservation() : heap_(nullptr), committed_(false) {}
+        InsertReservation(HeapFile* heap, PageId page_id, bool is_new_page, SlotIdx predicted_slot)
+            : heap_(heap), page_id_(page_id), is_new_page_(is_new_page),
+              predicted_slot_(predicted_slot), committed_(false) {}
+        ~InsertReservation() { release(); }
 
-    // WAL-first: commit the insert (write data + stamp LSN) before unpin.
-    Result<Pair<PageId, SlotIdx>> commit_insert(PageId page_id, bool is_new_page,
-                                                 SlotIdx predicted_slot,
-                                                 const byte* data, u16 length, u64 lsn);
+        // Move-only.
+        InsertReservation(InsertReservation&& o) noexcept
+            : heap_(o.heap_), page_id_(o.page_id_), is_new_page_(o.is_new_page_),
+              predicted_slot_(o.predicted_slot_), committed_(o.committed_) { o.heap_ = nullptr; }
+        InsertReservation& operator=(InsertReservation&& o) noexcept {
+            if (this != &o) { release(); heap_ = o.heap_; page_id_ = o.page_id_;
+                is_new_page_ = o.is_new_page_; predicted_slot_ = o.predicted_slot_;
+                committed_ = o.committed_; o.heap_ = nullptr; }
+            return *this;
+        }
+        InsertReservation(const InsertReservation&) = delete;
+        InsertReservation& operator=(const InsertReservation&) = delete;
+
+        PageId page_id() const { return page_id_; }
+        bool is_new_page() const { return is_new_page_; }
+        SlotIdx predicted_slot() const { return predicted_slot_; }
+
+        // Materialise the tuple.  Returns the actual (page_id, slot).
+        // On success the reservation is consumed (latch released).
+        Result<Pair<PageId, SlotIdx>> commit(const byte* data, u16 length, u64 lsn);
+
+    private:
+        void release() { if (heap_ && !committed_) { heap_->latch_.unlock(); heap_ = nullptr; } }
+        HeapFile* heap_;
+        PageId page_id_{kNullPageId};
+        bool is_new_page_{false};
+        SlotIdx predicted_slot_{kNullSlot};
+        bool committed_{false};
+    };
+
+    Result<InsertReservation> prepare_insert(u16 length);
+
+    // HOT same-page insert reservation.
+    class InPageReservation {
+    public:
+        InPageReservation() : heap_(nullptr), committed_(false) {}
+        InPageReservation(HeapFile* heap, PageId page_id, SlotIdx predicted_slot)
+            : heap_(heap), page_id_(page_id), predicted_slot_(predicted_slot), committed_(false) {}
+        ~InPageReservation() { release(); }
+
+        InPageReservation(InPageReservation&& o) noexcept
+            : heap_(o.heap_), page_id_(o.page_id_),
+              predicted_slot_(o.predicted_slot_), committed_(o.committed_) { o.heap_ = nullptr; }
+        InPageReservation& operator=(InPageReservation&& o) noexcept {
+            if (this != &o) { release(); heap_ = o.heap_; page_id_ = o.page_id_;
+                predicted_slot_ = o.predicted_slot_; committed_ = o.committed_; o.heap_ = nullptr; }
+            return *this;
+        }
+        InPageReservation(const InPageReservation&) = delete;
+        InPageReservation& operator=(const InPageReservation&) = delete;
+
+        PageId page_id() const { return page_id_; }
+        SlotIdx predicted_slot() const { return predicted_slot_; }
+
+        Result<Pair<PageId, SlotIdx>> commit(const byte* data, u16 length, u64 lsn);
+
+    private:
+        void release() { if (heap_ && !committed_) { heap_->latch_.unlock(); heap_ = nullptr; } }
+        HeapFile* heap_;
+        PageId page_id_{kNullPageId};
+        SlotIdx predicted_slot_{kNullSlot};
+        bool committed_{false};
+    };
+
+    Result<InPageReservation> prepare_insert_in_page(PageId page_id, u16 length);
 
     // WAL-first: commit the old-page side of an UPDATE (set_next_version + mark_deleted + set_lsn, atomic).
     bool commit_old_tuple(PageId page_id, SlotIdx slot_idx,
@@ -66,12 +136,6 @@ public:
     Result<Pair<PageId, SlotIdx>> insert_tuple_in_page(PageId page_id,
                                                        const byte* data, u16 length, u64 lsn = 0);
 
-    // WAL-first HOT: reserve a same-page insert slot (no mutation).
-    Result<SlotIdx> prepare_insert_in_page(PageId page_id, u16 length);
-
-    // WAL-first HOT: commit a same-page insert (write data + stamp LSN).
-    Result<Pair<PageId, SlotIdx>> commit_insert_in_page(PageId page_id, SlotIdx slot_idx,
-                                                        const byte* data, u16 length, u64 lsn);
 
     // Rollback an INSERT (mark the slot UNUSED).
     bool rollback_insert(PageId page_id, SlotIdx slot_idx, u64 lsn = 0);
@@ -84,6 +148,11 @@ public:
 
     // MVCC: set xmin (on INSERT).
     bool set_xmin(PageId page_id, SlotIdx slot_idx, u64 xmin, u64 lsn = 0);
+
+    // Freeze a tuple: replace xmin with kFrozenTxnId so visibility checks
+    // short-circuit.  Should only be called on committed, visible tuples
+    // whose xmin is older than the freeze horizon.
+    bool freeze_tuple(PageId page_id, SlotIdx slot_idx, u64 lsn = 0);
 
     // MVCC: set the version-chain pointer.
     bool set_next_version(PageId page_id, SlotIdx slot_idx, PageId next_page, SlotIdx next_slot,
@@ -125,6 +194,21 @@ private:
     bool meta_dirty_;
     u32 meta_mutations_since_save_;
     mutable Mutex latch_;
+
+    // P3: Free Space Map — tracks per-page free space for INSERT placement.
+    FreeSpaceMap fsm_;
+
+    // P3: Visibility Map — tracks all-visible / all-frozen pages.
+    VisibilityMap vm_;
+
+public:
+    /// Access the Free Space Map for this heap.
+    FreeSpaceMap& fsm() { return fsm_; }
+    const FreeSpaceMap& fsm() const { return fsm_; }
+
+    /// Access the Visibility Map for this heap.
+    VisibilityMap& vm() { return vm_; }
+    const VisibilityMap& vm() const { return vm_; }
 };
 
 } // namespace minidb

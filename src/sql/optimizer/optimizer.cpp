@@ -236,6 +236,8 @@ static bool expr_can_eval_on(const Expression* expr, const Schema& schema) {
                     !expr_can_eval_on(expr->when_clauses[i].second.get(), schema)) return false;
             }
             return expr_can_eval_on(expr->else_expr.get(), schema);
+        case ExprType::kCast:
+            return expr_can_eval_on(expr->child.get(), schema);
         case ExprType::kSubquery:
             return false;
     }

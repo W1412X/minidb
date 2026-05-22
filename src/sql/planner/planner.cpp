@@ -110,6 +110,10 @@ static bool exprs_equivalent(const Expression* a, const Expression* b) {
         }
         return exprs_equivalent(a->else_expr.get(), b->else_expr.get());
     }
+    if (a->type == ExprType::kCast) {
+        return a->cast_target == b->cast_target &&
+               exprs_equivalent(a->child.get(), b->child.get());
+    }
     return false;
 }
 
@@ -215,8 +219,9 @@ UniquePtr<PlanNode> Planner::plan_select(const SelectStmt& stmt) {
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = union_schema;
@@ -464,8 +469,9 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = merged_schema;
@@ -555,8 +561,9 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].first->clone());
-            sk.ascending = stmt.order_by[i].second;
+            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.ascending = stmt.order_by[i].ascending;
+            sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
         }
         sort->output_schema = merged_schema;

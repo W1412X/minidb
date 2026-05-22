@@ -18,7 +18,7 @@ namespace minidb {
 // ============================================================
 
 enum class ExprType {
-    kLiteral, kColumnRef, kBinaryOp, kUnaryOp, kStar, kSubquery, kCase,
+    kLiteral, kColumnRef, kBinaryOp, kUnaryOp, kStar, kSubquery, kCase, kCast,
 };
 
 struct Expression {
@@ -49,7 +49,10 @@ struct Expression {
     Vector<Pair<UniquePtr<Expression>, UniquePtr<Expression>>> when_clauses;
     UniquePtr<Expression> else_expr;
 
-    Expression() : type(ExprType::kLiteral) {}
+    // CAST(expr AS type)  — child holds the source expression
+    TypeId cast_target;   // target type for kCast
+
+    Expression() : type(ExprType::kLiteral), cast_target(TypeId::kNull) {}
     Expression* clone() const;
 };
 
@@ -94,11 +97,19 @@ enum class StmtType {
     kAlterTable,
     kPrepare, kExecute, kDeallocate,
     kAnalyze,
+    kVacuum,
 };
 
 // ============================================================
 // SELECT
 // ============================================================
+
+struct OrderByItem {
+    UniquePtr<Expression> expression;
+    bool ascending;
+    bool nulls_first;   // PostgreSQL default: NULLS FIRST for DESC, NULLS LAST for ASC
+    OrderByItem() : ascending(true), nulls_first(true) {}
+};
 
 struct SelectStmt {
     Vector<UniquePtr<Expression>> select_list;
@@ -107,7 +118,7 @@ struct SelectStmt {
     UniquePtr<Expression> where_clause;
     Vector<UniquePtr<Expression>> group_by;
     UniquePtr<Expression> having;
-    Vector<Pair<UniquePtr<Expression>, bool>> order_by;  // (expr, is_asc)
+    Vector<OrderByItem> order_by;
     i32 limit;
     i32 offset;
     bool distinct;
@@ -137,8 +148,11 @@ struct SelectStmt {
         }
         if (having) s->having = UniquePtr<Expression>(having->clone());
         for (u32 i = 0; i < order_by.size(); i++) {
-            s->order_by.push_back(Pair<UniquePtr<Expression>, bool>(
-                UniquePtr<Expression>(order_by[i].first->clone()), order_by[i].second));
+            OrderByItem item;
+            item.expression = UniquePtr<Expression>(order_by[i].expression->clone());
+            item.ascending = order_by[i].ascending;
+            item.nulls_first = order_by[i].nulls_first;
+            s->order_by.push_back(static_cast<OrderByItem&&>(item));
         }
         s->limit = limit;
         s->offset = offset;
@@ -277,6 +291,7 @@ struct Statement {
     String drop_table_name;
     String drop_index_name;
     String analyze_table_name;
+    String vacuum_table_name;
     UniquePtr<Statement> explain_stmt;
     bool explain_analyze;
     double join_hint;  // >0 favors hash join, <0 favors nested loop, 0 = no hint
@@ -303,6 +318,7 @@ inline Expression* Expression::clone() const {
         c->when_clauses.push_back(static_cast<Pair<UniquePtr<Expression>, UniquePtr<Expression>>&&>(clause));
     }
     if (else_expr) c->else_expr = UniquePtr<Expression>(else_expr->clone());
+    c->cast_target = cast_target;
     return c;
 }
 

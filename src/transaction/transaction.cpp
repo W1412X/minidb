@@ -385,12 +385,18 @@ static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn
 }
 
 bool TransactionManager::rollback(Transaction* txn) {
-    LockGuard guard(latch_);
     if (!txn || txn != g_current_txn) return false;
 
-    TxnSlot* slot = find_slot(txn->id());
-    if (slot) {
-        slot->state = TxnState::kAborted;
+    // Phase 1 (under latch): flip slot to kAborted so concurrent readers
+    // immediately see this txn as aborted. Keep the latch narrow — never
+    // hold it while doing heap/index/catalog I/O (avoids deadlock with
+    // checkpoint, background threads, and other txn lifecycle calls).
+    {
+        LockGuard guard(latch_);
+        TxnSlot* slot = find_slot(txn->id());
+        if (slot) {
+            slot->state = TxnState::kAborted;
+        }
     }
 
     u64 abort_lsn = db_->wal().log_abort(txn->id());
@@ -398,6 +404,9 @@ bool TransactionManager::rollback(Transaction* txn) {
     // Free all locks held by the transaction
     db_->lock_manager().unlock_all(txn->id());
 
+    // Phase 2 (latch released): apply undo records. These do heap I/O,
+    // index mutations, and catalog persistence — all operations that may
+    // acquire other latches (page latch, WAL latch, catalog file I/O).
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (i32 i = static_cast<i32>(undo_records.size()) - 1; i >= 0; i--) {
         const UndoRecord& rec = undo_records[static_cast<u32>(i)];
@@ -424,7 +433,6 @@ bool TransactionManager::rollback(Transaction* txn) {
 }
 
 bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
-    LockGuard guard(latch_);
     if (!txn || txn != g_current_txn) return false;
     const Vector<UndoRecord>& undo = txn->undo_records();
     if (mark >= undo.size()) return true;     // nothing to undo
@@ -432,7 +440,8 @@ bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
     // Apply in reverse, just like full rollback. No log_abort and no lock
     // release — the transaction stays ACTIVE. abort_lsn=0 keeps the heap
     // pages' LSNs unchanged (they have not crossed any commit boundary
-    // yet).
+    // yet). No latch needed: g_current_txn is thread-local and the txn is
+    // kActive, so only this thread manipulates its undo log.
     for (i32 i = static_cast<i32>(undo.size()) - 1; i >= static_cast<i32>(mark); i--) {
         const UndoRecord& rec = undo[static_cast<u32>(i)];
         const DdlUndoInfo* ddl_info = nullptr;
@@ -480,6 +489,11 @@ void TransactionManager::record_hot_delete(u32 table_id, const RecordId& rid) {
 
 bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) const {
     if (xmin == kInvalidTxnId) return false;
+
+    // Fast path: frozen tuples are always visible (xmax must be invalid).
+    if (xmin == kFrozenTxnId) {
+        return xmax == kInvalidTxnId;
+    }
 
     auto was_active_in_snapshot = [&](u64 txn_id) -> bool {
         const Vector<u64>& snapshot = txn.active_snapshot();
@@ -545,8 +559,19 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
     if (xmax_found) {
         if (xmax_state == TxnState::kActive) return true;   // delete not committed
         if (xmax_state == TxnState::kAborted) return true;  // delete rolled back -> treat as not deleted
+    } else if (status_log_) {
+        // Slot recycled: ask the persistent CLOG (A1). A recorded ABORTED
+        // means the delete was rolled back — row is still live. If NOT
+        // found or COMMITTED, the deleter finished long ago and we must
+        // continue to the snapshot checks below. Without this, a recycled
+        // xmax slot defaulted to "not deleted", surfacing already-deleted
+        // rows when the deleter's slot was reused.
+        TxnFinalState xs;
+        if (status_log_->status(xmax, &xs) && xs == TxnFinalState::kAborted) {
+            return true;   // delete rolled back
+        }
+        // COMMITTED or not-found: fall through to snapshot checks.
     }
-    // xmax not found → slot recycled, treat as not deleted
 
     if (was_active_in_snapshot(xmax)) return true;
 

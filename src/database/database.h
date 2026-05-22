@@ -72,6 +72,7 @@ public:
     LockManager& lock_manager() { return lock_mgr_; }
     SharedMemory* shared_memory() { return shm_.get(); }
     void maybe_gc();
+    void vacuum();
     void collect_statistics(u32 table_id);  // W18: Collect column-level statistics
     void collect_all_statistics();           // W18: Collect statistics for all tables
     bool check_table_index_consistency(String* error = nullptr);

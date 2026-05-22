@@ -45,7 +45,8 @@ class IndexOnlyScanExecutor : public Executor {
 public:
     IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index, const IndexKey& search_key,
                           bool is_range, const IndexKey& range_high,
-                          const Schema& output_schema, TransactionManager* txn_mgr = nullptr);
+                          const Schema& output_schema, TransactionManager* txn_mgr = nullptr,
+                          HeapFile* heap = nullptr);
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
@@ -63,6 +64,7 @@ private:
     RecordId last_index_rid_;
     bool has_last_index_rid_;
     TransactionManager* txn_mgr_;
+    HeapFile* heap_;  // VM-based optimization: skip heap fetch for all-visible pages
 };
 
 } // namespace minidb

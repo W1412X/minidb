@@ -128,6 +128,14 @@ int SortExecutor::compare_tuples(const Tuple& a, const Tuple& b) const {
     for (u32 i = 0; i < keys_.size(); i++) {
         Value va = ExpressionEvaluator::evaluate(*keys_[i].expression, a);
         Value vb = ExpressionEvaluator::evaluate(*keys_[i].expression, b);
+        bool a_null = va.is_null();
+        bool b_null = vb.is_null();
+        if (a_null || b_null) {
+            if (a_null && b_null) continue;
+            // One is NULL, the other is not.
+            bool nf = keys_[i].nulls_first;
+            return a_null ? (nf ? -1 : 1) : (nf ? 1 : -1);
+        }
         int cmp = va.compare(vb);
         if (cmp != 0) {
             return keys_[i].ascending ? cmp : -cmp;

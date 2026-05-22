@@ -156,6 +156,8 @@ bool HashJoinExecutor::can_evaluate_on(Expression* expr, const Schema& schema) c
                 }
             }
             return can_evaluate_on(expr->else_expr.get(), schema);
+        case ExprType::kCast:
+            return can_evaluate_on(expr->child.get(), schema);
         case ExprType::kSubquery:
             return false;
     }

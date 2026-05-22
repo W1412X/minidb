@@ -390,6 +390,19 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
     {
         PageServerShard& shard = shard_for(page_id);
         LockGuard guard(shard.latch);
+        // Idempotence: skip if this exact (page_id, lsn) already exists.
+        // This prevents duplicate writes from network retries while still
+        // allowing legitimate out-of-order writes for time-travel reads.
+        const Vector<PageLogIndexEntry>* log = shard.log_index.find(page_id);
+        if (log && lsn != 0) {
+            for (u32 j = 0; j < log->size(); j++) {
+                if ((*log)[j].lsn == lsn) {
+                    // Exact duplicate — already recorded.
+                    write_ops_.fetch_add(1, std::memory_order_relaxed);
+                    return true;
+                }
+            }
+        }
         remember_version_locked(shard, page_id, page_data, lsn, wal_offset);
     }
     primary_.write_page(page_id, page_data);

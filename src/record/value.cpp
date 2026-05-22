@@ -5,6 +5,8 @@
 #include "record/value.h"
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
+#include <climits>
 #include <limits>
 
 namespace minidb {
@@ -346,6 +348,111 @@ u32 Value::serialized_size() const {
         case TypeId::kVarchar: return 1 + 4 + string_val_.size();
         case TypeId::kNull:    return 1;
         default: return 1;
+    }
+}
+
+// ============================================================
+// Type cast — returns NULL on failure.
+// ============================================================
+
+Value Value::cast_to(TypeId target) const {
+    if (type_id_ == TypeId::kNull) return Value();
+    if (type_id_ == target) return *this;
+
+    // ── Fast path: numeric-to-numeric without string round-trip ──
+    switch (target) {
+        case TypeId::kInt32: {
+            switch (type_id_) {
+                case TypeId::kInt64:  return Value(static_cast<i32>(int64_val_));
+                case TypeId::kFloat:  return Value(static_cast<i32>(float_val_));
+                case TypeId::kDouble: return Value(static_cast<i32>(double_val_));
+                case TypeId::kBool:   return Value(static_cast<i32>(bool_val_ ? 1 : 0));
+                default: break;
+            }
+            break;
+        }
+        case TypeId::kInt64: {
+            switch (type_id_) {
+                case TypeId::kInt32:  return Value(static_cast<i64>(int32_val_));
+                case TypeId::kFloat:  return Value(static_cast<i64>(float_val_));
+                case TypeId::kDouble: return Value(static_cast<i64>(double_val_));
+                case TypeId::kBool:   return Value(static_cast<i64>(bool_val_ ? 1 : 0));
+                default: break;
+            }
+            break;
+        }
+        case TypeId::kFloat: {
+            switch (type_id_) {
+                case TypeId::kInt32:  return Value(static_cast<float>(int32_val_));
+                case TypeId::kInt64:  return Value(static_cast<float>(int64_val_));
+                case TypeId::kDouble: return Value(static_cast<float>(double_val_));
+                case TypeId::kBool:   return Value(static_cast<float>(bool_val_ ? 1.0f : 0.0f));
+                default: break;
+            }
+            break;
+        }
+        case TypeId::kDouble: {
+            switch (type_id_) {
+                case TypeId::kInt32:  return Value(static_cast<double>(int32_val_));
+                case TypeId::kInt64:  return Value(static_cast<double>(int64_val_));
+                case TypeId::kFloat:  return Value(static_cast<double>(float_val_));
+                case TypeId::kBool:   return Value(static_cast<double>(bool_val_ ? 1.0 : 0.0));
+                default: break;
+            }
+            break;
+        }
+        case TypeId::kBool: {
+            switch (type_id_) {
+                case TypeId::kInt32:  return Value(int32_val_ != 0);
+                case TypeId::kInt64:  return Value(int64_val_ != 0);
+                case TypeId::kFloat:  return Value(float_val_ != 0.0f);
+                case TypeId::kDouble: return Value(double_val_ != 0.0);
+                default: break;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    // ── Slow path: via string representation (varchar source or target) ──
+    String s = to_string();
+
+    switch (target) {
+        case TypeId::kInt32: {
+            char* end = nullptr;
+            long v = strtol(s.c_str(), &end, 10);
+            if (end == s.c_str() || *end != '\0') return Value();
+            if (v < INT32_MIN || v > INT32_MAX) return Value();
+            return Value(static_cast<i32>(v));
+        }
+        case TypeId::kInt64: {
+            char* end = nullptr;
+            long long v = strtoll(s.c_str(), &end, 10);
+            if (end == s.c_str() || *end != '\0') return Value();
+            return Value(static_cast<i64>(v));
+        }
+        case TypeId::kFloat: {
+            char* end = nullptr;
+            float v = strtof(s.c_str(), &end);
+            if (end == s.c_str()) return Value();
+            return Value(v);
+        }
+        case TypeId::kDouble: {
+            char* end = nullptr;
+            double v = strtod(s.c_str(), &end);
+            if (end == s.c_str()) return Value();
+            return Value(v);
+        }
+        case TypeId::kBool: {
+            if (s == "true" || s == "1" || s == "t" || s == "TRUE") return Value(true);
+            if (s == "false" || s == "0" || s == "f" || s == "FALSE") return Value(false);
+            return Value();
+        }
+        case TypeId::kVarchar:
+            return Value(s);
+        default:
+            return Value();
     }
 }
 

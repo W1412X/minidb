@@ -75,6 +75,9 @@ public:
     static Value deserialize(const byte* buf, TypeId type);
     u32 serialized_size() const;
 
+    // Type cast — returns NULL on failure instead of crashing.
+    Value cast_to(TypeId target) const;
+
     // Convert to string.
     String to_string() const;
 

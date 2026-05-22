@@ -323,24 +323,24 @@ ExecResult InsertExecutor::next() {
         byte* buf = tuple.serialize_to_page(buffer);
         u16 size = static_cast<u16>(buf - buffer);
 
-        // WAL-first: 1. Reserve position → 2. Write WAL → 3. Commit data
+        // WAL-first: 1. Reserve position (RAII) → 2. Write WAL → 3. Commit data
         auto prepare = heap_->prepare_insert(size);
         if (!prepare.ok()) continue;
 
-        HeapFile::InsertPlan plan = prepare.value();
-        RecordId predicted_rid(plan.page_id, plan.predicted_slot);
+        auto reservation = std::move(prepare.value());
+        RecordId predicted_rid(reservation.page_id(), reservation.predicted_slot());
         if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, predicted_rid,
                                                      LockMode::kRowExclusive).ok()) {
-            continue;
+            continue;  // reservation destructor releases the heap latch
         }
         if (!explicit_txn) autocommit_record_locks.push_back(predicted_rid);
         u64 lsn = 0;
         if (wal_) {
-            lsn = wal_->log_insert(txn_id, table_id_, plan.page_id, plan.predicted_slot, buffer, size);
+            lsn = wal_->log_insert(txn_id, table_id_, reservation.page_id(),
+                                    reservation.predicted_slot(), buffer, size);
         }
 
-        auto result = heap_->commit_insert(plan.page_id, plan.is_new_page,
-                                            plan.predicted_slot, buffer, size, lsn);
+        auto result = reservation.commit(buffer, size, lsn);
         if (result.ok()) {
             Pair<PageId, SlotIdx> rid = result.value();
             RecordId record_id(rid.first, rid.second);

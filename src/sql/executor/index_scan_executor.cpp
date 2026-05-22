@@ -198,11 +198,12 @@ IndexOnlyScanExecutor::IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index,
                                              const IndexKey& search_key,
                                              bool is_range, const IndexKey& range_high,
                                              const Schema& output_schema,
-                                             TransactionManager* txn_mgr)
+                                             TransactionManager* txn_mgr,
+                                             HeapFile* heap)
     : pool_(pool), index_(index), search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
-      has_last_index_rid_(false), txn_mgr_(txn_mgr) {}
+      has_last_index_rid_(false), txn_mgr_(txn_mgr), heap_(heap) {}
 
 void IndexOnlyScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -224,22 +225,30 @@ ExecResult IndexOnlyScanExecutor::next() {
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
         if (pool_) {
-            auto page_result = pool_->fetch_page(rid.page_id, true);
-            if (!page_result.ok()) continue;
-            Page* page = page_result.value();
-            SlotIdx visible_slot = rid.slot_idx;
-            const LinePointer* lp = page->line_pointer(visible_slot);
-            if (lp && lp->is_redirect()) {
-                SlotIdx target = page->redirect_target(visible_slot);
-                if (target != kNullSlot) visible_slot = target;
-                lp = page->line_pointer(visible_slot);
+            // VM optimisation: if the Visibility Map marks this page as
+            // all-visible, every live tuple on it is visible to every active
+            // snapshot — skip the heap page fetch entirely.
+            bool vm_visible = heap_ && heap_->vm().is_visible(rid.page_id);
+            if (!vm_visible) {
+                // Page not known to be all-visible — fall back to the
+                // per-tuple header check on the heap page.
+                auto page_result = pool_->fetch_page(rid.page_id, true);
+                if (!page_result.ok()) continue;
+                Page* page = page_result.value();
+                SlotIdx visible_slot = rid.slot_idx;
+                const LinePointer* lp = page->line_pointer(visible_slot);
+                if (lp && lp->is_redirect()) {
+                    SlotIdx target = page->redirect_target(visible_slot);
+                    if (target != kNullSlot) visible_slot = target;
+                    lp = page->line_pointer(visible_slot);
+                }
+                bool visible = false;
+                if (lp && lp->is_valid()) {
+                    visible = visible_header(pool_, txn_mgr_, page, visible_slot);
+                }
+                pool_->unpin_page(rid.page_id);
+                if (!visible) continue;
             }
-            bool visible = false;
-            if (lp && lp->is_valid()) {
-                visible = visible_header(pool_, txn_mgr_, page, visible_slot);
-            }
-            pool_->unpin_page(rid.page_id);
-            if (!visible) continue;
         }
         Vector<Value> values;
         values.push_back(key.first_value());

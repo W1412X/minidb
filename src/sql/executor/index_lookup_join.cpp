@@ -72,6 +72,8 @@ bool IndexLookupJoinExecutor::can_evaluate_on(Expression* expr, const Schema& sc
                    can_evaluate_on(expr->right.get(), schema);
         case ExprType::kUnaryOp:
             return can_evaluate_on(expr->child.get(), schema);
+        case ExprType::kCast:
+            return can_evaluate_on(expr->child.get(), schema);
         case ExprType::kCase:
         case ExprType::kSubquery:
             return false;
