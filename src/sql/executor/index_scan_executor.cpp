@@ -5,7 +5,7 @@
 namespace minidb {
 
 IndexScanExecutor::IndexScanExecutor(
-    BufferPool* pool, HeapFile*, BPlusTree* index,
+    BufferPool* pool, HeapFile* heap, BPlusTree* index,
     const IndexKey& search_key, bool is_range,
     const IndexKey& range_high, const Schema& output_schema,
     TransactionManager* txn_mgr)
@@ -13,7 +13,8 @@ IndexScanExecutor::IndexScanExecutor(
       search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
-      has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_() {}
+      has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_(),
+      table_id_(heap ? heap->table_id() : 0) {}
 
 void IndexScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -173,6 +174,9 @@ ExecResult IndexScanExecutor::next() {
 
             if (vr.tuple.column_count() > 0) {
                 last_rid_ = vr.rid;  // Use visible version's RecordId, not the index's
+                if (txn_mgr_ && txn_mgr_->current()) {
+                    txn_mgr_->current()->record_read(table_id_, last_rid_);
+                }
                 return ExecResult::ok(static_cast<Tuple&&>(vr.tuple));
             }
         } else {

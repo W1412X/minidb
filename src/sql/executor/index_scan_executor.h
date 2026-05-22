@@ -38,6 +38,7 @@ private:
     bool has_last_index_rid_;
     TransactionManager* txn_mgr_;
     RecordId last_rid_;
+    u32 table_id_;
 };
 
 class IndexOnlyScanExecutor : public Executor {

@@ -71,6 +71,36 @@ static bool parse_statement_timeout(const String& sql, u64* out_ms) {
     return true;
 }
 
+// Parse `SET ISOLATION_LEVEL = SNAPSHOT|SERIALIZABLE`. Returns true with
+// *out filled when the SQL is the isolation-level SET command; otherwise
+// false (and the caller routes the SQL to the regular parser).
+static bool parse_isolation_level(const String& sql, IsolationLevel* out) {
+    String t = trim_sql(sql);
+    String u = upper_sql(t);
+    const char* prefix = "SET ISOLATION_LEVEL";
+    u32 n = static_cast<u32>(std::strlen(prefix));
+    if (u.size() < n || std::strncmp(u.c_str(), prefix, n) != 0) return false;
+    const char* p = u.c_str() + n;
+    while (*p == ' ' || *p == '\t' || *p == '=') p++;
+    // Trim a trailing semicolon / whitespace.
+    String value(p);
+    while (!value.empty() && (value[value.size() - 1] == ';' ||
+                              value[value.size() - 1] == ' ' ||
+                              value[value.size() - 1] == '\t' ||
+                              value[value.size() - 1] == '\n')) {
+        value = value.substr(0, value.size() - 1);
+    }
+    if (value == "SERIALIZABLE") {
+        if (out) *out = IsolationLevel::kSerializable;
+        return true;
+    }
+    if (value == "SNAPSHOT") {
+        if (out) *out = IsolationLevel::kSnapshot;
+        return true;
+    }
+    return false;
+}
+
 static bool parse_prepare(const String& sql, String* name, String* body) {
     String t = trim_sql(sql);
     String u = upper_sql(t);
@@ -391,6 +421,11 @@ String Server::execute_sql(const String& sql) {
     u64 timeout_ms = 0;
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_statement_timeout_ms = timeout_ms;
+        return String("SET\n");
+    }
+    IsolationLevel iso_level;
+    if (parse_isolation_level(sql, &iso_level)) {
+        db_.txn_manager().set_default_isolation(iso_level);
         return String("SET\n");
     }
     String prepared_name;
@@ -775,6 +810,12 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
     auto send_str = [fd](const String& s) { send(fd, s.c_str(), s.size(), 0); };
     if (parse_statement_timeout(sql, &timeout_ms)) {
         g_statement_timeout_ms = timeout_ms;
+        send_str("SET\n");
+        return 0;
+    }
+    IsolationLevel iso_level;
+    if (parse_isolation_level(sql, &iso_level)) {
+        db_.txn_manager().set_default_isolation(iso_level);
         send_str("SET\n");
         return 0;
     }

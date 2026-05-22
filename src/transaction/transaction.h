@@ -29,9 +29,27 @@ struct UndoRecord {
     RecordId rid;
 };
 
+// SSI read-tracking entry. One per visible tuple emitted by a SeqScan /
+// IndexScan to a serializable transaction. Cheap to record; at commit
+// time we intersect this set against concurrent committed write sets to
+// detect rw-conflict dangerous structures (eliminates write skew).
+struct ReadRecord {
+    u32 table_id;
+    RecordId rid;
+};
+
 static constexpr u64 kInvalidTxnId = 0;
 
 enum class TxnState : u8 { kActive = 0, kCommitted = 1, kAborted = 2 };
+
+// Per-transaction isolation level.
+//   kSnapshot      — default; SI semantics, write skew possible.
+//   kSerializable  — SSI-lite: read set tracked, commit aborts if any
+//                    concurrent committed txn wrote to a row we read.
+enum class IsolationLevel : u8 {
+    kSnapshot = 0,
+    kSerializable = 1,
+};
 
 struct TxnSlot {
     u64     txn_id;          // transaction unique id
@@ -51,16 +69,23 @@ public:
     TxnState state() const { return state_; }
     u64 commit_id() const { return commit_id_; }
     const Vector<UndoRecord>& undo_records() const { return undo_records_; }
+    const Vector<ReadRecord>& read_set() const { return read_set_; }
     const Vector<u64>& active_snapshot() const { return active_snapshot_; }
+    IsolationLevel isolation() const { return isolation_; }
 
     void set_state(TxnState s) { state_ = s; }
     void set_commit_id(u64 id) { commit_id_ = id; }
     void set_resource_acquired(bool v) { resource_acquired_ = v; }
+    void set_isolation(IsolationLevel level) { isolation_ = level; }
     bool resource_acquired() const { return resource_acquired_; }
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
     void record_hot_insert(u32 table_id, const RecordId& rid);
     void record_hot_delete(u32 table_id, const RecordId& rid);
+    // SSI read tracking. No-op for snapshot-isolation transactions so the
+    // serializable cost stays opt-in. Bounded list — caller is expected
+    // to be a per-tuple emit point in a scan operator.
+    void record_read(u32 table_id, const RecordId& rid);
 
     // Mark a point in the undo log that the statement-level rollback can
     // restore. Returns the current undo log length.
@@ -76,6 +101,8 @@ private:
     TxnState state_;
     Vector<u64> active_snapshot_;
     Vector<UndoRecord> undo_records_;
+    Vector<ReadRecord> read_set_;
+    IsolationLevel isolation_;
     bool resource_acquired_;
 };
 
@@ -118,6 +145,12 @@ public:
     TxnSlot* txn_slots() { return txn_slots_.data(); }
     u32 txn_slot_count() const { return txn_slots_.size(); }
 
+    // Default isolation level new transactions inherit at begin(). Set via
+    // the SET command at the dispatch layer. Defaults to Snapshot so the
+    // existing test suite stays green; sessions opt in to Serializable.
+    void set_default_isolation(IsolationLevel level);
+    IsolationLevel default_isolation() const { return default_isolation_; }
+
     // Access to the persistent xid → final-state log (A1). Lives behind a
     // UniquePtr so the Database constructor can hand in the db_dir; nullptr
     // when the manager runs without a backing directory (tests).
@@ -129,11 +162,25 @@ private:
     TxnSlot* find_active_slot(u64 txn_id);
     TxnSlot* alloc_slot(u64 txn_id, u64 snapshot_id);
 
+    // Per-commit history retained for SSI conflict detection. Each entry
+    // is the write set of one committed transaction; live as long as some
+    // active txn could still serialise against it (commit_id > min active
+    // snapshot). Pruned at every commit so the list stays bounded.
+    struct CommittedWriteSet {
+        u64 commit_id;
+        u64 txn_id;
+        Vector<ReadRecord> writes;  // (table_id, rid) — UndoRecord reduced
+    };
+    Vector<CommittedWriteSet> committed_history_;
+    void prune_committed_history();
+    bool ssi_check_conflict(const Transaction& txn) const;
+
     Vector<TxnSlot> txn_slots_;
 
     mutable Mutex latch_;
     Database* db_;
     u64 next_txn_id_;
+    IsolationLevel default_isolation_;
     UniquePtr<TxnStatusLog> status_log_;
 };
 

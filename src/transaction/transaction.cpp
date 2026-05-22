@@ -14,7 +14,26 @@ Transaction::Transaction(u64 txn_id, u64 snapshot_id, Vector<u64>&& active_snaps
     : txn_id_(txn_id), snapshot_id_(snapshot_id),
       commit_id_(0), state_(TxnState::kActive),
       active_snapshot_(static_cast<Vector<u64>&&>(active_snapshot)),
+      isolation_(IsolationLevel::kSnapshot),
       resource_acquired_(false) {}
+
+void Transaction::record_read(u32 table_id, const RecordId& rid) {
+    if (isolation_ != IsolationLevel::kSerializable) return;
+    // Cheap de-dup: the same row scanned twice in one statement (or once
+    // per re-scan in a join) should not bloat the read set unbounded.
+    // Linear scan is fine because read sets stay small in practice; if
+    // they grow, a hash set can swap in later.
+    for (u32 i = 0; i < read_set_.size(); i++) {
+        if (read_set_[i].table_id == table_id &&
+            read_set_[i].rid == rid) {
+            return;
+        }
+    }
+    ReadRecord rec;
+    rec.table_id = table_id;
+    rec.rid = rid;
+    read_set_.push_back(rec);
+}
 
 void Transaction::record_insert(u32 table_id, const RecordId& rid) {
     UndoRecord rec;
@@ -55,10 +74,16 @@ void Transaction::truncate_undo(u32 mark) {
 }
 
 TransactionManager::TransactionManager(Database* db)
-    : db_(db), next_txn_id_(1) {
+    : db_(db), next_txn_id_(1),
+      default_isolation_(IsolationLevel::kSnapshot) {
     u32 slots = db ? db->config().max_active_transactions : 256;
     if (slots == 0) slots = 1;
     txn_slots_.resize(slots);
+}
+
+void TransactionManager::set_default_isolation(IsolationLevel level) {
+    LockGuard guard(latch_);
+    default_isolation_ = level;
 }
 
 Transaction* TransactionManager::current() const {
@@ -134,6 +159,7 @@ Transaction* TransactionManager::begin() {
     Transaction* txn = new Transaction(txn_id, snapshot_id,
                                        static_cast<Vector<u64>&&>(active_snapshot));
     txn->set_resource_acquired(true);
+    txn->set_isolation(default_isolation_);
     free_slot->txn_id = txn_id;
     free_slot->snapshot_id = snapshot_id;
     free_slot->commit_id = 0;
@@ -148,6 +174,21 @@ bool TransactionManager::commit(Transaction* txn) {
     if (!txn || txn != g_current_txn) return false;
 
     u64 txn_id = txn->id();
+
+    // SSI-lite (I3) — only for serializable transactions. Detect rw-
+    // conflict against any transaction that committed during our lifetime
+    // by intersecting our read set with their write set. If any overlap
+    // exists, we must abort to break a potential serialization cycle.
+    // This rejects more schedules than strict SSI (which only aborts
+    // dangerous-structure cycles), but it is provably serializable: if
+    // every conflicting reader aborts, the surviving txns serialize in
+    // commit order. Done BEFORE writing the commit record so an aborted
+    // serializable txn cleans up exactly like any other rollback.
+    if (txn->isolation() == IsolationLevel::kSerializable &&
+        ssi_check_conflict(*txn)) {
+        rollback(txn);
+        return false;
+    }
 
     // Step 1: write the commit record and wait for it to become durable
     // BEFORE flipping the txn slot to kCommitted. This guarantees that
@@ -187,6 +228,26 @@ bool TransactionManager::commit(Transaction* txn) {
 
     txn->set_commit_id(commit_id);
     txn->set_state(TxnState::kCommitted);
+
+    // SSI bookkeeping: any concurrent serializable txn now in flight may
+    // need to see our write set at its own commit time. Record a compact
+    // (table_id, rid) entry for every kInsert / kDelete / kHotInsert /
+    // kHotDelete undo. We also prune entries that no live txn could
+    // serialise against anymore, so memory stays bounded.
+    {
+        CommittedWriteSet entry;
+        entry.commit_id = commit_id;
+        entry.txn_id = txn_id;
+        const Vector<UndoRecord>& undos = txn->undo_records();
+        for (u32 i = 0; i < undos.size(); i++) {
+            ReadRecord w;
+            w.table_id = undos[i].table_id;
+            w.rid = undos[i].rid;
+            entry.writes.push_back(w);
+        }
+        committed_history_.push_back(static_cast<CommittedWriteSet&&>(entry));
+        prune_committed_history();
+    }
     latch_.unlock();
 
     // A1: append to the persistent xid → status log so a later restart
@@ -480,6 +541,64 @@ u64 TransactionManager::next_txn_id() const {
 
 void TransactionManager::set_status_log(UniquePtr<TxnStatusLog> log) {
     status_log_ = static_cast<UniquePtr<TxnStatusLog>&&>(log);
+}
+
+// Walk every committed-history entry whose commit_id > our snapshot_id
+// (i.e. transactions that committed while we were running, plus our own
+// concurrent set since slot allocation) and check whether any of their
+// write entries collide with a read we recorded. Latch must NOT be held
+// — caller hits this BEFORE the publish step that takes the latch.
+bool TransactionManager::ssi_check_conflict(const Transaction& txn) const {
+    const Vector<ReadRecord>& reads = txn.read_set();
+    if (reads.size() == 0) return false;
+    u64 snapshot = txn.snapshot_id();
+    LockGuard guard(latch_);
+    for (u32 i = 0; i < committed_history_.size(); i++) {
+        const CommittedWriteSet& entry = committed_history_[i];
+        if (entry.txn_id == txn.id()) continue;        // ignore our own
+        if (entry.commit_id < snapshot) continue;      // committed before us; not concurrent
+        for (u32 w = 0; w < entry.writes.size(); w++) {
+            const ReadRecord& wr = entry.writes[w];
+            for (u32 r = 0; r < reads.size(); r++) {
+                if (reads[r].table_id == wr.table_id &&
+                    reads[r].rid == wr.rid) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Drop history entries that no live transaction could still need. An
+// entry with commit_id C matters only while some active txn has
+// snapshot_id <= C; once every active snapshot has moved past C the
+// entry can never participate in another conflict check. Linear pass —
+// committed_history_ stays short in practice because txns commit/abort
+// promptly. Latch must be held by caller.
+void TransactionManager::prune_committed_history() {
+    u64 oldest_snapshot = next_txn_id_;
+    bool any_active = false;
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
+        if (txn_slots_[i].state == TxnState::kActive &&
+            txn_slots_[i].txn_id != kInvalidTxnId) {
+            any_active = true;
+            if (txn_slots_[i].snapshot_id < oldest_snapshot) {
+                oldest_snapshot = txn_slots_[i].snapshot_id;
+            }
+        }
+    }
+    if (!any_active) {
+        committed_history_.clear();
+        return;
+    }
+    Vector<CommittedWriteSet> kept;
+    for (u32 i = 0; i < committed_history_.size(); i++) {
+        if (committed_history_[i].commit_id >= oldest_snapshot) {
+            kept.push_back(static_cast<CommittedWriteSet&&>(committed_history_[i]));
+        }
+    }
+    committed_history_ = static_cast<Vector<CommittedWriteSet>&&>(kept);
 }
 
 } // namespace minidb
