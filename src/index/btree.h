@@ -156,6 +156,16 @@ private:
     BufferPool* pool_;
     u32 next_page_num_;
     mutable RwLock tree_latch_;  // W8: Per-tree latch for concurrent safety
+
+    // Monotonic-insert fast path. Bulk loads (especially serial primary keys)
+    // hammer the rightmost leaf — every full root-to-leaf descent is wasted.
+    // We cache the most recent leaf id we successfully inserted into; if the
+    // next key is >= that leaf's first key, we try it before paying the full
+    // descent. The cache is invalidated on any split that retargets the
+    // rightmost edge.
+    PageId hot_leaf_id_ = kNullPageId;
+    IndexKey hot_leaf_first_key_;       // smallest key on hot_leaf_id_
+    PageId hot_leaf_parent_id_ = kNullPageId;
 };
 
 } // namespace minidb

@@ -121,25 +121,77 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
         create();
     }
 
-    // CRITICAL fix: the old code called find_leaf() (which walks the entire
-    // leaf chain — O(N/fanout)) followed by find_parent() (another full
-    // tree traversal). find_leaf_with_parent descends from the root via the
-    // internal nodes in O(height), returning both the target leaf and its
-    // parent in a single pass. This collapses 2× O(N) work into O(log N)
-    // per insert — the single largest INSERT throughput win.
     PageId parent_id = kNullPageId;
-    PageId leaf_id = find_leaf_with_parent(key, &parent_id);
-    if (leaf_id == kNullPageId) {
-        // Fall back to chain walk for degenerate trees (no internal nodes
-        // yet, or root-is-leaf cases that find_leaf_with_parent skipped).
-        leaf_id = find_leaf(key);
-        parent_id = find_parent(root_page_id_, leaf_id);
+    PageId leaf_id = kNullPageId;
+
+    // Fast path for monotonic / append-heavy workloads: if we have a cached
+    // "hot leaf" from the previous insert and the new key still belongs
+    // beyond that leaf's smallest key, jump straight to it and skip the
+    // O(log N) root-to-leaf descent. The leaf itself still binary-searches
+    // for the insert slot, so out-of-order keys within the leaf are fine.
+    if (hot_leaf_id_ != kNullPageId &&
+        !hot_leaf_first_key_.empty() &&
+        key >= hot_leaf_first_key_) {
+        auto pg_result = pool_->fetch_page(hot_leaf_id_);
+        if (pg_result.ok()) {
+            Page* page = pg_result.value();
+            // Make sure the cached leaf is still a leaf (could have changed
+            // through a concurrent rebuild) and that the next leaf either
+            // doesn't exist or has a strictly greater first key — otherwise
+            // the new key really belongs further right.
+            bool usable = page->data()[kPageHeaderSize] == 1;
+            if (usable) {
+                u16 n = leaf_num_keys(page);
+                PageId next_leaf = leaf_next(page);
+                if (next_leaf != kNullPageId && n > 0) {
+                    auto next_res = pool_->fetch_page(next_leaf);
+                    if (next_res.ok()) {
+                        IndexKey first_next = leaf_key(next_res.value(), 0);
+                        if (key >= first_next) usable = false;
+                        pool_->unpin_page(next_leaf);
+                    }
+                }
+            }
+            pool_->unpin_page(hot_leaf_id_);
+            if (usable) {
+                leaf_id = hot_leaf_id_;
+                parent_id = hot_leaf_parent_id_;
+            }
+        }
     }
+
+    // Slow path: full descent from root. find_leaf_with_parent collapses the
+    // descent + parent lookup into one pass.
+    if (leaf_id == kNullPageId) {
+        leaf_id = find_leaf_with_parent(key, &parent_id);
+        if (leaf_id == kNullPageId) {
+            leaf_id = find_leaf(key);
+            parent_id = find_parent(root_page_id_, leaf_id);
+        }
+    }
+
     u16 num_keys_after = 0;
     if (!insert_into_leaf(leaf_id, key, rid, &num_keys_after)) return false;
 
     if (num_keys_after > kIndexMaxKeys) {
+        // Splits restructure the rightmost edge; invalidate the hot cache.
+        hot_leaf_id_ = kNullPageId;
+        hot_leaf_first_key_ = IndexKey();
+        hot_leaf_parent_id_ = kNullPageId;
         return split_leaf(leaf_id, parent_id);
+    }
+
+    // Successful insert without split — update the hot-leaf cache to this
+    // leaf so the next monotonic insert can skip the descent.
+    hot_leaf_id_ = leaf_id;
+    hot_leaf_parent_id_ = parent_id;
+    auto pg_result = pool_->fetch_page(leaf_id);
+    if (pg_result.ok()) {
+        Page* page = pg_result.value();
+        if (leaf_num_keys(page) > 0) {
+            hot_leaf_first_key_ = leaf_key(page, 0);
+        }
+        pool_->unpin_page(leaf_id);
     }
     return true;
 }
