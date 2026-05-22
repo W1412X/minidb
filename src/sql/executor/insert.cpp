@@ -69,14 +69,10 @@ InsertExecutor::InsertExecutor(BufferPool* pool, HeapFile* heap, const Schema& s
 void InsertExecutor::init() { executed_ = false; }
 
 bool InsertExecutor::row_satisfies_schema(const Vector<Value>& row) const {
-    if (row.size() != schema_.column_count()) return false;
-    for (u32 i = 0; i < schema_.column_count(); i++) {
-        const Column& col = schema_.get_column(i);
-        if (col.not_null && row[i].is_null()) {
-            return false;
-        }
-    }
-    return true;
+    // Defers to Schema::validate_row so NOT NULL, VARCHAR(n), and future
+    // CHECK constraints all live in one place. The caller surfaces the
+    // returned message via set_executor_error.
+    return schema_.validate_row(row) == nullptr;
 }
 
 bool InsertExecutor::violates_unique_constraints(const Vector<Value>& row) const {
@@ -239,8 +235,8 @@ ExecResult InsertExecutor::next() {
     }
 
     for (u32 i = 0; i < values_.size(); i++) {
-        if (!row_satisfies_schema(values_[i])) {
-            set_executor_error("NOT NULL constraint violated");
+        if (const char* reason = schema_.validate_row(values_[i])) {
+            set_executor_error(reason);
             return ExecResult::empty();
         }
         Vector<String> row_unique_keys;

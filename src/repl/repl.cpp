@@ -499,6 +499,12 @@ void REPL::execute_sql(const String& sql) {
             else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
             else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
             else c.type = TypeId::kVarchar;
+            // Only VARCHAR(n) carries a bound; TEXT and bare VARCHAR keep
+            // varchar_length = 0 (unbounded). Negative parser sentinel is
+            // mapped to 0 too.
+            if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
+                c.varchar_length = static_cast<u32>(col.varchar_length);
+            }
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema)) {
@@ -540,6 +546,10 @@ void REPL::execute_sql(const String& sql) {
                 else col.type = TypeId::kVarchar;
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
+                if (alt->new_column.type_name == "VARCHAR" &&
+                    alt->new_column.varchar_length > 0) {
+                    col.varchar_length = static_cast<u32>(alt->new_column.varchar_length);
+                }
                 String error;
                 if (db_.alter_table_add_column(alt->table_name, col, &error)) {
                     printf("Column '%s' added.\n\n", alt->new_column.name.c_str());

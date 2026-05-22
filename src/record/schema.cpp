@@ -35,6 +35,23 @@ void Schema::add_column(const Column& col) {
     columns_.push_back(col);
 }
 
+const char* Schema::validate_row(const Vector<Value>& row) const {
+    if (row.size() != columns_.size()) {
+        return "row column count does not match table schema";
+    }
+    for (u32 i = 0; i < columns_.size(); i++) {
+        const Column& col = columns_[i];
+        if (col.not_null && row[i].is_null()) {
+            return "NOT NULL constraint violated";
+        }
+        if (col.type == TypeId::kVarchar && col.varchar_length > 0 &&
+            !row[i].is_null() && row[i].get_string().size() > col.varchar_length) {
+            return "value too long for declared VARCHAR(n) column";
+        }
+    }
+    return nullptr;
+}
+
 void Schema::remove_column(u32 idx) {
     if (idx < columns_.size()) {
         columns_.erase(columns_.begin() + idx);
@@ -107,6 +124,9 @@ byte* Schema::serialize(byte* buf) const {
             std::memcpy(buf, col.default_value.c_str(), def_len);
             buf += def_len;
         }
+        // varchar_length (0 = unbounded / TEXT)
+        std::memcpy(buf, &col.varchar_length, 4);
+        buf += 4;
     }
     return buf;
 }
@@ -160,6 +180,12 @@ Schema Schema::deserialize(const byte* buf, u32 length) {
             col.default_value = String(reinterpret_cast<const char*>(cur), def_len);
             cur += def_len;
         }
+        // varchar_length is optional for forward compat — old serialised
+        // schemas just stop here and the column defaults to 0 (unbounded).
+        if (cur + 4 <= end) {
+            std::memcpy(&col.varchar_length, cur, 4);
+            cur += 4;
+        }
         schema.add_column(col);
     }
     return schema;
@@ -172,6 +198,7 @@ u32 Schema::serialized_size() const {
         size += 2 + columns_[i].table_name.size();              // table_name_len + table_name
         size += 1 + 1;                                          // type + flags
         size += 2 + columns_[i].default_value.size();           // default_value_len + default_value
+        size += 4;                                              // varchar_length
     }
     return size;
 }
