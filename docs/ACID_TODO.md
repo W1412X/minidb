@@ -26,7 +26,8 @@ user-facing summary; this file is the engineering plan.
        — covered by tests/sql/sql_correctness_matrix.py
 [~] Index recovery = lazy rebuild (no physical redo)
        — covered by tests/acid/durability/recovery_smoke.sh
-[ ] DDL transactionality: explicitly documented
+[x] DDL transactionality: MySQL-style implicit commit
+       — tests/acid/atomicity/ddl_implicit_commit.py
 [~] ALTER TABLE crash-safety: limited (see LSN watermark fix, DROP COLUMN works after restart)
 [~] UNIQUE/PK semantics under concurrency + crash: documented per case
 [ ] HOT semantics: documented as "HOT-style same-page chain, indexes

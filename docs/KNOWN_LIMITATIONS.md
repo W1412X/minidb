@@ -32,3 +32,16 @@ This list is intentionally explicit so production users know where MiniDB still 
 - Multi-column composite B+ tree indexes are fully supported using the unified binary-comparable `IndexKey` representation, enabling composite unique constraints, prefix scans, and range scans.
 - B+ tree operations use coarse tree locking; this is correct but can limit write-heavy concurrency.
 
+
+## DDL semantics
+
+- DDL is **not transactional**. Every `CREATE TABLE`, `DROP TABLE`,
+  `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE`, and `ANALYZE` writes its
+  catalog change to disk synchronously via an atomic rename and cannot
+  be rolled back.
+- DDL implicitly commits the surrounding user transaction (MySQL / SQL
+  standard semantics): `BEGIN; INSERT ...; CREATE TABLE ...; ROLLBACK;`
+  commits the `INSERT`, runs the `CREATE TABLE`, and the trailing
+  `ROLLBACK` reports "no active transaction".
+- Column-level `CHECK` predicates persist across restart and are
+  evaluated on every INSERT / UPDATE.

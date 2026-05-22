@@ -449,6 +449,26 @@ void REPL::execute_sql(const String& sql) {
         return;
     }
 
+    // DDL implicitly commits the surrounding user transaction (MySQL /
+    // SQL-standard semantics). MiniDB has no full transactional DDL —
+    // catalog edits go to disk synchronously via save_catalog(). Auto-
+    // committing here makes the contract explicit: CREATE / DROP / ALTER
+    // inside BEGIN ends that BEGIN, so a later ROLLBACK cannot pretend
+    // to undo the schema change.
+    bool is_ddl = stmt.type == StmtType::kCreateTable ||
+                  stmt.type == StmtType::kDropTable ||
+                  stmt.type == StmtType::kCreateIndex ||
+                  stmt.type == StmtType::kDropIndex ||
+                  stmt.type == StmtType::kAlterTable ||
+                  stmt.type == StmtType::kAnalyze;
+    if (is_ddl && db_.txn_manager().current()) {
+        Transaction* txn = db_.txn_manager().current();
+        if (!db_.txn_manager().commit(txn)) {
+            printf("Error: implicit commit before DDL failed.\n\n");
+            return;
+        }
+    }
+
     // DESC TABLE
     if (stmt.type == StmtType::kDescTable && stmt.desc_table) {
         TableEntry* te = db_.get_table(stmt.desc_table->table_name);
