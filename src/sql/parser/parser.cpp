@@ -533,6 +533,42 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
                 Token def = peek();
                 lexer_.consume_token();
                 col.default_value = def.value;
+            } else if (match_keyword(TokenType::KW_CHECK)) {
+                // Slice the original SQL between the `(` after CHECK and
+                // the matching `)`. Storing the raw text lets the catalog
+                // stay a simple string-keyed store and avoids carrying the
+                // parser AST through serialisation. Re-parsed at INSERT /
+                // UPDATE time.
+                expect(TokenType::LPAREN);
+                u32 start = lexer_.byte_pos();
+                int depth = 1;
+                while (depth > 0) {
+                    Token t = peek();
+                    if (t.type == TokenType::END_OF_INPUT) { mark_error(); break; }
+                    if (t.type == TokenType::LPAREN) depth++;
+                    else if (t.type == TokenType::RPAREN) {
+                        if (--depth == 0) break;
+                    }
+                    lexer_.consume_token();
+                }
+                if (ok_) {
+                    // The closing `)` was peeked but not consumed; byte_pos
+                    // sits PAST it, so end_pos = byte_pos - 1 gives the
+                    // index of `)` itself. Substring stops right before.
+                    u32 raw_end = lexer_.byte_pos();
+                    const String& sql = lexer_.source();
+                    u32 end_pos = raw_end;
+                    // Walk back past the `)` glyph and any trailing whitespace.
+                    while (end_pos > start && sql[end_pos - 1] != ')') end_pos--;
+                    if (end_pos > start && sql[end_pos - 1] == ')') end_pos--;
+                    while (end_pos > start &&
+                           (sql[end_pos - 1] == ' ' || sql[end_pos - 1] == '\t' ||
+                            sql[end_pos - 1] == '\n')) {
+                        end_pos--;
+                    }
+                    col.check_expr = sql.substr(start, end_pos - start);
+                    expect(TokenType::RPAREN);
+                }
             } else {
                 break;
             }

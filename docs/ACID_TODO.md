@@ -197,11 +197,16 @@ user-facing summary; this file is the engineering plan.
 [x] DEFAULT substituted when column omitted from INSERT
 [x] DEFAULT + NOT NULL combination
 [ ] DEFAULT expression typing/validation (only literals today)
-[ ] VARCHAR(n) length limit on INSERT
-[ ] VARCHAR(n) length limit on UPDATE
+[x] VARCHAR(n) length limit on INSERT
+       — tests/acid/consistency/varchar_length.py
+[x] VARCHAR(n) length limit on UPDATE
 [ ] VARCHAR(n) length on CAST
 [ ] VARCHAR(n) overflow behaviour documented (currently silent)
 [ ] TEXT vs VARCHAR comparison semantics documented
+[x] Column-level CHECK enforced on INSERT
+       — tests/acid/consistency/check_constraint.py
+[x] Column-level CHECK enforced on UPDATE
+[x] CHECK predicate persists across restart
 ```
 
 ### B4. Catalog consistency
@@ -694,9 +699,9 @@ locks / SSI (C5 — only if we commit to Serializable).
 
 | Property | P0 done | P0 remaining | Acceptance test bundle |
 | --- | --- | --- | --- |
-| Atomicity | A1 commit ordering + CLOG, A2 heap/index | statement savepoints, undo for indexes/DDL | `acid/atomicity/*`, `crash_recovery_harness` |
+| Atomicity | A1 commit ordering + CLOG, A2 heap/index + statement savepoint | undo for index/DDL | `acid/atomicity/*`, `crash_recovery_harness` |
 | Consistency | C1 NOT NULL+DEFAULT, B3 VARCHAR(n), C4 startup check, B5 index state | CHECK constraints, full NULL 3VL | `acid/consistency/*`, `index_unique_matrix` |
-| Isolation | I2 lost-update, I3 SI doc, C2 MVCC matrix | docs/ISOLATION_LEVELS.md, IndexScan SI visibility, deadlock fairness | `acid/isolation/*`, `mvcc_lock_regression` |
+| Isolation | I2 lost-update, I3 SI doc, C2 MVCC matrix (SeqScan + IndexScan) | docs/ISOLATION_LEVELS.md, deadlock fairness | `acid/isolation/*`, `mvcc_lock_regression` |
 | Durability | D1 WAL CRC, D2 barrier, D3 commit, D4 torn page, D7 DDL audit | checkpoint dirty-page table, fsync-error path | `acid/durability/*`, `wal_buffer_pool_test` |
 
 Until the "P0 remaining" column is empty, MiniDB stays

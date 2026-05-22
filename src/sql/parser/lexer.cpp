@@ -98,6 +98,7 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("PREPARE", TokenType::KW_PREPARE);
     m.insert("EXECUTE", TokenType::KW_EXECUTE);
     m.insert("DEALLOCATE", TokenType::KW_DEALLOCATE);
+    m.insert("CHECK", TokenType::KW_CHECK);
     return m;
 }
 

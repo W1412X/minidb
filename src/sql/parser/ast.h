@@ -204,6 +204,9 @@ struct ColumnDef {
     bool is_unique;
     i32 varchar_length;
     String default_value;
+    // CHECK expression source text (without the surrounding parens) when
+    // the column declares `CHECK (...)`. Empty otherwise.
+    String check_expr;
 
     ColumnDef() : not_null(false), is_primary(false), is_unique(false), varchar_length(-1) {}
 };

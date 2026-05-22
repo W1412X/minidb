@@ -8,6 +8,7 @@
 #include "transaction/transaction.h"
 #include "recovery/wal.h"
 #include "sql/parser/ast.h"
+#include "sql/parser/parser.h"
 
 namespace minidb {
 
@@ -40,6 +41,40 @@ static bool build_unique_index_key(const Schema& schema, const Vector<Value>& ro
     }
     *key = IndexKey::from_values(values);
     return key->fits();
+}
+
+// Evaluate every column-level CHECK declared on this schema against the
+// proposed post-UPDATE row. Returns nullptr when all CHECKs hold, otherwise
+// a static reason string. NULL result is treated as UNKNOWN (passes), per
+// SQL standard CHECK semantics.
+static const char* check_constraint_violation(const Schema& schema,
+                                              const Vector<Value>& row) {
+    Tuple candidate(schema, row);
+    for (u32 c = 0; c < schema.column_count(); c++) {
+        const Column& col = schema.get_column(c);
+        if (col.check_expr.empty()) continue;
+        String wrapped("SELECT ");
+        wrapped += col.check_expr;
+        Parser p(wrapped);
+        Statement stmt = p.parse();
+        if (!p.ok() || !stmt.select || stmt.select->select_list.empty()) {
+            return "CHECK constraint expression invalid";
+        }
+        Value result = ExpressionEvaluator::evaluate(*stmt.select->select_list[0], candidate);
+        if (result.is_null()) continue;
+        bool ok = false;
+        if (result.type_id() == TypeId::kBool) {
+            ok = result.get_bool();
+        } else if (result.type_id() == TypeId::kInt32) {
+            ok = result.get_int32() != 0;
+        } else if (result.type_id() == TypeId::kInt64) {
+            ok = result.get_int64() != 0;
+        } else {
+            return "CHECK constraint produced non-boolean";
+        }
+        if (!ok) return "CHECK constraint violated";
+    }
+    return nullptr;
 }
 
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
@@ -317,6 +352,10 @@ ExecResult UpdateExecutor::next() {
         }
 
         if (const char* reason = schema_.validate_row(new_values)) {
+            set_executor_error(reason);
+            return ExecResult::empty();
+        }
+        if (const char* reason = check_constraint_violation(schema_, new_values)) {
             set_executor_error(reason);
             return ExecResult::empty();
         }

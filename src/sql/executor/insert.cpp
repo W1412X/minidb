@@ -5,6 +5,8 @@
 #include "database/database.h"
 #include "transaction/transaction.h"
 #include "recovery/wal.h"
+#include "sql/executor/expression_evaluator.h"
+#include "sql/parser/parser.h"
 #include "index/btree.h"
 #include <cstring>
 
@@ -39,6 +41,44 @@ static bool build_unique_index_key(const Schema& schema, const Vector<Value>& ro
     }
     *key = IndexKey::from_values(values);
     return key->fits();
+}
+
+// Evaluate every column-level CHECK declared on this schema against the
+// candidate row. Returns nullptr when all CHECKs hold, otherwise a static
+// reason string suitable for set_executor_error. SQL semantics: a CHECK
+// fails only when the predicate evaluates to FALSE — NULL passes (UNKNOWN
+// is permitted), matching PostgreSQL / SQL standard behaviour.
+static const char* check_constraint_violation(const Schema& schema,
+                                              const Vector<Value>& row) {
+    Tuple candidate(schema, row);
+    for (u32 c = 0; c < schema.column_count(); c++) {
+        const Column& col = schema.get_column(c);
+        if (col.check_expr.empty()) continue;
+        String wrapped("SELECT ");
+        wrapped += col.check_expr;
+        Parser p(wrapped);
+        Statement stmt = p.parse();
+        if (!p.ok() || !stmt.select || stmt.select->select_list.empty()) {
+            return "CHECK constraint expression invalid";
+        }
+        Value result = ExpressionEvaluator::evaluate(*stmt.select->select_list[0], candidate);
+        if (result.is_null()) continue;  // NULL → UNKNOWN → passes.
+        bool ok = false;
+        if (result.type_id() == TypeId::kBool) {
+            ok = result.get_bool();
+        } else if (result.type_id() == TypeId::kInt32) {
+            ok = result.get_int32() != 0;
+        } else if (result.type_id() == TypeId::kInt64) {
+            ok = result.get_int64() != 0;
+        } else {
+            // Non-boolean, non-integer CHECK result: refuse the row rather
+            // than silently passing — callers should write predicates that
+            // produce a boolean.
+            return "CHECK constraint produced non-boolean";
+        }
+        if (!ok) return "CHECK constraint violated";
+    }
+    return nullptr;
 }
 
 static bool tuple_live_for_unique_check(const Tuple& tuple, TransactionManager* txn_mgr) {
@@ -236,6 +276,10 @@ ExecResult InsertExecutor::next() {
 
     for (u32 i = 0; i < values_.size(); i++) {
         if (const char* reason = schema_.validate_row(values_[i])) {
+            set_executor_error(reason);
+            return ExecResult::empty();
+        }
+        if (const char* reason = check_constraint_violation(schema_, values_[i])) {
             set_executor_error(reason);
             return ExecResult::empty();
         }

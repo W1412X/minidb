@@ -24,6 +24,11 @@ struct Column {
     // parser feeds in an i32 and only positive values are kept.
     u32    varchar_length;
     String default_value;
+    // SQL text of a column-level CHECK constraint, without the surrounding
+    // parentheses. Empty when the column has no CHECK. Re-parsed at INSERT
+    // / UPDATE time so the catalog stays a pure string-keyed store and
+    // avoids carrying parser AST through serialisation.
+    String check_expr;
 
     Column() : type(TypeId::kNull), not_null(false), is_primary(false),
                is_unique(false), varchar_length(0) {}

@@ -127,6 +127,14 @@ byte* Schema::serialize(byte* buf) const {
         // varchar_length (0 = unbounded / TEXT)
         std::memcpy(buf, &col.varchar_length, 4);
         buf += 4;
+        // check_expr (length-prefixed)
+        u16 chk_len = col.check_expr.size();
+        std::memcpy(buf, &chk_len, 2);
+        buf += 2;
+        if (chk_len > 0) {
+            std::memcpy(buf, col.check_expr.c_str(), chk_len);
+            buf += chk_len;
+        }
     }
     return buf;
 }
@@ -186,6 +194,16 @@ Schema Schema::deserialize(const byte* buf, u32 length) {
             std::memcpy(&col.varchar_length, cur, 4);
             cur += 4;
         }
+        // check_expr (also optional; empty when absent)
+        if (cur + 2 <= end) {
+            u16 chk_len;
+            std::memcpy(&chk_len, cur, 2);
+            cur += 2;
+            if (chk_len > 0 && cur + chk_len <= end) {
+                col.check_expr = String(reinterpret_cast<const char*>(cur), chk_len);
+                cur += chk_len;
+            }
+        }
         schema.add_column(col);
     }
     return schema;
@@ -199,6 +217,7 @@ u32 Schema::serialized_size() const {
         size += 1 + 1;                                          // type + flags
         size += 2 + columns_[i].default_value.size();           // default_value_len + default_value
         size += 4;                                              // varchar_length
+        size += 2 + columns_[i].check_expr.size();              // check_expr_len + check_expr
     }
     return size;
 }

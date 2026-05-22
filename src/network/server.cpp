@@ -577,6 +577,7 @@ String Server::execute_sql(const String& sql) {
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
+            c.check_expr = col.check_expr;
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema)) {
@@ -899,6 +900,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
+            c.check_expr = col.check_expr;
             schema.add_column(c);
         }
         if (db_.create_table(stmt.create_table->table_name, schema))

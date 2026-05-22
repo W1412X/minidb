@@ -19,6 +19,12 @@ public:
     Token peek_token();
     void consume_token();
 
+    // For the parser's slice-the-source case (CHECK constraint text). The
+    // byte position points at the next un-tokenised character; the source
+    // is the original SQL we were constructed with.
+    const String& source() const { return sql_; }
+    u32 byte_pos() const { return pos_; }
+
 private:
     void skip_whitespace();
     void skip_comment();
