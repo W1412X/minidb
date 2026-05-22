@@ -83,6 +83,11 @@ public:
     Vector<IndexEntry*> get_indexes(u32 table_id);
     bool drop_index(const String& name);
 
+    // Restore a previously dropped table/index entry (DDL undo).
+    void restore_table(u32 table_id, const String& name, const Schema& schema);
+    void restore_index(u32 index_id, const String& name, u32 table_id,
+                       const Vector<u32>& key_columns, bool is_unique);
+
     // Query whether a specific column is indexed.
     bool is_column_indexed(u32 table_id, u32 col_idx) const;
     // Query whether any column in a group is indexed.

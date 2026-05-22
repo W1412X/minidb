@@ -16,8 +16,9 @@ user-facing summary; this file is the engineering plan.
 [ ] docs/ISOLATION_LEVELS.md — SI semantics, write-skew, phantoms
 [ ] Single-node mode: ACID guarantees
 [ ] Shared-storage mode: subset that is honoured
-[~] Isolation level: Snapshot Isolation only (no Read Committed, no Serializable)
-       — covered by tests/acid/isolation/write_skew.py
+[x] Isolation level: Snapshot Isolation (default) + Serializable (SSI-lite)
+       — tests/acid/isolation/write_skew.py (SI)
+       — tests/acid/isolation/write_skew_serializable.py (SSI)
 [x] README states "Snapshot isolation, not Serializable"
        — docs/CONCURRENCY_CONTROL.md
 [x] Parser rejects SET TRANSACTION ISOLATION LEVEL (never emitted)
@@ -26,8 +27,9 @@ user-facing summary; this file is the engineering plan.
        — covered by tests/sql/sql_correctness_matrix.py
 [~] Index recovery = lazy rebuild (no physical redo)
        — covered by tests/acid/durability/recovery_smoke.sh
-[x] DDL transactionality: MySQL-style implicit commit
+[x] DDL transactionality: PostgreSQL-style transactional DDL (reverse-op undo)
        — tests/acid/atomicity/ddl_implicit_commit.py
+       — ALTER TABLE DROP COLUMN still requires implicit commit (heap rewrite)
 [~] ALTER TABLE crash-safety: limited (see LSN watermark fix, DROP COLUMN works after restart)
 [~] UNIQUE/PK semantics under concurrency + crash: documented per case
 [ ] HOT semantics: documented as "HOT-style same-page chain, indexes
@@ -141,7 +143,9 @@ user-facing summary; this file is the engineering plan.
         not as primary undo records)
 [ ] Undo for unique reservation
 [ ] Undo for page allocation
-[ ] Undo for catalog create / drop / alter
+[x] Undo for catalog create / drop / alter (DDL undo via reverse-op log)
+       — CREATE/DROP TABLE/INDEX, ALTER ADD/RENAME COLUMN rolled back on ROLLBACK
+       — ALTER DROP COLUMN still uses implicit commit (irreversible heap rewrite)
 [ ] Mid-rollback crash continuation (currently restart redoes the abort,
     which is idempotent — formalise + test)
 [x] rollback releases row + table + key locks (LockManager::unlock_all)
@@ -213,15 +217,16 @@ user-facing summary; this file is the engineering plan.
 ### B4. Catalog consistency
 
 ```text
-[ ] Catalog mutations transaction-scoped (currently apply immediately)
+[x] Catalog mutations transaction-scoped (reverse-op undo log)
+       — DDL applies immediately, undo reverses on rollback
 [ ] Catalog mutations WAL-logged
 [ ] Catalog cache has schema version
 [ ] Prepared statement invalidation on schema change
        (partially via clear_prepared_cache, but no version check)
 [~] Table metadata / heap file consistency: maintained by save_catalog
 [~] Index metadata / index file consistency
-[ ] DROP TABLE / DROP INDEX physical file cleanup on rollback
-       (currently irreversible)
+[x] DROP TABLE / DROP INDEX physical file deferred until commit;
+       rollback restores catalog entries (files were never deleted)
 [~] RENAME COLUMN updates dependencies (catalog only; expressions reparsed lazily)
 [~] Recovery preserves catalog/file consistency (only because catalog is
      written outside the buffer pool with fsync)
@@ -275,7 +280,8 @@ user-facing summary; this file is the engineering plan.
 [x] Snapshot Isolation supported
        — tests/acid/isolation/mvcc_lock_regression.py
 [ ] Read Committed: declared unsupported OR implemented
-[ ] Serializable: declared unsupported (currently rejected by parser silence)
+[x] Serializable: SSI-lite via SET ISOLATION_LEVEL = SERIALIZABLE
+       — tests/acid/isolation/write_skew_serializable.py
 [x] write-skew documented as intentional SI anomaly
        — tests/acid/isolation/write_skew.py
 [~] autocommit snapshot semantics (one snapshot per statement)
@@ -335,14 +341,15 @@ user-facing summary; this file is the engineering plan.
 [ ] "key lock ≠ predicate lock" called out in docs
 ```
 
-### C5. Serializable / predicate lock — branch "NOT SUPPORTED"
+### C5. Serializable — SSI-lite (rw-conflict detection)
 
 ```text
 [x] README/CONCURRENCY_CONTROL state SI only, not Serializable
 [ ] docs/ISOLATION_LEVELS.md mirrors that
-[~] Parser silently ignores SET TRANSACTION; should reject loudly
-       — issue: gives the user no signal
+[x] SET ISOLATION_LEVEL = SNAPSHOT|SERIALIZABLE wired in server + REPL
 [x] write-skew test recording current behaviour
+[x] write-skew eliminated under SERIALIZABLE
+       — tests/acid/isolation/write_skew_serializable.py
 [ ] phantom test recording current behaviour
 [x] Key locks are not described as predicate locks
 ```
@@ -527,10 +534,13 @@ user-facing summary; this file is the engineering plan.
 ### F1. CREATE / DROP
 
 ```text
-[ ] CREATE TABLE transactional (rollback removes catalog entry + file)
-[ ] DROP TABLE transactional (rollback restores file)
-[ ] CREATE INDEX transactional
-[ ] DROP INDEX transactional
+[x] CREATE TABLE transactional (rollback removes catalog entry + file)
+       — tests/acid/atomicity/ddl_implicit_commit.py
+[x] DROP TABLE transactional (rollback restores catalog; files kept until commit)
+       — tests/acid/atomicity/ddl_implicit_commit.py
+[x] CREATE INDEX transactional
+       — tests/acid/atomicity/ddl_implicit_commit.py
+[x] DROP INDEX transactional (rollback restores + rebuilds from heap)
 [ ] Active scan isolation from DROP
 [ ] Prepared statement invalidation
 [~] crash recovery for CREATE TABLE (catalog persisted on fsync)
@@ -544,14 +554,14 @@ user-facing summary; this file is the engineering plan.
 [x] ADD COLUMN DEFAULT applied to old rows on read
        — tests/acid/consistency/constraints_not_null_default.py
 [ ] ADD COLUMN NOT NULL validation: rejects when table has rows w/o default
-[ ] ADD COLUMN rollback
+[x] ADD COLUMN rollback (transactional DDL undo)
 [~] ADD COLUMN crash recovery
 [~] DROP COLUMN tuple layout rewrite in place
 [x] DROP COLUMN crash-safe across restart
        — tests/regression/lsn_watermark_restart.py
-[ ] DROP COLUMN rollback (currently irreversible)
+[~] DROP COLUMN rollback (irreversible heap rewrite; implicit commit used)
 [ ] RENAME COLUMN dependency update (expressions reparse on next plan)
-[ ] RENAME COLUMN rollback
+[x] RENAME COLUMN rollback (transactional DDL undo)
 [ ] ALTER TABLE schema version bumped on success
 [ ] ALTER TABLE invalidates prepared statements
 [ ] ALTER TABLE invalidates catalog cache (currently no cache)
@@ -641,11 +651,12 @@ Document explicitly as future / unsupported.
 [x] tests/sql/select_empty_list.py
 [ ] tests/acid/atomicity/statement_savepoint.py — explicit txn statement rollback
 [ ] tests/acid/atomicity/multi_index_atomic.py — multi-index INSERT atomicity (currently in index_heap_atomic, expand)
-[ ] tests/acid/consistency/check_constraint.py — when CHECK is implemented
-[ ] tests/acid/consistency/varchar_length.py
-[ ] tests/acid/consistency/null_three_valued.py
+[x] tests/acid/consistency/check_constraint.py
+[x] tests/acid/consistency/varchar_length.py
+[x] tests/acid/consistency/null_three_valued_logic.py
 [ ] tests/acid/consistency/notin_null.py
-[ ] tests/acid/isolation/mvcc_visibility_matrix.py — exhaustive matrix
+[x] tests/acid/isolation/mvcc_visibility_matrix.py — exhaustive matrix
+[x] tests/acid/isolation/write_skew_serializable.py — SSI-lite
 [ ] tests/acid/isolation/phantom.py
 [ ] tests/acid/durability/wal_record_corruption.py
 [ ] tests/acid/durability/io_error_propagation.py

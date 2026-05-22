@@ -1,28 +1,17 @@
 #!/usr/bin/env python3
-"""DDL implicitly commits the surrounding user transaction (ACID A/D).
+"""Transactional DDL: CREATE/DROP TABLE/INDEX participate in transactions.
 
-MiniDB does not have full transactional DDL — `save_catalog()` writes
-the catalog atomically to disk the moment a CREATE / DROP / ALTER runs.
-Before this change a sequence like
-
-    BEGIN;
-    INSERT INTO t VALUES (...);
-    CREATE TABLE foo (...);
-    ROLLBACK;
-
-would silently keep `foo` (the catalog write happened immediately) but
-roll back the INSERT. That mismatch is the classic DDL footgun.
-
-The fix matches MySQL / SQL-standard "implicit commit" semantics: any
-DDL inside an explicit transaction first COMMITs the open transaction,
-then runs the DDL as its own auto-committed statement.
+MiniDB now supports PostgreSQL-style transactional DDL: schema changes
+inside BEGIN..COMMIT/ROLLBACK are part of the transaction and can be
+undone on rollback.
 
 The test pins:
-  1. INSERTs before the DDL are committed (the implicit commit fires).
-  2. The DDL itself persists past a follow-up ROLLBACK.
-  3. ROLLBACK after the implicit commit reports "no active transaction"
-     because BEGIN..DDL already closed the txn.
-  4. Subsequent DDL outside a txn still works.
+  1. CREATE TABLE inside a transaction is rolled back: table does not exist.
+  2. DROP TABLE inside a transaction is rolled back: table still exists with data.
+  3. CREATE INDEX inside a transaction is rolled back: index does not exist.
+  4. INSERT + CREATE TABLE interleaved, then ROLLBACK: both undone.
+  5. DDL outside a transaction still works (auto-committed).
+  6. ALTER TABLE DROP COLUMN still does implicit commit (heap rewrite is irreversible).
 """
 
 from __future__ import annotations
@@ -46,7 +35,7 @@ def main() -> int:
     add_seed_args(parser)
     args = parser.parse_args()
     seed = args.seed
-    db = temp_db("minidb-ddl-implicit.")
+    db = temp_db("minidb-ddl-txn.")
     try:
         # Set up an existing table.
         run_minidb(args.bin, db, [
@@ -54,46 +43,100 @@ def main() -> int:
             "INSERT INTO t VALUES (1);",
         ])
 
-        # ---- BEGIN; INSERT; CREATE TABLE; ROLLBACK ----------------
-        # Expectation: the INSERT before the DDL is committed (implicit
-        # commit fired), CREATE TABLE persists, ROLLBACK is a no-op.
+        # ---- 1. CREATE TABLE + ROLLBACK → table does not exist ----------
         out = run_minidb(args.bin, db, [
             "BEGIN;",
-            "INSERT INTO t VALUES (2);",
-            "CREATE TABLE foo (x INT);",   # implicit commit here
-            "ROLLBACK;",                   # no active txn -> error msg
+            "CREATE TABLE foo (x INT);",
+            "INSERT INTO foo VALUES (42);",
+            "ROLLBACK;",
         ])
-        if "no active transaction" not in out:
+        # After rollback, foo should not exist.
+        rows_check = run_minidb(args.bin, db, ["SELECT * FROM foo;"])
+        if "Error" not in rows_check and "not found" not in rows_check:
             raise AssertionError(
-                f"expected ROLLBACK-after-implicit-commit to report no active txn, got: {out}")
+                f"CREATE TABLE was not rolled back: {rows_check}")
 
-        # The INSERT committed via implicit commit.
+        # ---- 2. DROP TABLE + ROLLBACK → table still exists ---------------
+        out2 = run_minidb(args.bin, db, [
+            "BEGIN;",
+            "DROP TABLE t;",
+            "ROLLBACK;",
+        ])
         rows = minidb_query(args.bin, db, "SELECT id FROM t ORDER BY id;", seed)
-        if rows != [("1",), ("2",)]:
-            raise AssertionError(f"pre-DDL INSERT was lost: {rows}")
+        if rows != [("1",)]:
+            raise AssertionError(
+                f"DROP TABLE rollback lost data: {rows}")
 
-        # The CREATE TABLE persisted across the ROLLBACK.
-        rows = minidb_query(args.bin, db, "SELECT * FROM foo;", seed)
-        # Empty table, just header — assert query did NOT error.
-        if "Error" in str(rows):
-            raise AssertionError(f"DDL was rolled back: {rows}")
-
-        # ---- DDL outside a txn still works ------------------------
-        out2 = run_minidb(args.bin, db, ["CREATE TABLE bar (y INT);"])
-        if "Error" in out2:
-            raise AssertionError(f"plain DDL rejected: {out2}")
-
-        # ---- BEGIN; DDL; verify txn closed ------------------------
+        # ---- 3. CREATE INDEX + ROLLBACK → index does not exist -----------
+        run_minidb(args.bin, db, [
+            "INSERT INTO t VALUES (2);",
+        ])
         out3 = run_minidb(args.bin, db, [
             "BEGIN;",
-            "CREATE TABLE baz (z INT);",
-            "COMMIT;",   # nothing to commit -> no active txn
+            "CREATE INDEX idx_t_id ON t (id);",
+            "ROLLBACK;",
         ])
-        if "no active transaction" not in out3:
+        # The index should not exist after rollback. Querying is hard to
+        # test directly, but we can try to create the same index again —
+        # it should succeed because the first one was rolled back.
+        out4 = run_minidb(args.bin, db, [
+            "CREATE INDEX idx_t_id ON t (id);",
+        ])
+        if "Error" in out4:
             raise AssertionError(
-                f"BEGIN; DDL; COMMIT should leave no active txn, got: {out3}")
+                f"CREATE INDEX was not rolled back — could not re-create: {out4}")
+        # Clean up the index we just created.
+        run_minidb(args.bin, db, ["DROP INDEX idx_t_id;"])
 
-        print(f"ddl_implicit_commit PASS seed={seed}")
+        # ---- 4. INSERT + CREATE TABLE interleaved + ROLLBACK → both undone
+        out5 = run_minidb(args.bin, db, [
+            "BEGIN;",
+            "INSERT INTO t VALUES (99);",
+            "CREATE TABLE bar (y INT);",
+            "INSERT INTO bar VALUES (7);",
+            "ROLLBACK;",
+        ])
+        # INSERT into t should be rolled back
+        rows = minidb_query(args.bin, db, "SELECT id FROM t ORDER BY id;", seed)
+        if ("99",) in rows:
+            raise AssertionError(
+                f"INSERT was not rolled back with DDL: {rows}")
+        # bar should not exist
+        bar_check = run_minidb(args.bin, db, ["SELECT * FROM bar;"])
+        if "Error" not in bar_check and "not found" not in bar_check:
+            raise AssertionError(
+                f"CREATE TABLE bar was not rolled back: {bar_check}")
+
+        # ---- 5. DDL outside a transaction still works --------------------
+        out6 = run_minidb(args.bin, db, ["CREATE TABLE baz (z INT);"])
+        if "Error" in out6:
+            raise AssertionError(f"plain DDL rejected: {out6}")
+        baz_check = run_minidb(args.bin, db, ["SELECT * FROM baz;"])
+        if "Error" in baz_check:
+            raise AssertionError(f"baz table not accessible: {baz_check}")
+
+        # ---- 6. ALTER TABLE DROP COLUMN still does implicit commit -------
+        run_minidb(args.bin, db, [
+            "ALTER TABLE baz ADD COLUMN a INT;",
+            "ALTER TABLE baz ADD COLUMN b INT;",
+        ])
+        out7 = run_minidb(args.bin, db, [
+            "BEGIN;",
+            "INSERT INTO baz VALUES (1, 10, 20);",
+            "ALTER TABLE baz DROP COLUMN b;",   # implicit commit here
+            "ROLLBACK;",                         # no active txn -> error msg
+        ])
+        if "no active transaction" not in out7:
+            raise AssertionError(
+                f"ALTER DROP COLUMN should still do implicit commit: {out7}")
+        # The INSERT committed via implicit commit.
+        rows = minidb_query(args.bin, db, "SELECT z FROM baz;", seed)
+        if rows != [("1",)]:
+            raise AssertionError(
+                f"pre-DDL INSERT was lost after implicit commit: {rows}")
+
+        print(f"ddl_implicit_commit PASS seed={seed} "
+              f"(transactional DDL: CREATE/DROP rollback works)")
         return 0
     except Exception as exc:
         print(f"ddl_implicit_commit FAIL seed={seed}: {exc}", file=sys.stderr)

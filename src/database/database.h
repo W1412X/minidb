@@ -76,6 +76,16 @@ public:
     void collect_all_statistics();           // W18: Collect statistics for all tables
     bool check_table_index_consistency(String* error = nullptr);
 
+    // DDL undo helpers — called by TransactionManager during rollback.
+    void undo_create_table(u32 table_id, const DdlUndoInfo& info);
+    void undo_drop_table(u32 table_id, const DdlUndoInfo& info);
+    void undo_create_index(u32 table_id, const DdlUndoInfo& info);
+    void undo_drop_index(u32 table_id, const DdlUndoInfo& info);
+    void undo_alter_add_column(u32 table_id, const DdlUndoInfo& info);
+    void undo_alter_rename_column(u32 table_id, const DdlUndoInfo& info);
+    // Delete files deferred by DROP TABLE/INDEX inside a committed txn.
+    void commit_ddl_deferred(const Vector<DdlUndoInfo>& ddl_infos);
+
 private:
     void background_maintenance_loop();
     void start_background_maintenance();

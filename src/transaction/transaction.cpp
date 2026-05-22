@@ -67,9 +67,32 @@ void Transaction::record_hot_delete(u32 table_id, const RecordId& rid) {
     undo_records_.push_back(rec);
 }
 
+void Transaction::record_ddl(UndoType type, u32 table_id, DdlUndoInfo&& info) {
+    u32 idx = ddl_undo_infos_.size();
+    ddl_undo_infos_.push_back(static_cast<DdlUndoInfo&&>(info));
+    UndoRecord rec;
+    rec.type = type;
+    rec.table_id = table_id;
+    rec.rid = RecordId();
+    rec.ddl_info_idx = idx;
+    undo_records_.push_back(rec);
+}
+
 void Transaction::truncate_undo(u32 mark) {
+    // Count DDL undo infos referenced past the mark so we can
+    // truncate the parallel ddl_undo_infos_ vector in sync.
+    u32 ddl_remove = 0;
+    for (u32 i = mark; i < undo_records_.size(); i++) {
+        if (static_cast<u8>(undo_records_[i].type) >= 10) {
+            ddl_remove++;
+        }
+    }
     while (undo_records_.size() > mark) {
         undo_records_.pop_back();
+    }
+    while (ddl_remove > 0 && !ddl_undo_infos_.empty()) {
+        ddl_undo_infos_.pop_back();
+        ddl_remove--;
     }
 }
 
@@ -250,6 +273,14 @@ bool TransactionManager::commit(Transaction* txn) {
     }
     latch_.unlock();
 
+    // Transactional DDL: delete files that were deferred by DROP
+    // TABLE / DROP INDEX during this transaction. Now that the txn is
+    // committed, the catalog changes are final and the physical files
+    // can be removed.
+    if (!txn->ddl_undo_infos().empty()) {
+        db_->commit_ddl_deferred(txn->ddl_undo_infos());
+    }
+
     // A1: append to the persistent xid → status log so a later restart
     // can still answer "did txn N commit?" after the slot is recycled.
     if (status_log_) status_log_->record(txn_id, TxnFinalState::kCommitted);
@@ -281,7 +312,36 @@ bool TransactionManager::commit(Transaction* txn) {
 // compensation is needed there. Statement-level savepoint, however, will
 // commit later — recovery must be told to undo those specific records.
 static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn,
-                              bool for_savepoint, u64 txn_id) {
+                              bool for_savepoint, u64 txn_id,
+                              const DdlUndoInfo* ddl_info = nullptr) {
+    // DDL undo types — reverse the schema change.
+    if (static_cast<u8>(rec.type) >= 10) {
+        if (!ddl_info) return;
+        switch (rec.type) {
+            case UndoType::kDdlCreateTable:
+                db->undo_create_table(rec.table_id, *ddl_info);
+                break;
+            case UndoType::kDdlDropTable:
+                db->undo_drop_table(rec.table_id, *ddl_info);
+                break;
+            case UndoType::kDdlCreateIndex:
+                db->undo_create_index(rec.table_id, *ddl_info);
+                break;
+            case UndoType::kDdlDropIndex:
+                db->undo_drop_index(rec.table_id, *ddl_info);
+                break;
+            case UndoType::kDdlAlterAddColumn:
+                db->undo_alter_add_column(rec.table_id, *ddl_info);
+                break;
+            case UndoType::kDdlAlterRenameColumn:
+                db->undo_alter_rename_column(rec.table_id, *ddl_info);
+                break;
+            default:
+                break;
+        }
+        return;
+    }
+
     HeapFile* heap = db->get_heap_file(rec.table_id);
     if (!heap) return;
     TableEntry* table = db->catalog().get_table(rec.table_id);
@@ -337,8 +397,13 @@ bool TransactionManager::rollback(Transaction* txn) {
 
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (i32 i = static_cast<i32>(undo_records.size()) - 1; i >= 0; i--) {
-        apply_undo_record(db_, undo_records[static_cast<u32>(i)], abort_lsn,
-                          /*for_savepoint=*/false, txn->id());
+        const UndoRecord& rec = undo_records[static_cast<u32>(i)];
+        const DdlUndoInfo* ddl_info = nullptr;
+        if (static_cast<u8>(rec.type) >= 10) {
+            ddl_info = &txn->ddl_undo_infos()[rec.ddl_info_idx];
+        }
+        apply_undo_record(db_, rec, abort_lsn,
+                          /*for_savepoint=*/false, txn->id(), ddl_info);
     }
 
     txn->set_state(TxnState::kAborted);
@@ -366,8 +431,13 @@ bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
     // pages' LSNs unchanged (they have not crossed any commit boundary
     // yet).
     for (i32 i = static_cast<i32>(undo.size()) - 1; i >= static_cast<i32>(mark); i--) {
-        apply_undo_record(db_, undo[static_cast<u32>(i)], 0,
-                          /*for_savepoint=*/true, txn->id());
+        const UndoRecord& rec = undo[static_cast<u32>(i)];
+        const DdlUndoInfo* ddl_info = nullptr;
+        if (static_cast<u8>(rec.type) >= 10) {
+            ddl_info = &txn->ddl_undo_infos()[rec.ddl_info_idx];
+        }
+        apply_undo_record(db_, rec, 0,
+                          /*for_savepoint=*/true, txn->id(), ddl_info);
     }
     txn->truncate_undo(mark);
     return true;

@@ -35,13 +35,16 @@ This list is intentionally explicit so production users know where MiniDB still 
 
 ## DDL semantics
 
-- DDL is **not transactional**. Every `CREATE TABLE`, `DROP TABLE`,
-  `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE`, and `ANALYZE` writes its
-  catalog change to disk synchronously via an atomic rename and cannot
-  be rolled back.
-- DDL implicitly commits the surrounding user transaction (MySQL / SQL
-  standard semantics): `BEGIN; INSERT ...; CREATE TABLE ...; ROLLBACK;`
-  commits the `INSERT`, runs the `CREATE TABLE`, and the trailing
-  `ROLLBACK` reports "no active transaction".
+- DDL is **transactional** for most operations. `CREATE TABLE`,
+  `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE ADD COLUMN`,
+  and `ALTER TABLE RENAME COLUMN` inside a `BEGIN..ROLLBACK` block are
+  fully undone: catalog entries are restored, physical files are cleaned
+  up (or restored from deferred deletion).
+- `ALTER TABLE DROP COLUMN` is the exception: it rewrites heap data
+  in-place and requires an **implicit commit** before execution. A
+  `ROLLBACK` after this DDL reports "no active transaction".
+- Crash between DDL execution and COMMIT/ROLLBACK may leave the catalog
+  in the post-DDL state even if the transaction was never committed.
+  This is a documented limitation for single-node educational use.
 - Column-level `CHECK` predicates persist across restart and are
   evaluated on every INSERT / UPDATE.

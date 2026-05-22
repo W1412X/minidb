@@ -305,6 +305,7 @@ bool Database::create_table(const String& name, const Schema& schema) {
     heap_files_[tid] = UniquePtr<HeapFile>(new HeapFile(pool_.get(), tid));
     heap_files_[tid]->create();
 
+    Vector<u32> auto_idx_ids;
     for (u32 i = 0; i < schema.column_count(); i++) {
         const Column& col = schema.get_column(i);
         if (!col.is_primary && !col.is_unique) continue;
@@ -315,11 +316,22 @@ bool Database::create_table(const String& name, const Schema& schema) {
                                              key_cols, true);
         if (index_id != 0) {
             rebuild_index(catalog_.get_index(index_id));
+            auto_idx_ids.push_back(index_id);
         }
     }
 
     save_catalog();
     if (wal_) wal_->log_ddl(DdlOp::kCreateTable, tid, 0, name);
+
+    // Record DDL undo if inside a transaction.
+    Transaction* txn = txn_manager_.current();
+    if (txn) {
+        DdlUndoInfo info;
+        info.table_name = name;
+        info.auto_index_ids = static_cast<Vector<u32>&&>(auto_idx_ids);
+        txn->record_ddl(UndoType::kDdlCreateTable, tid,
+                        static_cast<DdlUndoInfo&&>(info));
+    }
     return true;
 }
 
@@ -328,6 +340,29 @@ bool Database::drop_table(const String& name) {
     if (!table) return false;
 
     u32 table_id = table->table_id;
+    Transaction* txn = txn_manager_.current();
+
+    // Save info for DDL undo before modifying the catalog.
+    DdlUndoInfo undo_info;
+    if (txn) {
+        undo_info.table_name = name;
+        undo_info.saved_schema = table->schema;
+        Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
+        for (u32 i = 0; i < indexes.size(); i++) {
+            DdlSavedIndex si;
+            si.index_id = indexes[i]->index_id;
+            si.index_name = indexes[i]->index_name;
+            si.table_id = indexes[i]->table_id;
+            si.key_columns = indexes[i]->key_columns;
+            si.is_unique = indexes[i]->is_unique;
+            undo_info.saved_indexes.push_back(si);
+            undo_info.deferred_deletes.push_back(
+                String("indexes/") + String(si.index_id) + ".btree");
+        }
+        undo_info.deferred_deletes.push_back(
+            String("tables/") + String(table_id) + ".heap");
+    }
+
     Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
     Vector<u32> index_ids;
     for (u32 i = 0; i < indexes.size(); i++) {
@@ -337,12 +372,21 @@ bool Database::drop_table(const String& name) {
 
     for (u32 i = 0; i < index_ids.size(); i++) {
         index_trees_.erase(index_ids[i]);
-        page_store_->delete_file(String("indexes/") + String(index_ids[i]) + ".btree");
+        if (!txn && page_store_) {
+            page_store_->delete_file(String("indexes/") + String(index_ids[i]) + ".btree");
+        }
     }
     heap_files_.erase(table_id);
-    page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
+    if (!txn && page_store_) {
+        page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
+    }
     save_catalog();
     if (wal_) wal_->log_ddl(DdlOp::kDropTable, table_id, 0, name);
+
+    if (txn) {
+        txn->record_ddl(UndoType::kDdlDropTable, table_id,
+                        static_cast<DdlUndoInfo&&>(undo_info));
+    }
     return true;
 }
 
@@ -351,11 +395,32 @@ bool Database::drop_index(const String& name) {
     if (!index) return false;
     u32 index_id = index->index_id;
     u32 table_id = index->table_id;
+    Transaction* txn = txn_manager_.current();
+
+    // Save info for DDL undo before modifying the catalog.
+    DdlUndoInfo undo_info;
+    if (txn) {
+        undo_info.single_index.index_id = index_id;
+        undo_info.single_index.index_name = index->index_name;
+        undo_info.single_index.table_id = table_id;
+        undo_info.single_index.key_columns = index->key_columns;
+        undo_info.single_index.is_unique = index->is_unique;
+        undo_info.deferred_deletes.push_back(
+            String("indexes/") + String(index_id) + ".btree");
+    }
+
     if (!catalog_.drop_index(name)) return false;
     index_trees_.erase(index_id);
-    page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
+    if (!txn && page_store_) {
+        page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
+    }
     save_catalog();
     if (wal_) wal_->log_ddl(DdlOp::kDropIndex, table_id, index_id, name);
+
+    if (txn) {
+        txn->record_ddl(UndoType::kDdlDropIndex, table_id,
+                        static_cast<DdlUndoInfo&&>(undo_info));
+    }
     return true;
 }
 
@@ -443,6 +508,19 @@ bool Database::create_index(const String& name, const String& table_name,
     rebuild_index(index);
     save_catalog();
     if (wal_) wal_->log_ddl(DdlOp::kCreateIndex, table->table_id, index_id, name);
+
+    // Record DDL undo if inside a transaction.
+    Transaction* txn = txn_manager_.current();
+    if (txn) {
+        DdlUndoInfo info;
+        info.single_index.index_id = index_id;
+        info.single_index.index_name = name;
+        info.single_index.table_id = table->table_id;
+        info.single_index.key_columns = key_cols;
+        info.single_index.is_unique = unique;
+        txn->record_ddl(UndoType::kDdlCreateIndex, table->table_id,
+                        static_cast<DdlUndoInfo&&>(info));
+    }
     return true;
 }
 
@@ -498,14 +576,25 @@ bool Database::alter_table_add_column(const String& table_name, const Column& co
     }
 
     u32 added_col_idx = table->schema.column_count();
+    u32 tid = table->table_id;
     table->schema.add_column(column);
     save_catalog();
     checkpoint();
     // log_ddl runs AFTER checkpoint because checkpoint truncates the WAL;
     // writing the marker last guarantees it lives in the post-truncate
     // region for any future repair pass to find.
-    if (wal_) wal_->log_ddl(DdlOp::kAlterAddColumn, table->table_id, added_col_idx,
+    if (wal_) wal_->log_ddl(DdlOp::kAlterAddColumn, tid, added_col_idx,
                             table_name + "." + column.name);
+
+    // Record DDL undo if inside a transaction.
+    Transaction* txn = txn_manager_.current();
+    if (txn) {
+        DdlUndoInfo info;
+        info.table_name = table_name;
+        info.column_position = added_col_idx;
+        txn->record_ddl(UndoType::kDdlAlterAddColumn, tid,
+                        static_cast<DdlUndoInfo&&>(info));
+    }
     return true;
 }
 
@@ -613,13 +702,110 @@ bool Database::alter_table_rename_column(const String& table_name, const String&
         set_alter_error(error, "target column already exists");
         return false;
     }
-    table->schema.rename_column(static_cast<u32>(old_idx), new_name);
+    u32 col_pos = static_cast<u32>(old_idx);
+    u32 tid = table->table_id;
+    table->schema.rename_column(col_pos, new_name);
     save_catalog();
     checkpoint();
-    if (wal_) wal_->log_ddl(DdlOp::kAlterRenameColumn, table->table_id,
-                            static_cast<u32>(old_idx),
+    if (wal_) wal_->log_ddl(DdlOp::kAlterRenameColumn, tid, col_pos,
                             table_name + "." + old_name + "->" + new_name);
+
+    // Record DDL undo if inside a transaction.
+    Transaction* txn = txn_manager_.current();
+    if (txn) {
+        DdlUndoInfo info;
+        info.table_name = table_name;
+        info.column_position = col_pos;
+        info.rename_from = old_name;
+        txn->record_ddl(UndoType::kDdlAlterRenameColumn, tid,
+                        static_cast<DdlUndoInfo&&>(info));
+    }
     return true;
+}
+
+// ============================================================
+// DDL undo helpers — called by TransactionManager during rollback
+// ============================================================
+
+void Database::undo_create_table(u32 table_id, const DdlUndoInfo& info) {
+    // Reverse a CREATE TABLE: drop auto-created indexes, then the table.
+    for (u32 i = 0; i < info.auto_index_ids.size(); i++) {
+        IndexEntry* idx = catalog_.get_index(info.auto_index_ids[i]);
+        if (idx) {
+            String path = String("indexes/") + String(idx->index_id) + ".btree";
+            index_trees_.erase(idx->index_id);
+            catalog_.drop_index(idx->index_name);
+            if (page_store_) page_store_->delete_file(path);
+        }
+    }
+    heap_files_.erase(table_id);
+    if (page_store_) {
+        page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
+    }
+    catalog_.drop_table(info.table_name);
+    save_catalog();
+}
+
+void Database::undo_drop_table(u32 table_id, const DdlUndoInfo& info) {
+    // Reverse a DROP TABLE: restore catalog entries. Physical files were
+    // kept on disk; HeapFile / BPlusTree wrappers will be recreated on
+    // demand via get_heap_file() / get_index_tree().
+    catalog_.restore_table(table_id, info.table_name, info.saved_schema);
+    for (u32 i = 0; i < info.saved_indexes.size(); i++) {
+        const DdlSavedIndex& si = info.saved_indexes[i];
+        catalog_.restore_index(si.index_id, si.index_name, si.table_id,
+                               si.key_columns, si.is_unique);
+    }
+    save_catalog();
+}
+
+void Database::undo_create_index(u32 /*table_id*/, const DdlUndoInfo& info) {
+    u32 index_id = info.single_index.index_id;
+    IndexEntry* idx = catalog_.get_index(index_id);
+    if (idx) {
+        index_trees_.erase(index_id);
+        catalog_.drop_index(idx->index_name);
+        if (page_store_) {
+            page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
+        }
+    }
+    save_catalog();
+}
+
+void Database::undo_drop_index(u32 /*table_id*/, const DdlUndoInfo& info) {
+    const DdlSavedIndex& si = info.single_index;
+    catalog_.restore_index(si.index_id, si.index_name, si.table_id,
+                           si.key_columns, si.is_unique);
+    IndexEntry* entry = catalog_.get_index(si.index_id);
+    if (entry) rebuild_index(entry);
+    save_catalog();
+}
+
+void Database::undo_alter_add_column(u32 table_id, const DdlUndoInfo& info) {
+    TableEntry* table = catalog_.get_table(table_id);
+    if (table && info.column_position < table->schema.column_count()) {
+        table->schema.remove_column(info.column_position);
+    }
+    save_catalog();
+    checkpoint();
+}
+
+void Database::undo_alter_rename_column(u32 table_id, const DdlUndoInfo& info) {
+    TableEntry* table = catalog_.get_table(table_id);
+    if (table && info.column_position < table->schema.column_count()) {
+        table->schema.rename_column(info.column_position, info.rename_from);
+    }
+    save_catalog();
+    checkpoint();
+}
+
+void Database::commit_ddl_deferred(const Vector<DdlUndoInfo>& ddl_infos) {
+    for (u32 i = 0; i < ddl_infos.size(); i++) {
+        const Vector<String>& files = ddl_infos[i].deferred_deletes;
+        for (u32 j = 0; j < files.size(); j++) {
+            if (page_store_) page_store_->delete_file(files[j]);
+        }
+    }
 }
 
 HeapFile* Database::get_heap_file(u32 table_id) {

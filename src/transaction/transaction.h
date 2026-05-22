@@ -9,6 +9,7 @@
 #include "container/vector.h"
 #include "container/unique_ptr.h"
 #include "index/btree.h"
+#include "record/schema.h"
 #include "record/value.h"
 #include "transaction/txn_status_log.h"
 
@@ -20,13 +21,46 @@ enum class UndoType : u8 {
     kInsert = 0,
     kDelete = 1,
     kHotInsert = 2,
-    kHotDelete = 3
+    kHotDelete = 3,
+    // DDL undo types — participate in the undo log for correct
+    // interleaving with DML undos during transaction rollback.
+    kDdlCreateTable     = 10,   // undo = drop table + auto-indexes + files
+    kDdlDropTable       = 11,   // undo = restore catalog entries from saved data
+    kDdlCreateIndex     = 12,   // undo = drop index + file
+    kDdlDropIndex       = 13,   // undo = restore index + rebuild from heap
+    kDdlAlterAddColumn  = 14,   // undo = remove the added column
+    kDdlAlterRenameColumn = 16, // undo = rename column back to original
 };
 
 struct UndoRecord {
     UndoType type;
     u32 table_id;
-    RecordId rid;
+    RecordId rid;            // DML undo: the affected row
+    u32 ddl_info_idx;        // DDL undo: index into Transaction::ddl_undo_infos_
+};
+
+// Saved index metadata for DDL undo (DROP TABLE / DROP INDEX).
+struct DdlSavedIndex {
+    u32 index_id;
+    String index_name;
+    u32 table_id;
+    Vector<u32> key_columns;
+    bool is_unique;
+    DdlSavedIndex() : index_id(0), table_id(0), is_unique(false) {}
+};
+
+// Metadata for undoing one DDL operation. Stored in a parallel vector
+// in Transaction; the UndoRecord's ddl_info_idx indexes into it.
+struct DdlUndoInfo {
+    String table_name;                    // table involved
+    Schema saved_schema;                  // DROP TABLE: schema to restore
+    Vector<DdlSavedIndex> saved_indexes;  // DROP TABLE: indexes to restore
+    Vector<u32> auto_index_ids;           // CREATE TABLE: auto-created index IDs
+    DdlSavedIndex single_index;           // CREATE/DROP single INDEX
+    u32 column_position;                  // ALTER: column ordinal
+    String rename_from;                   // ALTER RENAME: original column name
+    Vector<String> deferred_deletes;      // files to delete on COMMIT
+    DdlUndoInfo() : column_position(0) {}
 };
 
 // SSI read-tracking entry. One per visible tuple emitted by a SeqScan /
@@ -86,6 +120,9 @@ public:
     // serializable cost stays opt-in. Bounded list — caller is expected
     // to be a per-tuple emit point in a scan operator.
     void record_read(u32 table_id, const RecordId& rid);
+    // Record a DDL operation in the undo log so it can be rolled back.
+    void record_ddl(UndoType type, u32 table_id, DdlUndoInfo&& info);
+    const Vector<DdlUndoInfo>& ddl_undo_infos() const { return ddl_undo_infos_; }
 
     // Mark a point in the undo log that the statement-level rollback can
     // restore. Returns the current undo log length.
@@ -101,6 +138,7 @@ private:
     TxnState state_;
     Vector<u64> active_snapshot_;
     Vector<UndoRecord> undo_records_;
+    Vector<DdlUndoInfo> ddl_undo_infos_;
     Vector<ReadRecord> read_set_;
     IsolationLevel isolation_;
     bool resource_acquired_;

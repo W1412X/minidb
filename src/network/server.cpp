@@ -564,15 +564,13 @@ String Server::execute_sql(const String& sql) {
         return result;
     }
 
-    // DDL implicitly commits the surrounding user transaction (MySQL /
-    // SQL-standard "implicit commit" semantics). MiniDB has no full
-    // transactional DDL — catalog edits go to disk synchronously via
-    // save_catalog(). Auto-committing here makes the contract explicit:
-    // a CREATE / DROP / ALTER inside BEGIN ends that BEGIN, so a later
-    // ROLLBACK cannot pretend to undo the schema change. Without this
-    // hook the schema change persists silently while the rest of the
-    // txn rolls back, which is a footgun.
-    if (needs_schema_execution_lock(stmt) && db_.txn_manager().current()) {
+    // Transactional DDL: most DDL operations now participate in the
+    // active transaction and can be rolled back. Only ALTER TABLE DROP
+    // COLUMN requires an implicit commit because it rewrites heap data
+    // in-place and cannot be undone.
+    if (stmt.type == StmtType::kAlterTable && stmt.alter_table &&
+        stmt.alter_table->alter_type == AlterType::kDropColumn &&
+        db_.txn_manager().current()) {
         Transaction* txn = db_.txn_manager().current();
         if (!db_.txn_manager().commit(txn)) {
             return String("Error: implicit commit before DDL failed.\n");
@@ -916,9 +914,11 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         else send_str("Error: no active transaction.\n");
         return 0;
     }
-    // DDL implicitly commits the surrounding user transaction (see the
-    // non-streaming sibling path above for the rationale).
-    if (needs_schema_execution_lock(stmt) && db_.txn_manager().current()) {
+    // Transactional DDL: only ALTER TABLE DROP COLUMN needs implicit
+    // commit (see the non-streaming sibling path for the rationale).
+    if (stmt.type == StmtType::kAlterTable && stmt.alter_table &&
+        stmt.alter_table->alter_type == AlterType::kDropColumn &&
+        db_.txn_manager().current()) {
         Transaction* txn = db_.txn_manager().current();
         if (!db_.txn_manager().commit(txn)) {
             send_str("Error: implicit commit before DDL failed.\n");
