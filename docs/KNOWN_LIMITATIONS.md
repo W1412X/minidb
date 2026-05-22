@@ -51,3 +51,20 @@ This list is intentionally explicit so production users know where MiniDB still 
   This is a documented limitation for single-node educational use.
 - Column-level `CHECK` predicates persist across restart and are
   evaluated on every INSERT / UPDATE.
+
+## Query Processing
+
+- No visibility map — `IndexOnlyScan` always performs a heap recheck.
+- No query plan caching or parameterized plans — every execution re-plans from scratch.
+- No `SELECT FOR UPDATE` or row-level locking beyond MVCC.
+- `UNION` type alignment is implicit — no explicit type coercion.
+- `CAST` failure behaviour is undefined for some type combinations.
+- No `NULLS FIRST` / `NULLS LAST` syntax in `ORDER BY`.
+- `NOT IN` with NULL on the right side correctly produces UNKNOWN per SQL standard.
+
+## Recovery
+
+- Index recovery uses lazy rebuild strategy — indexes are rebuilt from heap data after WAL replay, not physically redone from WAL records.
+- DDL WAL records are audit-only markers — recovery does not act on them; crash between DDL and COMMIT may leave the catalog in the post-DDL state.
+- No ARIES-style analysis/redo/undo phases — WAL replay is single-pass forward.
+- No checkpoint dirty-page table or active-transaction table.
