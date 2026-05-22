@@ -117,6 +117,8 @@ add_test(NAME varchar_length
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/varchar_length.py $<TARGET_FILE:minidb> --seed 12648445)
 add_test(NAME check_constraint
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/check_constraint.py $<TARGET_FILE:minidb> --seed 12648452)
+add_test(NAME null_three_valued_logic
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/null_three_valued_logic.py $<TARGET_FILE:minidb> --seed 12648454)
 add_test(NAME recovery_smoke
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/recovery_smoke.sh $<TARGET_FILE:minidb>)
 add_test(NAME wal_replay_slot_reuse

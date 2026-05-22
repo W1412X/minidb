@@ -243,17 +243,20 @@ user-facing summary; this file is the engineering plan.
 ### B6. SQL standard semantics
 
 ```text
-[~] NULL three-valued logic — partial; expression_evaluator currently has
-     deliberate deviation (== NULL → false), documented inline
-[~] IS NULL / IS NOT NULL
-[~] AND / OR / NOT three-valued
-[~] IN + NULL
-[ ] NOT IN + NULL (correctness gap exists — see differential_sqlite output)
+[x] NULL three-valued logic — comparison with NULL returns UNKNOWN,
+     filter rejects UNKNOWN rows
+       — tests/acid/consistency/null_three_valued_logic.py
+[x] IS NULL / IS NOT NULL
+[x] AND / OR / NOT three-valued
+[x] IN + NULL
+[x] NOT IN + NULL — UNKNOWN result rejects every row
 [~] BETWEEN + NULL
 [~] LIKE + NULL
 [~] LEFT JOIN ON vs WHERE semantics
 [~] Predicate pushdown safety on outer joins
-[~] GROUP BY / DISTINCT / ORDER BY NULL handling
+[x] GROUP BY / DISTINCT / ORDER BY NULL handling
+     — DISTINCT collapses NULLs, ORDER BY ASC places NULLs last,
+       aggregates skip NULL inputs (COUNT(*) counts them)
 [ ] NULLS FIRST / NULLS LAST syntax + behaviour
 [~] COUNT(*) / COUNT(col) / SUM / AVG / MIN / MAX edge cases
 [ ] UNION duplicate elimination + NULL
