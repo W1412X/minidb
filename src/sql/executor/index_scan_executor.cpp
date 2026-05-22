@@ -14,7 +14,14 @@ IndexScanExecutor::IndexScanExecutor(
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
       has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_(),
-      table_id_(heap ? heap->table_id() : 0) {}
+      table_id_(heap ? heap->table_id() : 0),
+      cached_heap_page_id_(kNullPageId), cached_heap_page_(nullptr) {}
+
+IndexScanExecutor::~IndexScanExecutor() {
+    if (cached_heap_page_) {
+        pool_->unpin_page(cached_heap_page_id_);
+    }
+}
 
 void IndexScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -22,6 +29,11 @@ void IndexScanExecutor::init() {
     last_index_rid_ = RecordId();
     has_last_index_rid_ = false;
     last_rid_ = RecordId();
+    if (cached_heap_page_) {
+        pool_->unpin_page(cached_heap_page_id_);
+        cached_heap_page_ = nullptr;
+        cached_heap_page_id_ = kNullPageId;
+    }
 }
 
 // Traverse version chain to find first visible version, return its RecordId
@@ -148,6 +160,9 @@ static bool visible_header(BufferPool* pool, TransactionManager* txn_mgr,
 
 ExecResult IndexScanExecutor::next() {
     IndexKey high = is_range_ ? range_high_ : search_key_;
+    // Cache SSI tracking decision (avoid touching the txn_mgr per row).
+    const bool track_reads = txn_mgr_ && txn_mgr_->current() &&
+        txn_mgr_->current()->isolation() == IsolationLevel::kSerializable;
     while (true) {
         RecordId rid;
         const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
@@ -156,9 +171,26 @@ ExecResult IndexScanExecutor::next() {
         }
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
-        auto result = pool_->fetch_page(rid.page_id);
-        if (!result.ok()) continue;
-        Page* page = result.value();
+
+        // Reuse the cached heap-page pin when the next RID lives on the same
+        // page (typical for clustered indexes scanning sequentially-inserted
+        // data). Drop the pin and refetch only when crossing pages.
+        Page* page = nullptr;
+        if (cached_heap_page_ && cached_heap_page_id_ == rid.page_id) {
+            page = cached_heap_page_;
+        } else {
+            if (cached_heap_page_) {
+                pool_->unpin_page(cached_heap_page_id_);
+                cached_heap_page_ = nullptr;
+                cached_heap_page_id_ = kNullPageId;
+            }
+            auto result = pool_->fetch_page(rid.page_id);
+            if (!result.ok()) continue;
+            cached_heap_page_ = result.value();
+            cached_heap_page_id_ = rid.page_id;
+            page = cached_heap_page_;
+        }
+
         const LinePointer* orig_lp = page->line_pointer(rid.slot_idx);
         SlotIdx visible_slot = rid.slot_idx;
         if (orig_lp && orig_lp->is_redirect()) {
@@ -167,21 +199,25 @@ ExecResult IndexScanExecutor::next() {
         }
         const LinePointer* lp = page->line_pointer(visible_slot);
         if (lp && lp->is_valid()) {
-            // Follow version chain to find visible version, return its real RecordId
+            // follow_version_chain may pin OTHER pages temporarily but always
+            // unpins them before returning, so our cached pin survives.
             VersionResult vr = follow_version_chain(pool_, txn_mgr_, page, visible_slot,
                                                      output_schema_);
-            pool_->unpin_page(rid.page_id);
-
             if (vr.tuple.column_count() > 0) {
-                last_rid_ = vr.rid;  // Use visible version's RecordId, not the index's
-                if (txn_mgr_ && txn_mgr_->current()) {
+                last_rid_ = vr.rid;
+                if (track_reads) {
                     txn_mgr_->current()->record_read(table_id_, last_rid_);
                 }
                 return ExecResult::ok(static_cast<Tuple&&>(vr.tuple));
             }
-        } else {
-            pool_->unpin_page(rid.page_id);
+            // Not visible — keep the page pinned for the next iteration; the
+            // next index entry might still be on this page.
         }
+    }
+    if (cached_heap_page_) {
+        pool_->unpin_page(cached_heap_page_id_);
+        cached_heap_page_ = nullptr;
+        cached_heap_page_id_ = kNullPageId;
     }
     return ExecResult::empty();
 }

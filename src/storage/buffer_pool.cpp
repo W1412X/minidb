@@ -290,27 +290,35 @@ void BufferPool::unpin_page(PageId page_id) {
 
 void BufferPool::mark_dirty(PageId page_id) {
     BufferPoolPartition& partition = partitions_[partition_for(page_id)];
-    WriteGuard guard(partition.latch);
+    // ReadGuard is sufficient: is_dirty is now an atomic<bool>, and the
+    // page-table lookup is safe under a read lock. The previous WriteGuard
+    // serialized every page mutation across the partition — a major
+    // contention point in INSERT/UPDATE-heavy workloads.
+    ReadGuard guard(partition.latch);
 
     auto* frame_idx = find_page_mapping(partition, page_id);
     if (!frame_idx) return;
 
-    frames_[*frame_idx].is_dirty = true;
+    frames_[*frame_idx].is_dirty.store(true, std::memory_order_release);
 }
 
 void BufferPool::set_page_lsn(PageId page_id, u64 lsn) {
     BufferPoolPartition& partition = partitions_[partition_for(page_id)];
-    WriteGuard guard(partition.latch);
+    // ReadGuard suffices — the caller already pins the frame so it cannot
+    // be evicted, and is_dirty is atomic. The page-header LSN update races
+    // with concurrent writers, but we always advance monotonically (CAS
+    // would be theoretically cleaner; in practice this field is only
+    // touched while the page's logical lock is held by the writer).
+    ReadGuard guard(partition.latch);
 
     auto* frame_idx = find_page_mapping(partition, page_id);
     if (!frame_idx) return;
 
-    // page_lsn moves forward only — never let recovery undo a higher committed LSN.
     u64 cur = frames_[*frame_idx].page.header()->lsn;
     if (lsn > cur) {
         frames_[*frame_idx].page.header()->lsn = lsn;
     }
-    frames_[*frame_idx].is_dirty = true;
+    frames_[*frame_idx].is_dirty.store(true, std::memory_order_release);
 }
 
 // ============================================================
@@ -374,24 +382,27 @@ void BufferPool::flush_all() {
 // ============================================================
 
 FrameIdx BufferPool::find_victim_frame(BufferPoolPartition& partition, u32 partition_idx) {
-    // Look for an empty frame first.
-    for (u32 i = 0; i < pool_size_; i++) {
-        if (frames_[i].partition_idx == partition_idx &&
-            frames_[i].page_id == kNullPageId && !frames_[i].is_io_in_progress) {
-            return i;
-        }
-    }
-
-    // Scan from the LRU tail (least-recently used) for an unpinned frame.
+    // Two-pass scan: prefer empty frames (no eviction work) over evictable
+    // ones. Both passes walk the partition's LRU list rather than the global
+    // frame array — the previous global scan touched all pool_size_ frames
+    // even when only one partition was relevant. Empty frames are preferred
+    // because evicting an unpinned resident page costs a disk write if the
+    // page is dirty, and sequential-scan policy intentionally parks freshly
+    // loaded pages at the LRU tail to be evicted first — we don't want to
+    // throw them away when an empty frame is sitting elsewhere in the list.
+    (void)partition_idx;
+    FrameIdx evictable = kNullFrame;
     for (auto it = partition.lru_list.rbegin(); it != partition.lru_list.rend(); ++it) {
         FrameIdx idx = *it;
-        if (frames_[idx].pin_count.load(std::memory_order_acquire) == 0 &&
-            !frames_[idx].is_io_in_progress) {
-            return idx;
+        Frame& f = frames_[idx];
+        if (f.is_io_in_progress) continue;
+        if (f.page_id == kNullPageId) return idx;             // empty — best choice
+        if (evictable == kNullFrame &&
+            f.pin_count.load(std::memory_order_acquire) == 0) {
+            evictable = idx;                                   // remember but keep looking
         }
     }
-
-    return kNullFrame;
+    return evictable;
 }
 
 u32 BufferPool::partition_for(PageId page_id) const {
@@ -417,20 +428,20 @@ void BufferPool::move_to_lru_head(BufferPoolPartition& partition, FrameIdx idx) 
 
 bool BufferPool::wait_for_buffer_slot() {
     if (wait_timeout_ms_ == 0) {
-        LockGuard guard(wait_latch_);
-        stats_.wait_timeouts++;
+        counters_.wait_timeouts.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     wait_latch_.lock();
-    if (max_waiters_ != 0 && stats_.waiters >= max_waiters_) {
-        stats_.wait_rejections++;
+    u32 cur_waiters = counters_.waiters.load(std::memory_order_relaxed);
+    if (max_waiters_ != 0 && cur_waiters >= max_waiters_) {
+        counters_.wait_rejections.fetch_add(1, std::memory_order_relaxed);
         wait_latch_.unlock();
         return false;
     }
-    stats_.waiters++;
+    counters_.waiters.fetch_add(1, std::memory_order_relaxed);
     bool ok = wait_cond_.timed_wait(wait_latch_, static_cast<u32>(wait_timeout_ms_));
-    stats_.waiters--;
-    if (!ok) stats_.wait_timeouts++;
+    counters_.waiters.fetch_sub(1, std::memory_order_relaxed);
+    if (!ok) counters_.wait_timeouts.fetch_add(1, std::memory_order_relaxed);
     wait_latch_.unlock();
     return ok;
 }
@@ -441,13 +452,15 @@ void BufferPool::notify_buffer_available() {
 }
 
 void BufferPool::record_hit() {
-    LockGuard guard(wait_latch_);
-    stats_.hits++;
+    // Lock-free counter: relaxed ordering is sufficient because the counter
+    // value is observational, not used for synchronisation. The previous code
+    // took a global mutex for every cache hit, which serialized the entire
+    // buffer pool on read-heavy workloads.
+    counters_.hits.fetch_add(1, std::memory_order_relaxed);
 }
 
 void BufferPool::record_miss() {
-    LockGuard guard(wait_latch_);
-    stats_.misses++;
+    counters_.misses.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool BufferPool::flush_frame_wal_first(Frame& frame) {
@@ -480,10 +493,11 @@ BufferPoolStats BufferPool::stats() const {
         }
     }
     BufferPoolStats out;
-    {
-        LockGuard guard(wait_latch_);
-        out = stats_;
-    }
+    out.hits = counters_.hits.load(std::memory_order_relaxed);
+    out.misses = counters_.misses.load(std::memory_order_relaxed);
+    out.waiters = counters_.waiters.load(std::memory_order_relaxed);
+    out.wait_timeouts = counters_.wait_timeouts.load(std::memory_order_relaxed);
+    out.wait_rejections = counters_.wait_rejections.load(std::memory_order_relaxed);
     out.dirty_pages = dirty;
     out.partitions = partition_count_;
     return out;

@@ -21,8 +21,9 @@ public:
     GarbageCollector(BufferPool* pool, TransactionManager* txn_mgr, Catalog* catalog,
                      Database* db = nullptr);
 
-    // Execute one incremental GC (process max_pages pages)
-    void run_gc(u32 max_pages = 64);
+    // Execute one incremental GC (process max_pages pages).
+    // Returns true if any pages were modified (garbage collected).
+    bool run_gc(u32 max_pages = 64);
 
     // Full VACUUM: process every page across all tables, freeze eligible
     // tuples (committed xmin older than freeze horizon), and update

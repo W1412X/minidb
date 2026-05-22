@@ -20,6 +20,7 @@ public:
                       const IndexKey& search_key, bool is_range,
                       const IndexKey& range_high, const Schema& output_schema,
                       TransactionManager* txn_mgr = nullptr);
+    ~IndexScanExecutor() override;
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
@@ -39,6 +40,11 @@ private:
     TransactionManager* txn_mgr_;
     RecordId last_rid_;
     u32 table_id_;
+    // Cache the last heap page pinned across next() calls. Clustered indexes
+    // (the common case for INSERT-ordered data) return RIDs to the same heap
+    // page in a run; reusing the pin saves a fetch/unpin pair per row.
+    PageId cached_heap_page_id_;
+    Page* cached_heap_page_;
 };
 
 class IndexOnlyScanExecutor : public Executor {

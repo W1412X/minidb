@@ -31,6 +31,19 @@ struct BufferPoolStats {
     u32 partitions = 1;
 };
 
+// Atomic stats slot used inside BufferPool for lock-free hit/miss counting.
+// Returned via stats() as a snapshot in BufferPoolStats (plain u64). Keeping
+// these atomic eliminates a global mutex on every page access — the original
+// code took LockGuard(wait_latch_) just to increment a counter, which was a
+// scalability cliff on read-heavy workloads.
+struct AtomicBufferPoolCounters {
+    std::atomic<u64> hits{0};
+    std::atomic<u64> misses{0};
+    std::atomic<u64> wait_timeouts{0};
+    std::atomic<u64> wait_rejections{0};
+    std::atomic<u32> waiters{0};
+};
+
 struct BufferPoolPartition {
     HashMap<PageId, FrameIdx> page_table;
     LinkedList<FrameIdx> lru_list;
@@ -53,7 +66,11 @@ struct Frame {
     Page    page;
     PageId  page_id;
     std::atomic<u32> pin_count;
-    bool    is_dirty;
+    // Lock-free dirty flag. The previous bool required taking the partition
+    // write lock just to set it — every Page::insert/update went through that
+    // serialization point. With an atomic<bool> we can set it under a read
+    // lock (or even with no lock when the caller already pins the frame).
+    std::atomic<bool> is_dirty;
     bool    is_io_in_progress;
     u32     partition_idx;
     LinkedList<FrameIdx>::Node* lru_node;
@@ -120,7 +137,7 @@ private:
     BufferPoolPartition* partitions_;
     mutable Mutex wait_latch_;
     CondVar wait_cond_;
-    BufferPoolStats stats_;
+    AtomicBufferPoolCounters counters_;
 };
 
 } // namespace minidb

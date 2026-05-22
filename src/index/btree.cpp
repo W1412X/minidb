@@ -121,8 +121,20 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
         create();
     }
 
-    PageId leaf_id = find_leaf(key);
-    PageId parent_id = find_parent(root_page_id_, leaf_id);
+    // CRITICAL fix: the old code called find_leaf() (which walks the entire
+    // leaf chain — O(N/fanout)) followed by find_parent() (another full
+    // tree traversal). find_leaf_with_parent descends from the root via the
+    // internal nodes in O(height), returning both the target leaf and its
+    // parent in a single pass. This collapses 2× O(N) work into O(log N)
+    // per insert — the single largest INSERT throughput win.
+    PageId parent_id = kNullPageId;
+    PageId leaf_id = find_leaf_with_parent(key, &parent_id);
+    if (leaf_id == kNullPageId) {
+        // Fall back to chain walk for degenerate trees (no internal nodes
+        // yet, or root-is-leaf cases that find_leaf_with_parent skipped).
+        leaf_id = find_leaf(key);
+        parent_id = find_parent(root_page_id_, leaf_id);
+    }
     u16 num_keys_after = 0;
     if (!insert_into_leaf(leaf_id, key, rid, &num_keys_after)) return false;
 
@@ -1125,18 +1137,24 @@ PageId BPlusTree::find_leaf_with_parent(const IndexKey& key, PageId* parent_id) 
         }
 
         u16 n = internal_num_keys(page);
-        PageId child = internal_child(page, 0);
-
-        for (u16 i = 0; i < n; i++) {
-            IndexKey k = internal_key(page, i);
-            // For duplicate keys, descend to the left side of an equal separator
-            // so leaf-chain scans can see duplicates split across adjacent leaves.
-            if (key <= k) {
-                child = internal_child(page, i);
-                break;
+        // Binary search for the first separator key K[i] >= search key.
+        // We descend into child[i] in that case (left side of equal keys
+        // so leaf-chain scans see duplicates split across adjacent leaves).
+        // If no such i exists, descend the rightmost child[n].
+        // Each comparison still allocates an IndexKey, but log2(n) is far
+        // better than n for the fan-out we now achieve after the 512→128
+        // key-size reduction (≈57 keys per internal node).
+        u16 lo = 0, hi = n;
+        while (lo < hi) {
+            u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+            IndexKey mid_key = internal_key(page, mid);
+            if (key <= mid_key) {
+                hi = mid;
+            } else {
+                lo = static_cast<u16>(mid + 1);
             }
-            child = internal_child(page, i + 1);
         }
+        PageId child = internal_child(page, lo);
 
         const_cast<BufferPool*>(pool_)->unpin_page(current);
         parent = current;
@@ -1159,11 +1177,31 @@ bool BPlusTree::insert_into_leaf(PageId leaf_id, const IndexKey& key, const Reco
     Page* page = result.value();
     u16 n = leaf_num_keys(page);
 
+    // Fast path for the bulk-load pattern: if the new key is >= the current
+    // largest key, append at the end without scanning. Each leaf_key() call
+    // performs a full IndexKey::decode (heap allocations for Vector<Value>
+    // and any VARCHAR strings) — skipping the linear scan saves O(n) decodes
+    // per insert when the workload is sequential (common for serial PKs).
     u16 pos = n;
-    for (u16 i = 0; i < n; i++) {
-        if (key < leaf_key(page, i)) {
-            pos = i;
-            break;
+    if (n > 0) {
+        IndexKey last_key = leaf_key(page, n - 1);
+        if (key >= last_key) {
+            pos = n;  // append; no scan
+        } else {
+            // Binary search the leaf for the correct insertion position.
+            // n is small (≤57) but at one heap allocation per decode this is
+            // still O(log n) decodes instead of O(n).
+            u16 lo = 0, hi = n;
+            while (lo < hi) {
+                u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+                IndexKey mid_key = leaf_key(page, mid);
+                if (key < mid_key) {
+                    hi = mid;
+                } else {
+                    lo = static_cast<u16>(mid + 1);
+                }
+            }
+            pos = lo;
         }
     }
 

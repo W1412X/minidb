@@ -31,7 +31,7 @@ bool GarbageCollector::is_garbage(const Tuple& t, u64 oldest_active) {
     return true;  // This version is invisible to all current and future transactions
 }
 
-void GarbageCollector::run_gc(u32 max_pages) {
+bool GarbageCollector::run_gc(u32 max_pages) {
     u64 oldest_active = txn_mgr_->get_oldest_active_txn_id();
 
     struct TableCtx {
@@ -39,8 +39,9 @@ void GarbageCollector::run_gc(u32 max_pages) {
         u64 oldest;
         u32 pages_processed;
         u32 max_pages;
+        bool any_modified;
     };
-    TableCtx ctx = {this, oldest_active, 0, max_pages};
+    TableCtx ctx = {this, oldest_active, 0, max_pages, false};
 
     auto scan_callback = [](TableEntry& te, void* c) {
         auto* ctx = static_cast<TableCtx*>(c);
@@ -116,6 +117,7 @@ void GarbageCollector::run_gc(u32 max_pages) {
                 heap.fsm().update(page_id, page->get_free_space());
                 // Page was modified, so it's not all-visible anymore.
                 heap.vm().clear_page(page_id);
+                ctx->any_modified = true;
             } else {
                 // No garbage found: all live tuples are visible to all
                 // current snapshots.  Mark the page all-visible in the VM.
@@ -132,6 +134,7 @@ void GarbageCollector::run_gc(u32 max_pages) {
     };
 
     catalog_->for_each_table(scan_callback, &ctx);
+    return ctx.any_modified;
 }
 
 void GarbageCollector::run_vacuum() {

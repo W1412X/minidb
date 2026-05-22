@@ -217,8 +217,12 @@ Tuple Tuple::deserialize_from_page(const byte* buf, const Schema& schema, u32 le
     const byte* bitmap = buf;
     buf += bitmap_size;
 
-    // values
+    // values — reserve up front so the per-column push_back doesn't realloc
+    // the underlying buffer repeatedly. For a 5-column schema this saves up
+    // to log2(5)+1 = 4 reallocations + memcpy round-trips per tuple.
     tuple.values_.clear();
+    u32 reserve_n = num_cols < schema.column_count() ? num_cols : schema.column_count();
+    tuple.values_.reserve(reserve_n);
     for (u32 i = 0; i < num_cols; i++) {
         if (bitmap[i / 8] & (1 << (i % 8))) {
             if (i < schema.column_count()) {

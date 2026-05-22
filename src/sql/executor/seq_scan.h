@@ -23,8 +23,10 @@ public:
                     TransactionManager* txn_mgr = nullptr);
     SeqScanExecutor(BufferPool* pool, HeapFile* heap, const Schema& schema,
                     TransactionManager* txn_mgr = nullptr);
+    ~SeqScanExecutor() override;
     void init() override;
     ExecResult next() override;
+    bool fast_count(u64* count) override;
     const Schema& output_schema() const override;
 
     RecordId last_record_id() const { return last_rid_; }
@@ -56,6 +58,26 @@ private:
     RecordId last_rid_;
     TransactionManager* txn_mgr_;
     Vector<RecordId> skipped_rids_;
+    // Hot-path optimization: pin the current heap page once, keep it pinned
+    // across `next()` calls until we advance to the next page. The previous
+    // code did fetch_page + unpin_page on every emitted tuple, which costs
+    // two latch operations and a hash-table lookup per row.
+    Page* pinned_page_;
+    u16 pinned_num_tuples_;
+    // Cached pre-scan of the current page: bit i is set iff slot i is the
+    // TARGET of a REDIRECT line pointer somewhere on this page. Computing
+    // it once per page replaces the previous O(N²) scan that iterated every
+    // line pointer for every tuple emitted.
+    static constexpr u32 kRedirectBitmapWords = 16;  // 1024 slots max
+    u64 redirect_target_bits_[kRedirectBitmapWords];
+    bool has_redirects_on_page_;
+    // Tracks whether the SSI read tracking is needed at all so we avoid the
+    // virtual function call cost for the common Snapshot-isolation case.
+    bool track_reads_;
+
+    void release_pinned_page();
+    void prepare_page(Page* page);
+    bool is_redirect_target_cached(SlotIdx slot) const;
 };
 
 class ParallelSeqScanExecutor : public Executor {

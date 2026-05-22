@@ -22,16 +22,66 @@ SeqScanExecutor::SeqScanExecutor(BufferPool* pool, HeapFile* heap, const Schema&
       projected_columns_(projected_columns),
       current_page_id_(kNullPageId), current_slot_(0), finished_(false),
       scan_file_id_(0), scan_next_page_num_(0), pages_remaining_(0),
-      last_rid_(), txn_mgr_(txn_mgr) {}
+      last_rid_(), txn_mgr_(txn_mgr),
+      pinned_page_(nullptr), pinned_num_tuples_(0),
+      has_redirects_on_page_(false), track_reads_(false) {
+    for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+}
 
 SeqScanExecutor::SeqScanExecutor(BufferPool* pool, HeapFile* heap, const Schema& schema,
                                  TransactionManager* txn_mgr)
     : SeqScanExecutor(pool, heap, schema, schema, Vector<u32>(), txn_mgr) {}
 
+SeqScanExecutor::~SeqScanExecutor() {
+    // Drop any page still pinned by an aborted iteration (LIMIT, error, etc.)
+    release_pinned_page();
+}
+
+void SeqScanExecutor::release_pinned_page() {
+    if (pinned_page_) {
+        pool_->unpin_page(current_page_id_);
+        pinned_page_ = nullptr;
+        pinned_num_tuples_ = 0;
+        has_redirects_on_page_ = false;
+        for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+    }
+}
+
+// Pre-scan the page once to find all REDIRECT targets; subsequent per-slot
+// checks become O(1) bitmap lookups instead of O(num_tuples). Redirects are
+// rare in INSERT-heavy workloads, so we also cache a fast-path flag.
+void SeqScanExecutor::prepare_page(Page* page) {
+    pinned_page_ = page;
+    pinned_num_tuples_ = page->header()->num_tuples;
+    has_redirects_on_page_ = false;
+    for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+    for (u16 i = 0; i < pinned_num_tuples_; i++) {
+        const LinePointer* lp = page->line_pointer(i);
+        if (lp && lp->is_redirect()) {
+            SlotIdx target = page->redirect_target(i);
+            if (target != kNullSlot && target < (kRedirectBitmapWords * 64)) {
+                redirect_target_bits_[target >> 6] |= (1ULL << (target & 63));
+                has_redirects_on_page_ = true;
+            }
+        }
+    }
+}
+
+bool SeqScanExecutor::is_redirect_target_cached(SlotIdx slot) const {
+    if (!has_redirects_on_page_) return false;
+    if (slot >= (kRedirectBitmapWords * 64)) return false;
+    return (redirect_target_bits_[slot >> 6] >> (slot & 63)) & 1ULL;
+}
+
 void SeqScanExecutor::init() {
+    release_pinned_page();
     PageId first = heap_->first_data_page_id();
     current_slot_ = 0;
     skipped_rids_.clear();
+    // SSI read tracking is only required for Serializable transactions; cache
+    // the decision once at init() so the inner loop skips the per-row check.
+    track_reads_ = txn_mgr_ && txn_mgr_->current() &&
+                   txn_mgr_->current()->isolation() == IsolationLevel::kSerializable;
     if (first == kNullPageId) {
         current_page_id_ = kNullPageId;
         finished_ = true;
@@ -81,7 +131,8 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
         return follow_version_chain(page, target);
     }
     if (!lp->is_valid()) return ExecResult::empty();
-    if (is_redirect_target(page, slot)) return ExecResult::empty();
+    // O(1) bitmap check instead of O(num_tuples) line-pointer scan.
+    if (is_redirect_target_cached(slot)) return ExecResult::empty();
 
     Tuple tuple = Tuple::deserialize_projected_from_page(
         page->data() + lp->offset, storage_schema_, output_schema_,
@@ -99,7 +150,11 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
     // MVCC: Check if current version is visible to current transaction
     if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
         last_rid_ = RecordId(current_page_id_, slot);
-        txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
+        // Skip read tracking entirely for snapshot-isolation transactions
+        // (the call is a no-op internally but still costs a function entry).
+        if (track_reads_) {
+            txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
+        }
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
     }
 
@@ -221,39 +276,44 @@ void SeqScanExecutor::mark_skip_rid(PageId page_id, SlotIdx slot_idx) {
 
 ExecResult SeqScanExecutor::next() {
     while (!finished_) {
-        if (pages_remaining_ == 0) {
-            finished_ = true;
-            break;
-        }
-        auto result = pool_->fetch_page(current_page_id_, true);
-        if (!result.ok()) {
-            pages_remaining_--;
-            scan_next_page_num_++;
+        // Pin the current page once; reuse it across many next() calls until
+        // we exhaust its slots. The previous version did fetch+unpin per emit,
+        // costing two latch ops and a hash lookup per row.
+        if (!pinned_page_) {
             if (pages_remaining_ == 0) {
                 finished_ = true;
-                current_page_id_ = kNullPageId;
-            } else {
-                current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
+                break;
             }
-            continue;
+            auto result = pool_->fetch_page(current_page_id_, true);
+            if (!result.ok()) {
+                pages_remaining_--;
+                scan_next_page_num_++;
+                if (pages_remaining_ == 0) {
+                    finished_ = true;
+                    current_page_id_ = kNullPageId;
+                } else {
+                    current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
+                }
+                continue;
+            }
+            prepare_page(result.value());
+            current_slot_ = 0;
         }
 
-        Page* page = result.value();
-        u16 num_tuples = page->header()->num_tuples;
-
-        while (current_slot_ < num_tuples) {
+        // Emit tuples from the pinned page until we hit one that is visible,
+        // or run out of slots.
+        while (current_slot_ < pinned_num_tuples_) {
             u16 slot = current_slot_;
             current_slot_++;
-
-            ExecResult tr = try_tuple(page, slot);
+            ExecResult tr = try_tuple(pinned_page_, slot);
             if (tr.ok()) {
-                pool_->unpin_page(current_page_id_);
+                // Page stays pinned — caller will come back for more tuples.
                 return tr;
             }
         }
 
-        // Done with this page; advance to the next.
-        pool_->unpin_page(current_page_id_);
+        // Done with this page; advance to the next and drop the pin.
+        release_pinned_page();
         pages_remaining_--;
         current_slot_ = 0;
         scan_next_page_num_++;
@@ -264,7 +324,54 @@ ExecResult SeqScanExecutor::next() {
             current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
         }
     }
+    release_pinned_page();
     return ExecResult::empty();
+}
+
+// fast_count — counts visible tuples without deserializing column data.
+// AggregateExecutor delegates SELECT COUNT(*) to this when projection-free.
+// We only read the per-tuple xmin/xmax header (16 bytes) and the line-pointer
+// type bits, skipping Value/String allocation entirely. With our cached
+// is_visible fast-path this is roughly an order of magnitude faster than the
+// Volcano next() loop for COUNT(*) on large tables.
+bool SeqScanExecutor::fast_count(u64* count) {
+    if (!count) return false;
+    *count = 0;
+    PageId first = heap_->first_data_page_id();
+    if (first == kNullPageId) return true;
+    u32 file_id = file_id_from_page(first);
+    u32 page_num = page_num_from_page(first);
+    u32 pages = heap_->meta().num_data_pages;
+    Transaction* txn = txn_mgr_ ? txn_mgr_->current() : nullptr;
+
+    for (u32 p = 0; p < pages; p++, page_num++) {
+        if (executor_cancelled()) return false;
+        PageId pid = make_page_id(file_id, page_num);
+        auto result = pool_->fetch_page(pid, true);
+        if (!result.ok()) continue;
+        Page* page = result.value();
+        u16 num_tuples = page->header()->num_tuples;
+        for (u16 slot = 0; slot < num_tuples; slot++) {
+            const LinePointer* lp = page->line_pointer(slot);
+            if (!lp || !lp->is_valid()) continue;
+            if (lp->is_redirect()) continue;   // redirects are reached via target slot
+            if (static_cast<u32>(lp->offset) + 16 > kPageSize) continue;
+            // Read only xmin (8B) and xmax (8B); skip rest of the tuple.
+            u64 xmin = 0, xmax = 0;
+            const byte* base = page->data() + lp->offset;
+            std::memcpy(&xmin, base, 8);
+            std::memcpy(&xmax, base + 8, 8);
+            bool visible;
+            if (!txn) {
+                visible = (xmax == kInvalidTxnId);
+            } else {
+                visible = txn_mgr_->is_visible(xmin, xmax, *txn);
+            }
+            if (visible) (*count)++;
+        }
+        pool_->unpin_page(pid);
+    }
+    return true;
 }
 
 const Schema& SeqScanExecutor::output_schema() const { return output_schema_; }

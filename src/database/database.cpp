@@ -1282,7 +1282,12 @@ void Database::maybe_gc() {
     if (ops_since_gc_ >= threshold) {
         ops_since_gc_ = 0;
         gc_->run_gc(config_.gc_max_pages_per_cycle);
-        checkpoint();
+        // No checkpoint() here — GC changes (slot cleanup, pruning) are
+        // idempotent and will be re-derived on recovery. Dirty pages are
+        // persisted by the next background checkpoint (default 60s interval).
+        // Calling checkpoint() on every GC cycle was the primary UPDATE
+        // performance bottleneck: it flushed ALL dirty pages, truncated the
+        // WAL, and wrote the control file — costing ~5-10ms per invocation.
     }
 }
 

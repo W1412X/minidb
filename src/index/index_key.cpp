@@ -73,7 +73,13 @@ bool IndexKey::fits(u32 slot_size) const {
 
 bool IndexKey::encode(byte* slot, u32 slot_size) const {
     if (!slot || !fits(slot_size)) return false;
-    std::memset(slot, 0, slot_size);
+    // Zero only the bytes we actually write + a small tail guard. Zeroing
+    // the full slot_size (128+ bytes) on every encode was measurable overhead
+    // on insert-heavy workloads. The decode path reads payload_size from the
+    // header and stops there, so trailing bytes beyond encoded_size() are
+    // never interpreted.
+    u32 actual = encoded_size();
+    std::memset(slot, 0, actual < slot_size ? actual + 1 : slot_size);
     byte* p = slot;
     u16 magic = kIndexKeyMagic;
     u16 count = static_cast<u16>(values_.size());

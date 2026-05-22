@@ -159,12 +159,19 @@ Transaction* TransactionManager::begin() {
         return nullptr;
     }
 
+    // Single pass: capture both the first free slot AND any currently active
+    // txn ids for our snapshot. The old code walked the slot array twice —
+    // once for each. Doing it in one pass halves the per-begin() work on the
+    // autocommit hot path, where 256 slots are mostly empty.
     TxnSlot* free_slot = nullptr;
+    Vector<u64> active_snapshot;
     for (u32 i = 0; i < txn_slots_.size(); i++) {
-        if (txn_slots_[i].txn_id == kInvalidTxnId || txn_slots_[i].state != TxnState::kActive) {
-            free_slot = &txn_slots_[i];
-            break;
+        const TxnSlot& s = txn_slots_[i];
+        if (s.txn_id == kInvalidTxnId || s.state != TxnState::kActive) {
+            if (!free_slot) free_slot = &txn_slots_[i];
+            continue;
         }
+        active_snapshot.push_back(s.txn_id);
     }
     if (!free_slot) {
         db_->resources().release_transaction();
@@ -173,12 +180,6 @@ Transaction* TransactionManager::begin() {
 
     u64 txn_id = next_txn_id_++;
     u64 snapshot_id = next_txn_id_;  // Snapshot = next ID; all versions committed before snapshot_id are visible
-    Vector<u64> active_snapshot;
-    for (u32 i = 0; i < txn_slots_.size(); i++) {
-        if (txn_slots_[i].txn_id != kInvalidTxnId && txn_slots_[i].state == TxnState::kActive) {
-            active_snapshot.push_back(txn_slots_[i].txn_id);
-        }
-    }
     Transaction* txn = new Transaction(txn_id, snapshot_id,
                                        static_cast<Vector<u64>&&>(active_snapshot));
     txn->set_resource_acquired(true);
@@ -456,28 +457,27 @@ bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
 }
 
 void TransactionManager::record_insert(u32 table_id, const RecordId& rid) {
-    LockGuard guard(latch_);
+    // g_current_txn is thread_local — only the owning thread reads/writes it.
+    // No latch needed; removing it eliminates contention with background GC
+    // threads that acquire latch_ for is_txn_committed() lookups.
     if (g_current_txn) {
         g_current_txn->record_insert(table_id, rid);
     }
 }
 
 void TransactionManager::record_delete(u32 table_id, const RecordId& rid) {
-    LockGuard guard(latch_);
     if (g_current_txn) {
         g_current_txn->record_delete(table_id, rid);
     }
 }
 
 void TransactionManager::record_hot_insert(u32 table_id, const RecordId& rid) {
-    LockGuard guard(latch_);
     if (g_current_txn) {
         g_current_txn->record_hot_insert(table_id, rid);
     }
 }
 
 void TransactionManager::record_hot_delete(u32 table_id, const RecordId& rid) {
-    LockGuard guard(latch_);
     if (g_current_txn) {
         g_current_txn->record_hot_delete(table_id, rid);
     }
@@ -488,14 +488,14 @@ void TransactionManager::record_hot_delete(u32 table_id, const RecordId& rid) {
 // ============================================================
 
 bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) const {
+    // --- Cheap fast-path checks (no latch) ----------------------------------
     if (xmin == kInvalidTxnId) return false;
-
-    // Fast path: frozen tuples are always visible (xmax must be invalid).
-    if (xmin == kFrozenTxnId) {
-        return xmax == kInvalidTxnId;
-    }
+    if (xmin == kFrozenTxnId) return xmax == kInvalidTxnId;
+    if (xmin == txn.id()) return (xmax != txn.id());
 
     auto was_active_in_snapshot = [&](u64 txn_id) -> bool {
+        // active_snapshot is normally small (≤ #concurrent txns), so a linear
+        // scan beats hashing for the common 1-10 entry case.
         const Vector<u64>& snapshot = txn.active_snapshot();
         for (u32 i = 0; i < snapshot.size(); i++) {
             if (snapshot[i] == txn_id) return true;
@@ -503,81 +503,40 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
         return false;
     };
 
-    // Rows inserted by self: visible (unless also deleted by self)
-    if (xmin == txn.id()) {
-        return (xmax != txn.id());
-    }
-
-    // Snapshot both xmin and xmax slot states under the latch to avoid
-    // seeing a recycled slot between the two reads.
-    TxnState xmin_state = TxnState::kActive;
-    bool xmin_found = false;
-    TxnState xmax_state = TxnState::kActive;
-    bool xmax_found = false;
-
-    {
-        LockGuard guard(latch_);
-        for (u32 i = 0; i < txn_slots_.size(); i++) {
-            if (!xmin_found && txn_slots_[i].txn_id == xmin) {
-                xmin_state = txn_slots_[i].state;
-                xmin_found = true;
+    // --- Hot path: xmin precedes our snapshot --------------------------------
+    // When xmin < snapshot_id, the transaction was already either active or
+    // finished at our begin() time. The active set we captured then is
+    // authoritative — no live slot lookup is required. status_log answers any
+    // "was it aborted?" question without holding the manager latch.
+    //
+    // This removes the global latch + O(#slots) linear scan that was hit on
+    // every visible-tuple test, which was the single biggest serialization
+    // point during scans/lookups (5000 rows × ≥1 latch each).
+    if (xmin < txn.snapshot_id()) {
+        if (was_active_in_snapshot(xmin)) return false;
+        if (status_log_) {
+            TxnFinalState s;
+            if (status_log_->status(xmin, &s) && s == TxnFinalState::kAborted) {
+                return false;
             }
-            if (!xmax_found && xmax != kInvalidTxnId && txn_slots_[i].txn_id == xmax) {
-                xmax_state = txn_slots_[i].state;
-                xmax_found = true;
+        }
+        // xmin is committed from our snapshot's perspective.
+        if (xmax == kInvalidTxnId) return true;
+        if (xmax == txn.id()) return false;
+        if (xmax >= txn.snapshot_id()) return true;        // delete after we began
+        if (was_active_in_snapshot(xmax)) return true;     // delete still pending
+        if (status_log_) {
+            TxnFinalState xs;
+            if (status_log_->status(xmax, &xs) && xs == TxnFinalState::kAborted) {
+                return true;                               // delete rolled back
             }
-            if (xmin_found && (xmax_found || xmax == kInvalidTxnId)) break;
         }
+        return false;                                       // delete committed
     }
 
-    // Rule 1: xmin must be committed (not active and not aborted).
-    if (xmin_found) {
-        if (xmin_state == TxnState::kActive) return false;   // not committed
-        if (xmin_state == TxnState::kAborted) return false;  // rolled back
-    } else if (status_log_) {
-        // Slot recycled: ask the persistent CLOG (A1). A recorded ABORTED
-        // means we must not surface the tuple even though its xmin slot
-        // is gone — closing the "recycled slot defaults to committed" hole.
-        TxnFinalState s;
-        if (status_log_->status(xmin, &s) && s == TxnFinalState::kAborted) {
-            return false;
-        }
-    }
-    // If the slot was recycled (txn_id reused by a newer txn) xmin_found is
-    // false here and neither the CLOG nor the snapshot mark it aborted —
-    // safe to treat as a long-since-committed transaction.
-    if (was_active_in_snapshot(xmin)) return false;
-
-    // Rule 1b: xmin must precede T's snapshot id.
-    if (xmin >= txn.snapshot_id()) return false;
-
-    // Rule 2: xmax checks.
-    if (xmax == kInvalidTxnId) return true;  // not deleted
-
-    if (xmax == txn.id()) return false;
-
-    if (xmax_found) {
-        if (xmax_state == TxnState::kActive) return true;   // delete not committed
-        if (xmax_state == TxnState::kAborted) return true;  // delete rolled back -> treat as not deleted
-    } else if (status_log_) {
-        // Slot recycled: ask the persistent CLOG (A1). A recorded ABORTED
-        // means the delete was rolled back — row is still live. If NOT
-        // found or COMMITTED, the deleter finished long ago and we must
-        // continue to the snapshot checks below. Without this, a recycled
-        // xmax slot defaulted to "not deleted", surfacing already-deleted
-        // rows when the deleter's slot was reused.
-        TxnFinalState xs;
-        if (status_log_->status(xmax, &xs) && xs == TxnFinalState::kAborted) {
-            return true;   // delete rolled back
-        }
-        // COMMITTED or not-found: fall through to snapshot checks.
-    }
-
-    if (was_active_in_snapshot(xmax)) return true;
-
-    if (xmax >= txn.snapshot_id()) return true;  // delete committed after T started
-
-    return false;  // deleted, and the delete is visible in T's snapshot
+    // --- xmin >= snapshot_id: definitely not visible to us. -----------------
+    // (Future txns can't be visible to an older snapshot under SI.)
+    return false;
 }
 
 bool TransactionManager::is_txn_committed(u64 txn_id) const {
