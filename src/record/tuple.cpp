@@ -281,30 +281,54 @@ Tuple Tuple::deserialize_projected_from_page(const byte* buf,
     const byte* bitmap = buf;
     buf += bitmap_size;
 
+    // Build a direct source-col -> output-pos map up front (O(K) once) so the
+    // per-column needed/output-pos lookup inside the hot decode loop is O(1)
+    // instead of O(K) via column_projected(). For tables with N columns and
+    // K projected columns, this turns the loop's total work from O(N×K)
+    // into O(N+K). Stack-allocated, no heap allocation in the hot path.
+    static constexpr u32 kMaxStackMap = 128;
+    i32 stack_map[kMaxStackMap];
+    Vector<i32> heap_map;
+    i32* source_to_output = nullptr;
+    if (num_cols <= kMaxStackMap) {
+        source_to_output = stack_map;
+    } else {
+        heap_map.resize(num_cols);
+        source_to_output = heap_map.data();
+    }
+    for (u32 i = 0; i < num_cols; i++) source_to_output[i] = -1;
+    for (u32 i = 0; i < projected_columns.size(); i++) {
+        u32 src = projected_columns[i];
+        if (src < num_cols) source_to_output[src] = static_cast<i32>(i);
+    }
+
     tuple.values_.clear();
+    tuple.values_.reserve(projected_columns.size());
     for (u32 i = 0; i < projected_columns.size(); i++) tuple.values_.push_back(Value());
 
     for (u32 i = 0; i < num_cols; i++) {
-        u32 out_pos = 0;
-        bool needed = column_projected(i, projected_columns, &out_pos);
+        i32 out_pos = source_to_output[i];
+        bool needed = out_pos >= 0;
         bool is_null_col = (bitmap[i / 8] & (1 << (i % 8))) != 0;
         if (is_null_col) {
-            if (needed && out_pos < tuple.values_.size()) tuple.values_[out_pos] = Value();
+            // Already initialised to NULL when we filled values_ with Value().
             continue;
         }
-        if (needed && out_pos < tuple.values_.size()) {
+        if (needed) {
             Value val;
             if (!read_value_bounded(buf, end, &val)) {
                 tuple.values_.clear();
                 return tuple;
             }
-            tuple.values_[out_pos] = static_cast<Value&&>(val);
+            tuple.values_[static_cast<u32>(out_pos)] = static_cast<Value&&>(val);
         } else if (!skip_value_bounded(buf, end)) {
             tuple.values_.clear();
             return tuple;
         }
     }
 
+    // Pad any projected columns past the stored num_cols with the source
+    // schema's defaults (handles ADD COLUMN backfill).
     for (u32 i = 0; i < projected_columns.size(); i++) {
         u32 source_col = projected_columns[i];
         if (source_col < num_cols || source_col >= source_schema.column_count()) continue;

@@ -72,17 +72,26 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             TableEntry* table = db_.catalog().get_table(scan_plan->table_id);
             const Schema& storage_schema = table ? table->schema : scan_plan->output_schema;
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
+            // ParallelSeqScan currently emits all rows up-front into a buffer
+            // and has no predicate evaluation, so we only take that path when
+            // there's no pushed-down filter.
             if (!tm && db_.config().enable_parallel_seqscan &&
                 scan_plan->projected_columns.empty() &&
+                !scan_plan->pushed_predicate &&
                 db_.config().parallel_workers > 1 &&
                 heap->meta().num_data_pages >= db_.config().parallel_workers * 4) {
                 return UniquePtr<Executor>(new ParallelSeqScanExecutor(
                     &db_.pool(), heap, scan_plan->output_schema,
                     db_.config().parallel_workers));
             }
-            return UniquePtr<Executor>(new SeqScanExecutor(
+            auto exec = UniquePtr<SeqScanExecutor>(new SeqScanExecutor(
                 &db_.pool(), heap, storage_schema, scan_plan->output_schema,
                 scan_plan->projected_columns, tm));
+            if (scan_plan->pushed_predicate) {
+                auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
+                if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
+            }
+            return UniquePtr<Executor>(exec.release());
         }
 
         case PlanNodeType::kIndexScan: {
@@ -91,10 +100,15 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!heap || !index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
-            return UniquePtr<Executor>(new IndexScanExecutor(
+            auto exec = UniquePtr<IndexScanExecutor>(new IndexScanExecutor(
                 &db_.pool(), heap, index, scan_plan->search_key,
                 scan_plan->is_range, scan_plan->range_high,
                 scan_plan->output_schema, tm));
+            if (scan_plan->pushed_predicate) {
+                auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
+                if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
+            }
+            return UniquePtr<Executor>(exec.release());
         }
 
         case PlanNodeType::kIndexOnlyScan: {

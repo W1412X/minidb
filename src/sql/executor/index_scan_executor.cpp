@@ -1,4 +1,6 @@
 #include "sql/executor/index_scan_executor.h"
+#include "sql/executor/expression_evaluator.h"
+#include "sql/parser/ast.h"
 #include "transaction/transaction.h"
 #include <cstring>
 
@@ -23,6 +25,11 @@ IndexScanExecutor::~IndexScanExecutor() {
     }
 }
 
+void IndexScanExecutor::set_pushed_predicate(UniquePtr<Expression> pred) {
+    pushed_predicate_ = static_cast<UniquePtr<Expression>&&>(pred);
+    pushed_compile_ok_ = false;
+}
+
 void IndexScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
     scan_slot_idx_ = 0;
@@ -33,6 +40,12 @@ void IndexScanExecutor::init() {
         pool_->unpin_page(cached_heap_page_id_);
         cached_heap_page_ = nullptr;
         cached_heap_page_id_ = kNullPageId;
+    }
+    if (pushed_predicate_) {
+        pushed_compile_ok_ = compiled_pushed_.compile(pushed_predicate_.get(),
+                                                       output_schema_);
+    } else {
+        pushed_compile_ok_ = false;
     }
 }
 
@@ -204,6 +217,23 @@ ExecResult IndexScanExecutor::next() {
             VersionResult vr = follow_version_chain(pool_, txn_mgr_, page, visible_slot,
                                                      output_schema_);
             if (vr.tuple.column_count() > 0) {
+                // Apply pushed-down residual predicate inline. Rejected rows
+                // never cross the operator boundary, saving a result move.
+                if (pushed_predicate_) {
+                    bool pass;
+                    if (pushed_compile_ok_) {
+                        pass = compiled_pushed_.passes(vr.tuple);
+                    } else {
+                        Value cond;
+                        if (!ExpressionEvaluator::fast_evaluate(*pushed_predicate_,
+                                                                 vr.tuple, &cond)) {
+                            cond = ExpressionEvaluator::evaluate(*pushed_predicate_,
+                                                                  vr.tuple);
+                        }
+                        pass = !cond.is_null() && cond.get_bool();
+                    }
+                    if (!pass) continue;
+                }
                 last_rid_ = vr.rid;
                 if (track_reads) {
                     txn_mgr_->current()->record_read(table_id_, last_rid_);

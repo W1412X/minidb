@@ -1,14 +1,18 @@
 /**
  * @file filter.h / .cpp
- * @brief Filter Executor
+ * @brief Filter Executor — applies a WHERE predicate over a child iterator.
+ *
+ * The compiled stack-machine that evaluates the predicate lives in
+ * CompiledPredicate so the same engine is reused for filter pushdown
+ * inside scan operators.
  */
 #pragma once
 
 #include "sql/executor/executor.h"
+#include "sql/executor/compiled_predicate.h"
 #include "container/unique_ptr.h"
 #include "record/schema.h"
 #include "record/value.h"
-#include <vector>
 
 namespace minidb {
 
@@ -25,27 +29,9 @@ public:
     Executor* child() const { return child_.get(); }
 
 private:
-    struct CompiledNode {
-        enum class Kind { kLiteral, kColumn, kCompare, kAnd, kOr, kNot, kIsNull, kIsNotNull };
-        Kind kind;
-        Value literal;
-        u32 column_idx = 0;
-        String op;
-        int left = -1;
-        int right = -1;
-    };
-
-    int compile_expr(const Expression* expr, const Schema& schema);
-    bool eval_compiled(const Tuple& tuple, Value* out) const;
-
     UniquePtr<Executor> child_;
     UniquePtr<Expression> predicate_;
-    std::vector<CompiledNode> compiled_nodes_;
-    int compiled_root_ = -1;
-    // Pre-allocated evaluation stack reused across every `next()` call.
-    // The old code re-allocated `std::vector<Value>(N)` on every row,
-    // which dominated CPU time in selective scans.
-    mutable std::vector<Value> eval_stack_;
+    CompiledPredicate compiled_;
 };
 
 } // namespace minidb

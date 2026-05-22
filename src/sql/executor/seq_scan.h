@@ -5,6 +5,8 @@
 #pragma once
 
 #include "sql/executor/executor.h"
+#include "sql/executor/compiled_predicate.h"
+#include "container/unique_ptr.h"
 #include "storage/buffer_pool.h"
 #include "storage/heap_file.h"
 #include "index/btree.h"
@@ -15,6 +17,7 @@ namespace minidb {
 
 class TransactionManager;
 class Transaction;
+struct Expression;
 
 class SeqScanExecutor : public Executor {
 public:
@@ -28,6 +31,11 @@ public:
     ExecResult next() override;
     bool fast_count(u64* count) override;
     const Schema& output_schema() const override;
+
+    // Install a pushed-down WHERE predicate. The scan owns the AST and
+    // evaluates it inline on each visible tuple; rows failing the predicate
+    // never leave the scan operator. Pass `nullptr` to clear.
+    void set_pushed_predicate(UniquePtr<Expression> pred);
 
     RecordId last_record_id() const { return last_rid_; }
     bool last_record_id(RecordId* rid) const override {
@@ -78,6 +86,15 @@ private:
     void release_pinned_page();
     void prepare_page(Page* page);
     bool is_redirect_target_cached(SlotIdx slot) const;
+
+    // Pushed-down WHERE predicate. When `pushed_predicate_` is non-null, the
+    // scan evaluates it against every visible tuple and skips emission for
+    // rows that fail. Keeping the filter inside the scan avoids the
+    // per-row ExecResult move + virtual-call boundary that a separate
+    // FilterExecutor would impose.
+    UniquePtr<Expression> pushed_predicate_;
+    CompiledPredicate compiled_pushed_;
+    bool pushed_compile_ok_ = false;
 };
 
 class ParallelSeqScanExecutor : public Executor {

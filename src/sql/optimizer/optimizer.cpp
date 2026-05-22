@@ -4,6 +4,29 @@
 
 namespace minidb {
 
+// Walk an expression AST looking for a subquery node. Used to decide whether
+// a Filter predicate is safe to push down into a scan operator — predicates
+// that reference subqueries need the FilterPlan node so the ExecutorFactory
+// can wire the inner plan (SubqueryInExecutor, scalar-subquery materialisation).
+static bool expr_contains_subquery(const Expression* expr) {
+    if (!expr) return false;
+    if (expr->type == ExprType::kSubquery) return true;
+    if (expr->type == ExprType::kBinaryOp &&
+        (expr->op == "IN_SUBQUERY" || expr->op == "NOT_IN_SUBQUERY" ||
+         expr->op == "EXISTS" || expr->op == "NOT_EXISTS")) {
+        return true;
+    }
+    if (expr->left && expr_contains_subquery(expr->left.get())) return true;
+    if (expr->right && expr_contains_subquery(expr->right.get())) return true;
+    if (expr->child && expr_contains_subquery(expr->child.get())) return true;
+    for (u32 i = 0; i < expr->when_clauses.size(); i++) {
+        if (expr_contains_subquery(expr->when_clauses[i].first.get())) return true;
+        if (expr_contains_subquery(expr->when_clauses[i].second.get())) return true;
+    }
+    if (expr->else_expr && expr_contains_subquery(expr->else_expr.get())) return true;
+    return false;
+}
+
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
@@ -168,14 +191,25 @@ static bool extract_index_range_predicate(const Expression* expr, const Schema& 
             *covers_whole_expr = left_inc && right_inc;
             return true;
         }
-        // Recurse into children if they are also AND
+        // Recurse into children if they are also AND. CRITICAL: when we
+        // descend into a child AND we are matching only a sub-portion of the
+        // original predicate — the outer AND has at least one other conjunct
+        // (the sibling we didn't recurse into) that the chosen index range
+        // does NOT cover. Force `covers_whole_expr` to false so the caller
+        // keeps a residual Filter (or pushed predicate) above the IndexScan.
+        // The previous bug was: a query like
+        //     WHERE (id >= 2 AND id <= 4) AND v < 350
+        // matched the inner BETWEEN, set covers_whole_expr=true via the
+        // inner call, and silently dropped the `v < 350` conjunct.
         if (expr->left && expr->left->type == ExprType::kBinaryOp && expr->left->op == "AND") {
             if (extract_index_range_predicate(expr->left.get(), schema, column_idx, low, high, covers_whole_expr)) {
+                *covers_whole_expr = false;
                 return true;
             }
         }
         if (expr->right && expr->right->type == ExprType::kBinaryOp && expr->right->op == "AND") {
             if (extract_index_range_predicate(expr->right.get(), schema, column_idx, low, high, covers_whole_expr)) {
+                *covers_whole_expr = false;
                 return true;
             }
         }
@@ -481,6 +515,25 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
             p->child = optimize_node(static_cast<UniquePtr<PlanNode>&&>(p->child));
             if (p->child && p->child->type == PlanNodeType::kSeqScan) {
                 auto* scan = static_cast<SeqScanPlan*>(p->child.get());
+                // If the underlying scan already absorbed a Filter via
+                // pushed_predicate, projection pushdown that drops columns
+                // referenced by the predicate would break correctness — the
+                // scan would try to evaluate the predicate against a tuple
+                // whose Value slots don't include those columns. Resolve by
+                // un-pushing the predicate: wrap the scan back into a Filter
+                // and drop straight to the existing pipeline (Project → Filter
+                // → SeqScan). The Filter then runs above the projected tuple,
+                // which keeps the predicate's columns in scope. We lose the
+                // pushdown for this one query shape, but no correctness gap.
+                if (scan->pushed_predicate) {
+                    auto unwrap = make_unique<FilterPlan>();
+                    unwrap->predicate = UniquePtr<Expression>(scan->pushed_predicate.release());
+                    unwrap->output_schema = scan->output_schema;
+                    estimate_unary(unwrap.get(), scan, 0.5, 0.02);
+                    unwrap->child = UniquePtr<PlanNode>(p->child.release());
+                    p->child = UniquePtr<PlanNode>(unwrap.release());
+                    break;   // re-enter normal Project handling on next visit
+                }
                 Vector<u32> projected;
                 bool simple_columns = p->output_schema.column_count() > 0;
                 if (p->expressions.empty()) {
@@ -961,6 +1014,63 @@ UniquePtr<PlanNode> Optimizer::optimize_filter(UniquePtr<FilterPlan> filter) {
     double selectivity = estimate_selectivity(filter->predicate.get(), filter_table_id);
     estimate_unary(filter.get(), filter->child.get(), selectivity, 0.02);
     filter->optimizer_note = "predicate filter";
+
+    // Filter pushdown: when the residual filter sits directly on top of a
+    // SeqScan or IndexScan, fold its predicate into the scan's
+    // `pushed_predicate` and drop the Filter node entirely. The scan then
+    // evaluates the predicate inline on the visible tuple, eliminating the
+    // per-row ExecResult move + virtual-call boundary that a separate
+    // Filter operator imposes. Index range bounds chosen above are kept;
+    // the residual predicate covers conjuncts the range couldn't capture.
+    //
+    // Caveats:
+    //   - Predicates containing subqueries (IN/NOT IN/scalar) are NOT pushed
+    //     down — the SubqueryInExecutor path in the ExecutorFactory needs to
+    //     see them as a FilterPlan to wire the inner plan correctly. The
+    //     scalar-subquery materialisation runs at executor-build time and
+    //     also expects a FilterPlan parent.
+    if (filter->child && filter->child->type == PlanNodeType::kSeqScan &&
+        !expr_contains_subquery(filter->predicate.get())) {
+        auto* scan = static_cast<SeqScanPlan*>(filter->child.get());
+        if (!scan->pushed_predicate) {
+            scan->pushed_predicate = UniquePtr<Expression>(filter->predicate->clone());
+        } else {
+            // Combine existing pushdown with the new conjunct under AND.
+            auto combined = make_unique<Expression>();
+            combined->type = ExprType::kBinaryOp;
+            combined->op = "AND";
+            combined->left = UniquePtr<Expression>(scan->pushed_predicate.release());
+            combined->right = UniquePtr<Expression>(filter->predicate->clone());
+            scan->pushed_predicate = UniquePtr<Expression>(combined.release());
+        }
+        scan->output_schema = filter->output_schema;
+        scan->plan_rows = filter->plan_rows;
+        scan->startup_cost = filter->startup_cost;
+        scan->total_cost = filter->total_cost;
+        scan->optimizer_note = "sequential scan with pushed predicate";
+        return UniquePtr<PlanNode>(filter->child.release());
+    }
+    if (filter->child && filter->child->type == PlanNodeType::kIndexScan &&
+        !expr_contains_subquery(filter->predicate.get())) {
+        auto* scan = static_cast<IndexScanPlan*>(filter->child.get());
+        if (!scan->pushed_predicate) {
+            scan->pushed_predicate = UniquePtr<Expression>(filter->predicate->clone());
+        } else {
+            auto combined = make_unique<Expression>();
+            combined->type = ExprType::kBinaryOp;
+            combined->op = "AND";
+            combined->left = UniquePtr<Expression>(scan->pushed_predicate.release());
+            combined->right = UniquePtr<Expression>(filter->predicate->clone());
+            scan->pushed_predicate = UniquePtr<Expression>(combined.release());
+        }
+        scan->output_schema = filter->output_schema;
+        scan->plan_rows = filter->plan_rows;
+        scan->startup_cost = filter->startup_cost;
+        scan->total_cost = filter->total_cost;
+        scan->optimizer_note = "btree scan with pushed residual predicate";
+        return UniquePtr<PlanNode>(filter->child.release());
+    }
+
     return UniquePtr<PlanNode>(filter.release());
 }
 

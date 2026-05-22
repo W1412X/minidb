@@ -5,6 +5,8 @@
 #pragma once
 
 #include "sql/executor/executor.h"
+#include "sql/executor/compiled_predicate.h"
+#include "container/unique_ptr.h"
 #include "storage/buffer_pool.h"
 #include "storage/heap_file.h"
 #include "index/btree.h"
@@ -13,6 +15,7 @@
 namespace minidb {
 
 class TransactionManager;
+struct Expression;
 
 class IndexScanExecutor : public Executor {
 public:
@@ -25,6 +28,11 @@ public:
     ExecResult next() override;
     const Schema& output_schema() const override;
     bool last_record_id(RecordId* rid) const override;
+
+    // Pushed-down residual predicate (the portion of WHERE that the index
+    // range alone cannot satisfy). Evaluated inline so non-matching rows
+    // never cross the operator boundary.
+    void set_pushed_predicate(UniquePtr<Expression> pred);
 
 private:
     BufferPool* pool_;
@@ -45,6 +53,9 @@ private:
     // page in a run; reusing the pin saves a fetch/unpin pair per row.
     PageId cached_heap_page_id_;
     Page* cached_heap_page_;
+    UniquePtr<Expression> pushed_predicate_;
+    CompiledPredicate compiled_pushed_;
+    bool pushed_compile_ok_ = false;
 };
 
 class IndexOnlyScanExecutor : public Executor {

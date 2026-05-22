@@ -5,6 +5,8 @@
 #include "sql/executor/seq_scan.h"
 #include "sql/executor/filter.h"
 #include "sql/executor/project.h"
+#include "sql/executor/expression_evaluator.h"
+#include "sql/parser/ast.h"
 #include "record/tuple.h"
 #include "transaction/transaction.h"
 #include <cstring>
@@ -73,6 +75,11 @@ bool SeqScanExecutor::is_redirect_target_cached(SlotIdx slot) const {
     return (redirect_target_bits_[slot >> 6] >> (slot & 63)) & 1ULL;
 }
 
+void SeqScanExecutor::set_pushed_predicate(UniquePtr<Expression> pred) {
+    pushed_predicate_ = static_cast<UniquePtr<Expression>&&>(pred);
+    pushed_compile_ok_ = false;   // re-compile on next init()
+}
+
 void SeqScanExecutor::init() {
     release_pinned_page();
     PageId first = heap_->first_data_page_id();
@@ -82,6 +89,15 @@ void SeqScanExecutor::init() {
     // the decision once at init() so the inner loop skips the per-row check.
     track_reads_ = txn_mgr_ && txn_mgr_->current() &&
                    txn_mgr_->current()->isolation() == IsolationLevel::kSerializable;
+    // (Re-)compile pushed predicate against the output schema. We compile
+    // against output_schema_ because the predicate has already been
+    // rewritten by the planner to reference the columns this scan emits.
+    if (pushed_predicate_) {
+        pushed_compile_ok_ = compiled_pushed_.compile(pushed_predicate_.get(),
+                                                       output_schema_);
+    } else {
+        pushed_compile_ok_ = false;
+    }
     if (first == kNullPageId) {
         current_page_id_ = kNullPageId;
         finished_ = true;
@@ -300,16 +316,32 @@ ExecResult SeqScanExecutor::next() {
             current_slot_ = 0;
         }
 
-        // Emit tuples from the pinned page until we hit one that is visible,
-        // or run out of slots.
+        // Emit tuples from the pinned page until we hit one that is visible
+        // AND satisfies the pushed-down predicate (if any). Filter pushdown:
+        // a row that fails the predicate never crosses this operator boundary.
         while (current_slot_ < pinned_num_tuples_) {
             u16 slot = current_slot_;
             current_slot_++;
             ExecResult tr = try_tuple(pinned_page_, slot);
-            if (tr.ok()) {
-                // Page stays pinned — caller will come back for more tuples.
-                return tr;
+            if (!tr.ok()) continue;
+
+            if (pushed_predicate_) {
+                bool pass;
+                if (pushed_compile_ok_) {
+                    pass = compiled_pushed_.passes(tr.tuple);
+                } else {
+                    Value cond;
+                    if (!ExpressionEvaluator::fast_evaluate(*pushed_predicate_,
+                                                             tr.tuple, &cond)) {
+                        cond = ExpressionEvaluator::evaluate(*pushed_predicate_,
+                                                              tr.tuple);
+                    }
+                    pass = !cond.is_null() && cond.get_bool();
+                }
+                if (!pass) continue;
             }
+            // Page stays pinned — caller will come back for more tuples.
+            return tr;
         }
 
         // Done with this page; advance to the next and drop the pin.
@@ -336,6 +368,10 @@ ExecResult SeqScanExecutor::next() {
 // Volcano next() loop for COUNT(*) on large tables.
 bool SeqScanExecutor::fast_count(u64* count) {
     if (!count) return false;
+    // Fast count is only valid when the scan emits EVERY visible row.
+    // A pushed-down predicate filters rows; falling back to the regular
+    // next() loop keeps the count correct.
+    if (pushed_predicate_) return false;
     *count = 0;
     PageId first = heap_->first_data_page_id();
     if (first == kNullPageId) return true;

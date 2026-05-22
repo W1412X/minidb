@@ -75,10 +75,13 @@ require_contains 'Update
 require_contains 'Delete
   IndexScan table=t index=1000 key=4' "$out"
 require_contains 'IndexScan table=t index=1002 key=30' "$out"
-require_contains 'Filter
-  SeqScan table=t' "$out"
-require_contains 'Filter
-  IndexScan table=t index=1000 key=3' "$out"
+# Filter is now pushed directly into the scan operator — the executor pipeline
+# no longer instantiates a separate FilterExecutor when the predicate sits
+# atop a SeqScan/IndexScan. EXPLAIN still surfaces the predicate via the
+# `Filter=pushed` annotation on the scan line.
+require_contains 'SeqScan table=t' "$out"
+require_contains 'Filter=pushed' "$out"
+require_contains 'IndexScan table=t index=1000 key=3' "$out"
 require_contains 'HashJoin cost=' "$out"
 require_contains '2 | b | 20' "$out"
 require_contains '4 | 40' "$out"
