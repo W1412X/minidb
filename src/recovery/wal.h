@@ -26,6 +26,13 @@ enum class WalType : u16 {
     kPageAlloc   = 20,
     kCheckpoint  = 30,
     kDdl         = 40,    // DDL audit marker, see DdlOp below
+    // Compensating log records emitted during statement-level savepoint
+    // rollback. They tell recovery to undo a specific INSERT or DELETE
+    // record that was applied earlier in the same transaction. Without
+    // these, recovery would re-do the original INSERT/DELETE even though
+    // the statement that produced it was rolled back in memory.
+    kSavepointUndoInsert = 50,   // payload: u32 table_id | u64 page_id | u16 slot_idx
+    kSavepointUndoDelete = 51,   // same payload — undoes a prior xmax stamp
 };
 
 // DDL operations that produce a kDdl record. The marker is purely an
@@ -78,6 +85,13 @@ public:
                    const byte* new_data, u16 size);
     u64 log_index_insert(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
     u64 log_index_delete(u64 txn_id, u32 index_id, const Value& key, const RecordId& rid);
+    // Statement-level savepoint compensating records. Written when an
+    // explicit-transaction statement bails out partway and its in-memory
+    // writes are rolled back. Recovery re-applies the original WAL
+    // record AND then this compensating record, leaving the heap in the
+    // same shape that the live database has at commit time.
+    u64 log_savepoint_undo_insert(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx);
+    u64 log_savepoint_undo_delete(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slot_idx);
     // Emit a kDdl audit record. `object_name` is the table/index/column
     // affected by the operation; `aux` carries a secondary identifier
     // (the column index for ALTER, the index id for CREATE/DROP INDEX,

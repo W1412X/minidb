@@ -105,6 +105,8 @@ add_test(NAME index_heap_atomic
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/index_heap_atomic.py $<TARGET_FILE:minidb> --seed 12648441)
 add_test(NAME clog_status_log
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/clog_status_log.py $<TARGET_FILE:minidb> --seed 12648450)
+add_test(NAME statement_savepoint
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/statement_savepoint.py $<TARGET_FILE:minidb> --seed 12648451)
 add_test(NAME constraints_not_null_default
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/consistency/constraints_not_null_default.py $<TARGET_FILE:minidb> --seed 12648437)
 add_test(NAME post_recovery_verify

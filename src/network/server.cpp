@@ -275,6 +275,14 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2). In an explicit transaction
+    // we record where the undo log currently ends; on executor error
+    // we roll back to that point so the rest of the transaction stays
+    // alive and the user can recover with a follow-up statement.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
     const Schema& out = exec->output_schema();
     auto deadline = std::chrono::steady_clock::now() +
@@ -315,12 +323,22 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
     }
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         return String("Error: ") + executor_error() + "\n";
     }
 
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         return String("Error: statement timeout.\n");
     }
 
@@ -1074,6 +1092,14 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2). In an explicit transaction
+    // we record where the undo log currently ends; on executor error
+    // we roll back to that point so the rest of the transaction stays
+    // alive and the user can recover with a follow-up statement.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
     const Schema& out = exec->output_schema();
     auto deadline = std::chrono::steady_clock::now() +
@@ -1120,13 +1146,23 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
     }
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         send_str(String("Error: ") + executor_error() + "\n");
         return row_count;
     }
 
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         send_str("Error: statement timeout.\n");
         return row_count;
     }

@@ -263,6 +263,34 @@ u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const Value& key, con
     return lsn;
 }
 
+u64 WalManager::log_savepoint_undo_insert(u64 txn_id, u32 table_id,
+                                          PageId page_id, SlotIdx slot_idx) {
+    struct __attribute__((packed)) Payload {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+    } p;
+    p.table_id = table_id;
+    p.page_id = page_id;
+    p.slot_idx = slot_idx;
+    return write_record(WalType::kSavepointUndoInsert, txn_id,
+                        reinterpret_cast<byte*>(&p), sizeof(p));
+}
+
+u64 WalManager::log_savepoint_undo_delete(u64 txn_id, u32 table_id,
+                                          PageId page_id, SlotIdx slot_idx) {
+    struct __attribute__((packed)) Payload {
+        u32 table_id;
+        u64 page_id;
+        u16 slot_idx;
+    } p;
+    p.table_id = table_id;
+    p.page_id = page_id;
+    p.slot_idx = slot_idx;
+    return write_record(WalType::kSavepointUndoDelete, txn_id,
+                        reinterpret_cast<byte*>(&p), sizeof(p));
+}
+
 u64 WalManager::log_ddl(DdlOp op, u32 table_id, u32 aux, const String& object_name) {
     struct __attribute__((packed)) DdlHdr {
         u8  op;
@@ -550,7 +578,35 @@ bool WalManager::recover(Database* db) {
             bool is_data_record = hdr.type == WalType::kInsert ||
                                   hdr.type == WalType::kDelete ||
                                   hdr.type == WalType::kUpdate;
-            if (!is_data_record) {
+            bool is_savepoint_undo =
+                hdr.type == WalType::kSavepointUndoInsert ||
+                hdr.type == WalType::kSavepointUndoDelete;
+            if (!is_data_record && !is_savepoint_undo) {
+                continue;
+            }
+            // Statement-level savepoint compensation. Applied unconditionally
+            // — the recorded RID's earlier kInsert/kDelete was already redone
+            // above, so we now undo it the same way the live database did at
+            // savepoint-rollback time. No-op if the redo was skipped via the
+            // page_lsn check (idempotent).
+            if (is_savepoint_undo) {
+                struct __attribute__((packed)) SpHdr {
+                    u32 table_id;
+                    u64 page_id;
+                    u16 slot_idx;
+                };
+                if (data.size() < sizeof(SpHdr)) continue;
+                SpHdr sp;
+                std::memcpy(&sp, data.data(), sizeof(sp));
+                HeapFile* heap = db->get_heap_file(sp.table_id);
+                if (heap) {
+                    if (hdr.type == WalType::kSavepointUndoInsert) {
+                        heap->rollback_insert(sp.page_id, sp.slot_idx, hdr.lsn);
+                    } else {
+                        heap->rollback_delete(sp.page_id, sp.slot_idx, hdr.lsn);
+                    }
+                    needs_index_rebuild = true;
+                }
                 continue;
             }
             const bool* is_committed = committed.find(hdr.txn_id);

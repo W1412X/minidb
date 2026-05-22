@@ -62,6 +62,13 @@ public:
     void record_hot_insert(u32 table_id, const RecordId& rid);
     void record_hot_delete(u32 table_id, const RecordId& rid);
 
+    // Mark a point in the undo log that the statement-level rollback can
+    // restore. Returns the current undo log length.
+    u32 undo_mark() const { return undo_records_.size(); }
+    // Drop undo records past `mark`. Used by rollback_to_savepoint after
+    // it has applied them in reverse.
+    void truncate_undo(u32 mark);
+
 private:
     u64 txn_id_;
     u64 snapshot_id_;
@@ -81,6 +88,11 @@ public:
     Transaction* begin();
     bool commit(Transaction* txn);
     bool rollback(Transaction* txn);
+    // Undo every change recorded after `mark` in the txn's undo log, in
+    // reverse order, then truncate the log back to that point. The
+    // transaction stays ACTIVE — this is the engine behind statement-
+    // level atomicity inside an explicit BEGIN..COMMIT.
+    bool rollback_to_savepoint(Transaction* txn, u32 mark);
     void record_insert(u32 table_id, const RecordId& rid);
     void record_delete(u32 table_id, const RecordId& rid);
     void record_hot_insert(u32 table_id, const RecordId& rid);

@@ -701,6 +701,14 @@ void REPL::execute_sql(const String& sql) {
                                : db_.config().statement_timeout_ms;
     clear_executor_error();
     set_executor_deadline_ms(effective_timeout_ms);
+
+    // Statement-level savepoint (ACID A2): record where the undo log is
+    // right now so a mid-statement error inside an explicit transaction
+    // rolls back only this statement's writes. Implicit-txn errors fall
+    // through to the existing full rollback below.
+    bool savepoint_active = !implicit_txn && db_.txn_manager().current();
+    u32 savepoint_mark = savepoint_active ? db_.txn_manager().current()->undo_mark() : 0;
+
     exec->init();
 
     const Schema& out = exec->output_schema();
@@ -738,12 +746,22 @@ void REPL::execute_sql(const String& sql) {
         std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count()) / 1000.0;
 
     if (executor_error()) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         printf("Error: %s\n\n", executor_error());
         return;
     }
     if (timed_out) {
-        if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (implicit_txn) {
+            db_.txn_manager().rollback(db_.txn_manager().current());
+        } else if (savepoint_active) {
+            db_.txn_manager().rollback_to_savepoint(
+                db_.txn_manager().current(), savepoint_mark);
+        }
         printf("Error: statement timeout.\n\n");
         return;
     }

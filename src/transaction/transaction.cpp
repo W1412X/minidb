@@ -48,6 +48,12 @@ void Transaction::record_hot_delete(u32 table_id, const RecordId& rid) {
     undo_records_.push_back(rec);
 }
 
+void Transaction::truncate_undo(u32 mark) {
+    while (undo_records_.size() > mark) {
+        undo_records_.pop_back();
+    }
+}
+
 TransactionManager::TransactionManager(Database* db)
     : db_(db), next_txn_id_(1) {
     u32 slots = db ? db->config().max_active_transactions : 256;
@@ -207,6 +213,53 @@ bool TransactionManager::commit(Transaction* txn) {
     return true;
 }
 
+// Apply one undo record. Shared by full rollback and savepoint rollback.
+// `abort_lsn` is stamped on touched pages. `for_savepoint` chooses whether
+// a compensating WAL record is emitted: full rollback already writes
+// log_abort and recovery skips the whole transaction, so no per-record
+// compensation is needed there. Statement-level savepoint, however, will
+// commit later — recovery must be told to undo those specific records.
+static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn,
+                              bool for_savepoint, u64 txn_id) {
+    HeapFile* heap = db->get_heap_file(rec.table_id);
+    if (!heap) return;
+    TableEntry* table = db->catalog().get_table(rec.table_id);
+    if (!table) return;
+    Tuple tuple;
+    bool has_tuple = db->read_tuple(rec.table_id, table->schema, rec.rid, &tuple);
+
+    if (rec.type == UndoType::kInsert) {
+        if (for_savepoint) {
+            db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
+                                                rec.rid.page_id, rec.rid.slot_idx);
+        }
+        if (has_tuple) {
+            db->delete_index_entries(rec.table_id, tuple, rec.rid);
+        }
+        heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
+    } else if (rec.type == UndoType::kHotInsert) {
+        if (for_savepoint) {
+            db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
+                                                rec.rid.page_id, rec.rid.slot_idx);
+        }
+        heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
+    } else if (rec.type == UndoType::kDelete) {
+        if (for_savepoint) {
+            db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
+                                                rec.rid.page_id, rec.rid.slot_idx);
+        }
+        heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
+        // No re-insert needed: under lazy index cleanup the entry is still
+        // there. Clearing xmax restores visibility.
+    } else if (rec.type == UndoType::kHotDelete) {
+        if (for_savepoint) {
+            db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
+                                                rec.rid.page_id, rec.rid.slot_idx);
+        }
+        heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
+    }
+}
+
 bool TransactionManager::rollback(Transaction* txn) {
     LockGuard guard(latch_);
     if (!txn || txn != g_current_txn) return false;
@@ -223,30 +276,8 @@ bool TransactionManager::rollback(Transaction* txn) {
 
     const Vector<UndoRecord>& undo_records = txn->undo_records();
     for (i32 i = static_cast<i32>(undo_records.size()) - 1; i >= 0; i--) {
-        const UndoRecord& rec = undo_records[static_cast<u32>(i)];
-        HeapFile* heap = db_->get_heap_file(rec.table_id);
-        if (!heap) continue;
-        TableEntry* table = db_->catalog().get_table(rec.table_id);
-        if (!table) continue;
-        Tuple tuple;
-        bool has_tuple = db_->read_tuple(rec.table_id, table->schema, rec.rid, &tuple);
-
-        if (rec.type == UndoType::kInsert) {
-            if (has_tuple) {
-                db_->delete_index_entries(rec.table_id, tuple, rec.rid);
-            }
-            heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
-        } else if (rec.type == UndoType::kHotInsert) {
-            heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
-        } else if (rec.type == UndoType::kDelete) {
-            heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
-            // No need to re-insert the index entry here — DELETE no longer
-            // removes it eagerly (entries are cleaned up by GC instead), so
-            // rollback_delete clearing xmax is enough to make the row
-            // visible to new readers through the still-live index entry.
-        } else if (rec.type == UndoType::kHotDelete) {
-            heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
-        }
+        apply_undo_record(db_, undo_records[static_cast<u32>(i)], abort_lsn,
+                          /*for_savepoint=*/false, txn->id());
     }
 
     txn->set_state(TxnState::kAborted);
@@ -260,6 +291,24 @@ bool TransactionManager::rollback(Transaction* txn) {
     // the fact that the txn was aborted, even if the slot has since been
     // reused.
     if (status_log_) status_log_->record(aborted_xid, TxnFinalState::kAborted);
+    return true;
+}
+
+bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
+    LockGuard guard(latch_);
+    if (!txn || txn != g_current_txn) return false;
+    const Vector<UndoRecord>& undo = txn->undo_records();
+    if (mark >= undo.size()) return true;     // nothing to undo
+
+    // Apply in reverse, just like full rollback. No log_abort and no lock
+    // release — the transaction stays ACTIVE. abort_lsn=0 keeps the heap
+    // pages' LSNs unchanged (they have not crossed any commit boundary
+    // yet).
+    for (i32 i = static_cast<i32>(undo.size()) - 1; i >= static_cast<i32>(mark); i--) {
+        apply_undo_record(db_, undo[static_cast<u32>(i)], 0,
+                          /*for_savepoint=*/true, txn->id());
+    }
+    txn->truncate_undo(mark);
     return true;
 }
 
