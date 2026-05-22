@@ -14,10 +14,12 @@ namespace minidb {
 
 class TransactionManager;
 class Catalog;
+class Database;
 
 class GarbageCollector {
 public:
-    GarbageCollector(BufferPool* pool, TransactionManager* txn_mgr, Catalog* catalog);
+    GarbageCollector(BufferPool* pool, TransactionManager* txn_mgr, Catalog* catalog,
+                     Database* db = nullptr);
 
     // Execute one incremental GC (process max_pages pages)
     void run_gc(u32 max_pages = 64);
@@ -28,6 +30,12 @@ private:
     BufferPool* pool_;
     TransactionManager* txn_mgr_;
     Catalog* catalog_;
+    // Lets GC reach the live B+ tree handles via Database::delete_index_entries.
+    // Needed because, under lazy index cleanup, GC is the only path that
+    // removes an index entry for a no-longer-visible tuple — DELETE itself
+    // intentionally leaves entries behind so older snapshots can still find
+    // and visibility-check the row.
+    Database* db_;
 
     // Incremental GC state: per-table last processed page index
     HashMap<u32, u32> last_gc_page_;

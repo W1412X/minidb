@@ -69,9 +69,11 @@ ExecResult DeleteExecutor::next() {
                 }
             }
 
-            if (db_) {
-                db_->delete_index_entries(table_id_, result.tuple, rid);
-            }
+            // DELIBERATELY does NOT call db_->delete_index_entries here.
+            // Under snapshot isolation, an older transaction may still need
+            // to find this tuple via IndexScan; the entry stays until GC
+            // can prove no live snapshot can see the row anymore. The heap
+            // tuple's xmax is set below, and IndexScan filters by visibility.
             u64 lsn = wal_ ? wal_->log_delete(txn_id, table_id_, rid.page_id, rid.slot_idx) : 0;
             heap_->mark_deleted(rid.page_id, rid.slot_idx, txn_id, lsn);
             if (txn_mgr_ && txn_mgr_->current()) {

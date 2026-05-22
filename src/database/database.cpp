@@ -130,7 +130,7 @@ Database::Database(const String& db_dir, const DbConfig& config)
             std::exit(1);
         }
     }
-    gc_ = UniquePtr<GarbageCollector>(new GarbageCollector(pool_.get(), &txn_manager_, &catalog_));
+    gc_ = UniquePtr<GarbageCollector>(new GarbageCollector(pool_.get(), &txn_manager_, &catalog_, this));
 
     // Collect statistics for query optimizer (on-demand via ANALYZE, not at startup)
     // collect_all_statistics();  // Re-enabled on first EXPLAIN if stats_valid==false

@@ -9,14 +9,11 @@ snapshot id S, snapshot-isolation visibility is:
       AND (xmax == 0 OR xmax not committed OR xmax >= S OR xmax was T)
 
 This test sweeps every meaningful (xmin-state, xmax-state) combination
-plus the own-read / own-delete corners and asserts what each SELECT
-returns. The canonical visibility path is SeqScan + heap recheck; the
-test uses a non-indexed VARCHAR column for the WHERE clause so it
-always picks SeqScan. IndexScan currently has a separate bug — DELETE
-removes the index entry eagerly, so a deleted row can be invisible to
-an older snapshot via IndexScan even though SeqScan still sees it.
-That fix is tracked separately; when it lands, add a second assertion
-path here that exercises IndexScan.
+plus the own-read / own-delete corners. Each case is checked twice —
+once via SeqScan (WHERE on a non-indexed VARCHAR column) and once via
+IndexScan (WHERE on the primary key). Both paths must agree on what
+the active snapshot sees, since DELETE / UPDATE now leave the index
+entry in place and rely on the heap-side visibility check to filter.
 
 A "session" here is one TCP connection so BEGIN / SELECT / COMMIT are
 all carried over the same channel and the snapshot pinned at BEGIN
@@ -90,11 +87,14 @@ def select_count(session: Session, where: str) -> int:
 
 
 def select_via_seqscan(session: Session, key: int) -> int:
-    # `pad` is non-indexed and unique per row — forces a SeqScan + Filter,
-    # which is the canonical MVCC visibility path. IndexScan visibility is
-    # currently broken in a separate way (eager DELETE removes the index
-    # entry); see the IndexScan SI visibility task.
+    # `pad` is non-indexed → SeqScan + Filter, the heap-recheck path.
     return select_count(session, f"pad = 'pad_{key}'")
+
+
+def select_via_indexscan(session: Session, key: int) -> int:
+    # `id` is the primary key → IndexScan walks the version chain and
+    # applies the same is_visible check that SeqScan does.
+    return select_count(session, f"id = {key}")
 
 
 def assert_visible(session: Session, key: int, expected: int, ctx: str,
@@ -104,6 +104,12 @@ def assert_visible(session: Session, key: int, expected: int, ctx: str,
         raise AssertionError(
             f"[{ctx}] seq-scan visibility mismatch for key={key}: "
             f"got {got_seq}, expected {expected} (seed={seed})"
+        )
+    got_idx = select_via_indexscan(session, key)
+    if got_idx != expected:
+        raise AssertionError(
+            f"[{ctx}] index-scan visibility mismatch for key={key}: "
+            f"got {got_idx}, expected {expected} (seed={seed})"
         )
 
 

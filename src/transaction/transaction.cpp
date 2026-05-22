@@ -240,9 +240,10 @@ bool TransactionManager::rollback(Transaction* txn) {
             heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
         } else if (rec.type == UndoType::kDelete) {
             heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
-            if (has_tuple) {
-                db_->insert_index_entries(rec.table_id, tuple, rec.rid);
-            }
+            // No need to re-insert the index entry here — DELETE no longer
+            // removes it eagerly (entries are cleaned up by GC instead), so
+            // rollback_delete clearing xmax is enough to make the row
+            // visible to new readers through the still-live index entry.
         } else if (rec.type == UndoType::kHotDelete) {
             heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
         }

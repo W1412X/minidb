@@ -425,7 +425,11 @@ ExecResult UpdateExecutor::next() {
                         txn_mgr_->record_insert(table_id_, new_record_id);
                     }
                     if (db_ && hot_eligible) {
-                        db_->delete_index_entries(table_id_, old_tuple, old_rid);
+                        // Do NOT eagerly remove the old version's index
+                        // entry — under SI an older snapshot may still need
+                        // to find the old row through this index. GC removes
+                        // it later. We still insert the new version's entry
+                        // so newer snapshots find the new row.
                         if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
                             set_executor_error("index insert failed");
                             return ExecResult::empty();

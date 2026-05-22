@@ -3,14 +3,16 @@
  * @brief MVCC Garbage Collection — Incremental: process max_pages pages, skip known clean pages
  */
 #include "recovery/gc.h"
+#include "database/database.h"
 #include "transaction/transaction.h"
 #include "catalog/catalog.h"
 #include <cstring>
 
 namespace minidb {
 
-GarbageCollector::GarbageCollector(BufferPool* pool, TransactionManager* txn_mgr, Catalog* catalog)
-    : pool_(pool), txn_mgr_(txn_mgr), catalog_(catalog) {}
+GarbageCollector::GarbageCollector(BufferPool* pool, TransactionManager* txn_mgr,
+                                   Catalog* catalog, Database* db)
+    : pool_(pool), txn_mgr_(txn_mgr), catalog_(catalog), db_(db) {}
 
 bool GarbageCollector::is_garbage(const Tuple& t, u64 oldest_active) {
     if (t.xmin() == 0) return false;
@@ -77,6 +79,14 @@ void GarbageCollector::run_gc(u32 max_pages) {
 
                 if (gc->is_garbage(tuple, ctx->oldest)) {
                     has_garbage = true;
+                    // Remove the index entries for this no-longer-visible tuple
+                    // BEFORE we mark its slot DEAD. DELETE used to do this
+                    // eagerly which broke SI visibility through IndexScan;
+                    // now the index entry lives until GC.
+                    if (gc->db_) {
+                        gc->db_->delete_index_entries(te.table_id, tuple,
+                            RecordId(page_id, slot));
+                    }
                     if (tuple.has_next_version()) {
                         PageId next_page = tuple.next_version_page();
                         SlotIdx next_slot = tuple.next_version_slot();
