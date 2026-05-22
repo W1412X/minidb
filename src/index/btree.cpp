@@ -880,6 +880,82 @@ bool BPlusTree::scan_next(const IndexKey& low, const IndexKey& high,
     return scan_next_entry(low, high, leaf_id, slot_idx, skip_rid, &key, rid);
 }
 
+u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
+                                PageId* leaf_id, u16* slot_idx,
+                                const RecordId* skip_rid,
+                                IndexKey* out_keys, RecordId* out_rids,
+                                u32 capacity) {
+    if (!leaf_id || !slot_idx || !out_keys || !out_rids || capacity == 0) return 0;
+    ReadGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) return 0;
+
+    if (*leaf_id == kNullPageId) {
+        *leaf_id = find_leaf(low);
+        *slot_idx = 0;
+        if (*leaf_id == kNullPageId) return 0;
+    }
+
+    auto result = pool_->fetch_page(*leaf_id, true);
+    if (!result.ok()) {
+        *leaf_id = kNullPageId;
+        return 0;
+    }
+    Page* page = result.value();
+    u16 n = leaf_num_keys(page);
+    const bool prefix_mode = (low == high && low.column_count() > 0);
+
+    u32 written = 0;
+    while (*slot_idx < n && written < capacity) {
+        u16 idx = *slot_idx;
+        IndexKey k = leaf_key(page, idx);
+        if (prefix_mode && low.column_count() < k.column_count()) {
+            // Composite-key prefix search: keep walking until either the
+            // prefix no longer matches or the key has overshot.
+            if (!k.starts_with(low)) {
+                if (k > low) {
+                    pool_->unpin_page(*leaf_id);
+                    *leaf_id = kNullPageId;
+                    return written;
+                }
+                *slot_idx = static_cast<u16>(*slot_idx + 1);
+                continue;
+            }
+        } else {
+            if (k > high) {
+                pool_->unpin_page(*leaf_id);
+                *leaf_id = kNullPageId;
+                return written;
+            }
+            if (k < low) {
+                *slot_idx = static_cast<u16>(*slot_idx + 1);
+                continue;
+            }
+        }
+        RecordId candidate = leaf_rid(page, idx);
+        if (skip_rid && candidate == *skip_rid) {
+            *slot_idx = static_cast<u16>(*slot_idx + 1);
+            continue;
+        }
+        out_keys[written] = static_cast<IndexKey&&>(k);
+        out_rids[written] = candidate;
+        written++;
+        *slot_idx = static_cast<u16>(*slot_idx + 1);
+    }
+
+    if (*slot_idx >= n) {
+        // Exhausted this leaf; reposition cursor at the start of the next.
+        PageId next = leaf_next(page);
+        pool_->unpin_page(*leaf_id);
+        *leaf_id = next;
+        *slot_idx = 0;
+    } else {
+        // Still entries left in the current leaf — drop the pin; caller
+        // will resume here on the next batch.
+        pool_->unpin_page(*leaf_id);
+    }
+    return written;
+}
+
 bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
                                 PageId* leaf_id, u16* slot_idx,
                                 const RecordId* skip_rid, IndexKey* key, RecordId* rid) {

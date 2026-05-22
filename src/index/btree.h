@@ -82,6 +82,23 @@ public:
     bool scan_next_entry(const IndexKey& low, const IndexKey& high,
                          PageId* leaf_id, u16* slot_idx,
                          const RecordId* skip_rid, IndexKey* key, RecordId* rid);
+
+    // Batched range iterator: returns up to `capacity` (key, RecordId) pairs
+    // matching [low, high] in a single call. The leaf page is fetched and
+    // released exactly once per call regardless of how many entries it
+    // yields, which collapses N×(per-row latch + hash-map lookup + atomic
+    // pin) into a single set per batch. Cursor state lives in the caller-
+    // owned PageId/slot pair, identical to scan_next_entry's contract.
+    //
+    // Returns the number of entries written. A return < capacity means
+    // either the range is exhausted (leaf_id reset to kNullPageId) or this
+    // leaf yielded everything in range; the caller can keep calling until
+    // the returned count is 0 to fully drain the iterator.
+    u32 range_scan_batch(const IndexKey& low, const IndexKey& high,
+                         PageId* leaf_id, u16* slot_idx,
+                         const RecordId* skip_rid,
+                         IndexKey* out_keys, RecordId* out_rids,
+                         u32 capacity);
     bool validate_structure(String* error = nullptr) const;
     PageId root_page_id() const { return root_page_id_; }
 

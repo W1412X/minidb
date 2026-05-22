@@ -47,6 +47,9 @@ void IndexScanExecutor::init() {
     } else {
         pushed_compile_ok_ = false;
     }
+    batch_count_ = 0;
+    batch_pos_ = 0;
+    batch_exhausted_ = false;
 }
 
 // Traverse version chain to find first visible version, return its RecordId
@@ -177,11 +180,29 @@ ExecResult IndexScanExecutor::next() {
     const bool track_reads = txn_mgr_ && txn_mgr_->current() &&
         txn_mgr_->current()->isolation() == IsolationLevel::kSerializable;
     while (true) {
-        RecordId rid;
-        const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
-        if (!index_->scan_next(search_key_, high, &scan_leaf_id_, &scan_slot_idx_, skip, &rid)) {
-            break;
+        // Refill the batch buffer when the previous batch is drained. The
+        // batched API pins the leaf page once per refill, so the work that
+        // used to happen per-row (tree latch + partition latch + page hash
+        // lookup + atomic pin/unpin pair) is amortised across kBatchSize
+        // entries.
+        if (batch_pos_ >= batch_count_) {
+            if (batch_exhausted_) break;
+            const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
+            batch_count_ = index_->range_scan_batch(
+                search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
+                skip, batch_keys_, batch_rids_, kBatchSize);
+            batch_pos_ = 0;
+            if (batch_count_ == 0) {
+                batch_exhausted_ = true;
+                break;
+            }
+            // Leaf id reset to kNullPageId by the iterator means we've
+            // exhausted the index range; we still need to consume what
+            // was returned but mustn't refill afterwards.
+            if (scan_leaf_id_ == kNullPageId) batch_exhausted_ = true;
         }
+        RecordId rid = batch_rids_[batch_pos_];
+        batch_pos_++;
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
 
@@ -276,18 +297,30 @@ void IndexOnlyScanExecutor::init() {
     scan_slot_idx_ = 0;
     last_index_rid_ = RecordId();
     has_last_index_rid_ = false;
+    batch_count_ = 0;
+    batch_pos_ = 0;
+    batch_exhausted_ = false;
 }
 
 ExecResult IndexOnlyScanExecutor::next() {
     IndexKey high = is_range_ ? range_high_ : search_key_;
     while (true) {
-        IndexKey key;
-        RecordId rid;
-        const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
-        if (!index_->scan_next_entry(search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
-                                     skip, &key, &rid)) {
-            break;
+        if (batch_pos_ >= batch_count_) {
+            if (batch_exhausted_) break;
+            const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
+            batch_count_ = index_->range_scan_batch(
+                search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
+                skip, batch_keys_, batch_rids_, kBatchSize);
+            batch_pos_ = 0;
+            if (batch_count_ == 0) {
+                batch_exhausted_ = true;
+                break;
+            }
+            if (scan_leaf_id_ == kNullPageId) batch_exhausted_ = true;
         }
+        IndexKey key = static_cast<IndexKey&&>(batch_keys_[batch_pos_]);
+        RecordId rid = batch_rids_[batch_pos_];
+        batch_pos_++;
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
         if (pool_) {
