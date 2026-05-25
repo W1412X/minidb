@@ -342,9 +342,10 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
     }
 
     // Aggregation (GROUP BY / HAVING / COUNT/SUM/AVG/MIN/MAX)
-    if (has_aggregate(stmt.select_list) || !stmt.group_by.empty()) {
+    if (has_aggregate(stmt.select_list) || !stmt.group_by.empty() || stmt.having) {
         for (u32 i = 0; i < stmt.select_list.size(); i++) {
-            if (!SemanticValidator::validate_expression(stmt.select_list[i].get(), merged_schema)) {
+            if (!SemanticValidator::validate_aggregate_expression(
+                    stmt.select_list[i].get(), merged_schema, stmt.group_by)) {
                 return UniquePtr<PlanNode>();
             }
         }
@@ -353,7 +354,8 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
                 return UniquePtr<PlanNode>();
             }
         }
-        if (stmt.having && !SemanticValidator::require_bool_expression(stmt.having.get(), merged_schema)) {
+        if (stmt.having && !SemanticValidator::require_bool_aggregate_expression(
+                stmt.having.get(), merged_schema, stmt.group_by)) {
             return UniquePtr<PlanNode>();
         }
 
@@ -451,8 +453,12 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
                 int agg_idx = find_aggregate_expr_index(expr.get(), aggregate_exprs);
                 if (agg_idx < 0) return UniquePtr<PlanNode>();
                 u32 output_idx = stmt.group_by.size() + static_cast<u32>(agg_idx);
-                proj->column_indices.push_back(output_idx);
                 Column out_col = merged_schema.get_column(output_idx);
+                auto ref = make_unique<Expression>();
+                ref->type = ExprType::kColumnRef;
+                ref->column_name = out_col.name;
+                ref->table_name = out_col.table_name;
+                proj->expressions.push_back(UniquePtr<Expression>(ref.release()));
                 if (!expr->alias.empty()) out_col.name = expr->alias;
                 out_schema.add_column(out_col);
                 continue;
@@ -471,8 +477,8 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
                     }
                 }
                 if (group_idx < 0) return UniquePtr<PlanNode>();
-                proj->column_indices.push_back(static_cast<u32>(group_idx));
                 Column out_col = merged_schema.get_column(static_cast<u32>(group_idx));
+                proj->expressions.push_back(UniquePtr<Expression>(expr->clone()));
                 if (!expr->alias.empty()) out_col.name = expr->alias;
                 out_schema.add_column(out_col);
                 continue;
@@ -499,7 +505,7 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
 
     bool order_applied_before_projection = false;
     if (include_tail && !stmt.order_by.empty() && !stmt.distinct &&
-        !has_aggregate(stmt.select_list)) {
+        !has_aggregate(stmt.select_list) && !stmt.having) {
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             if (!SemanticValidator::validate_order_expression(stmt.order_by[i].expression.get(),
                                            merged_schema, stmt.select_list)) {
@@ -549,7 +555,7 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         }
     }
 
-    if (!is_star && !has_aggregate(stmt.select_list)) {
+    if (!is_star && !has_aggregate(stmt.select_list) && !stmt.having) {
         Vector<UniquePtr<Expression>> exprs;
         Schema out_schema;
         for (u32 i = 0; i < stmt.select_list.size(); i++) {

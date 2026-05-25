@@ -47,6 +47,94 @@ static TypeId numeric_result_type(TypeId left, TypeId right) {
     return TypeId::kInt32;
 }
 
+static bool expressions_equivalent(const Expression* a, const Expression* b) {
+    if (a == nullptr || b == nullptr) return a == b;
+    if (a->type != b->type) return false;
+    if (a->type == ExprType::kLiteral) return a->literal_value == b->literal_value;
+    if (a->type == ExprType::kColumnRef) {
+        return a->table_name == b->table_name && a->column_name == b->column_name;
+    }
+    if (a->type == ExprType::kBinaryOp) {
+        return a->op == b->op &&
+               expressions_equivalent(a->left.get(), b->left.get()) &&
+               expressions_equivalent(a->right.get(), b->right.get());
+    }
+    if (a->type == ExprType::kUnaryOp) {
+        return a->op == b->op &&
+               expressions_equivalent(a->child.get(), b->child.get());
+    }
+    if (a->type == ExprType::kCast) {
+        return a->cast_target == b->cast_target &&
+               expressions_equivalent(a->child.get(), b->child.get());
+    }
+    if (a->type == ExprType::kCase) {
+        if (a->when_clauses.size() != b->when_clauses.size()) return false;
+        for (u32 i = 0; i < a->when_clauses.size(); i++) {
+            if (!expressions_equivalent(a->when_clauses[i].first.get(),
+                                        b->when_clauses[i].first.get()) ||
+                !expressions_equivalent(a->when_clauses[i].second.get(),
+                                        b->when_clauses[i].second.get())) {
+                return false;
+            }
+        }
+        return expressions_equivalent(a->else_expr.get(), b->else_expr.get());
+    }
+    return false;
+}
+
+static bool expression_is_group_key(
+    const Expression* expr, const Vector<UniquePtr<Expression>>& group_by) {
+    for (u32 i = 0; i < group_by.size(); i++) {
+        if (expressions_equivalent(expr, group_by[i].get())) return true;
+    }
+    return false;
+}
+
+static bool aggregate_expression_is_group_legal(
+    const Expression* expr, const Vector<UniquePtr<Expression>>& group_by,
+    bool inside_aggregate) {
+    if (!expr) return false;
+    if (!inside_aggregate && expression_is_group_key(expr, group_by)) return true;
+    switch (expr->type) {
+        case ExprType::kLiteral:
+        case ExprType::kSubquery:
+            return true;
+        case ExprType::kStar:
+            return inside_aggregate;
+        case ExprType::kColumnRef:
+            return inside_aggregate;
+        case ExprType::kCast:
+            return aggregate_expression_is_group_legal(expr->child.get(), group_by,
+                                                       inside_aggregate);
+        case ExprType::kUnaryOp:
+            return aggregate_expression_is_group_legal(expr->child.get(), group_by,
+                                                       inside_aggregate);
+        case ExprType::kCase:
+            for (u32 i = 0; i < expr->when_clauses.size(); i++) {
+                if (!aggregate_expression_is_group_legal(expr->when_clauses[i].first.get(),
+                                                         group_by, inside_aggregate) ||
+                    !aggregate_expression_is_group_legal(expr->when_clauses[i].second.get(),
+                                                         group_by, inside_aggregate)) {
+                    return false;
+                }
+            }
+            return !expr->else_expr ||
+                   aggregate_expression_is_group_legal(expr->else_expr.get(), group_by,
+                                                       inside_aggregate);
+        case ExprType::kBinaryOp:
+            if (is_aggregate_op(expr->op)) {
+                if (inside_aggregate) return false;
+                if (!expr->left || expr->left->type == ExprType::kStar) return true;
+                return aggregate_expression_is_group_legal(expr->left.get(), group_by, true);
+            }
+            return aggregate_expression_is_group_legal(expr->left.get(), group_by,
+                                                       inside_aggregate) &&
+                   aggregate_expression_is_group_legal(expr->right.get(), group_by,
+                                                       inside_aggregate);
+    }
+    return false;
+}
+
 bool SemanticValidator::require_bool_expression(const Expression* expr,
                                                 const Schema& scope) {
     TypeId type = TypeId::kNull;
@@ -73,6 +161,20 @@ bool SemanticValidator::validate_order_expression(
         }
     }
     return false;
+}
+
+bool SemanticValidator::validate_aggregate_expression(
+    const Expression* expr, const Schema& input_scope,
+    const Vector<UniquePtr<Expression>>& group_by) {
+    if (!validate_expression(expr, input_scope)) return false;
+    return aggregate_expression_is_group_legal(expr, group_by, false);
+}
+
+bool SemanticValidator::require_bool_aggregate_expression(
+    const Expression* expr, const Schema& input_scope,
+    const Vector<UniquePtr<Expression>>& group_by) {
+    if (!require_bool_expression(expr, input_scope)) return false;
+    return aggregate_expression_is_group_legal(expr, group_by, false);
 }
 
 static bool infer_aggregate_type(const Expression* expr, const Schema& scope,

@@ -50,6 +50,10 @@ expect_error 'SELECT COUNT(*) FROM order_items WHERE NOT id;'
 expect_error 'SELECT CASE WHEN id THEN 1 ELSE 0 END FROM order_items;'
 expect_error 'SELECT COUNT(*) FROM order_items HAVING COUNT(*);'
 expect_error 'SELECT COUNT(*) FROM order_items oi JOIN orders o ON oi.order_id;'
+expect_error 'SELECT 1 HAVING 1;'
+expect_error 'SELECT 1 FROM order_items HAVING id > 1;'
+expect_error 'SELECT COUNT(*) FROM order_items HAVING id > 1;'
+expect_error 'SELECT id + 1, COUNT(*) FROM order_items;'
 
 # Qualified names must bind to a visible table name or alias.
 expect_error 'SELECT COUNT(*) FROM order_items oi WHERE o.id < 10000;'
@@ -65,6 +69,9 @@ valid_out="$(
         'SELECT COUNT(*) FROM order_items oi WHERE oi.id < 10000 AND oi.qty > 0;' \
         'SELECT CASE WHEN id < 2 THEN 1 ELSE 0 END FROM order_items WHERE id = 1;' \
         'SELECT COUNT(*) FROM order_items HAVING COUNT(*) > 0;' \
+        'SELECT 1 HAVING TRUE;' \
+        'SELECT COUNT(*) + 1 FROM order_items;' \
+        'SELECT order_id + 1, COUNT(*) FROM order_items GROUP BY order_id ORDER BY expr_0;' \
         'SELECT COUNT(*) FROM order_items oi JOIN orders o ON oi.order_id = o.id;' \
         'UPDATE order_items SET qty = qty + 1 WHERE id = 1;' \
         'DELETE FROM order_items WHERE id = 3;'
@@ -74,6 +81,11 @@ require_contains 'agg_0
 3' "$valid_out"
 require_contains 'expr_0
 1' "$valid_out"
+require_contains 'expr_0
+4' "$valid_out"
+require_contains 'expr_0 | agg_0
+2 | 2
+3 | 1' "$valid_out"
 require_contains 'affected_rows
 1' "$valid_out"
 require_contains 'deleted_rows
