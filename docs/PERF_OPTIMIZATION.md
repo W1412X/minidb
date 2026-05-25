@@ -80,6 +80,72 @@ work-per-operation** in larger queries.
   performs the merge.
 - **Affects**: Joins on PK / indexed columns.
 
+### R7 — Indexed range paths for non-HOT UPDATE (DONE)
+- **Problem**: UPDATE skipped child-plan optimization when the SET list
+  modified an indexed column unless the predicate was a point equality.
+  `UPDATE t SET pk = pk + ... WHERE pk BETWEEN ...` therefore scanned the
+  heap even though the executor already materializes target RIDs before
+  mutation and is Halloween-safe.
+- **Fix**: Always optimize UPDATE children. Non-HOT updates now insert the
+  new version's index entries incrementally and leave old entries for MVCC
+  visibility / GC cleanup instead of rebuilding every table index at the
+  end of the statement.
+- **Affects**: Range UPDATE, key-changing UPDATE, bulk rewrite workloads.
+
+### R8 — UPDATE unique-check pruning (DONE)
+- **Problem**: Every UPDATE rechecked every UNIQUE / PRIMARY KEY group,
+  even when the SET list changed only non-key columns. Common HOT updates
+  paid avoidable B+Tree probes and heap visibility rechecks.
+- **Fix**: Build the constraint-check set from only unique groups whose
+  columns intersect the modified columns.
+- **Affects**: HOT updates and non-key UPDATE workloads on indexed tables.
+
+### R9 — Single-pass heap DELETE marking (DONE)
+- **Problem**: DELETE fetched the target page once to validate `xmax`, then
+  fetched it again in `HeapFile::mark_deleted` to stamp `xmax`, LSN, dirty
+  state, and visibility-map state.
+- **Fix**: Added `HeapFile::mark_deleted_if_current`, combining conflict
+  validation and MVCC delete marking while the page is pinned once.
+- **Affects**: DELETE, delete+insert churn, concurrent delete conflict paths.
+
+## Linux Release Benchmark (SQLite comparison)
+
+Environment: Docker `postgres:16` image (Debian/Linux), CMake Release build,
+SQLite WAL mode with `synchronous=FULL`. MiniDB numbers use
+`tests/performance/bench.py`.
+
+| Operation | MiniDB | SQLite | SQLite / MiniDB |
+| --- | ---: | ---: | ---: |
+| bulk_insert (5000 rows, batch=40) | 13,279 rows/s | 72,179 rows/s | 5.4× |
+| seq_scan (50 `COUNT(*)`) | 388 q/s | 501,464 q/s | 1292× |
+| pk_lookup (200 random) | 1,551 q/s | 249,597 q/s | 161× |
+| range_scan (50 100-row ranges) | 380 q/s | 185,328 q/s | 487× |
+| update (500 autocommit point updates) | 1,023 ops/s | 1,861 ops/s | 1.8× |
+| delete_insert (300 delete+insert cycles) | 1,069 ops/s | 4,082 ops/s | 3.8× |
+| join (20 self joins) | 151 q/s | 11,763 q/s | 78× |
+| txn_batch (500 rows, 50/txn) | 3,477 rows/s | 327,565 rows/s | 94× |
+| vacuum (delete 2000 + vacuum) | 0.14 s | <0.01 s | n/a |
+
+Concurrent TCP/server benchmark (4 clients, disjoint point operations):
+
+| Operation | MiniDB | SQLite |
+| --- | ---: | ---: |
+| concurrent PK reads | 97 q/s | 40,593 q/s |
+| concurrent disjoint updates | 48 ops/s | 1,216 ops/s |
+
+## Current Bottlenecks
+
+- Small SELECTs are still dominated by per-statement parser/planner/server
+  overhead. Statement/plan caching is intentionally out of scope for this
+  optimization pass.
+- SeqScan/aggregate remains much slower than SQLite because MiniDB still
+  deserializes MVCC tuples row-by-row through Volcano executors.
+- TCP concurrent throughput is limited by session/protocol overhead and
+  coarse write-path serialization; storage-layer page work improved, but
+  the server path still has large constant factors.
+- Transaction batch insert remains WAL/checkpoint and catalog/heap metadata
+  heavy compared with SQLite's mature pager.
+
 ## Code-quality Invariants Maintained
 
 - **Correctness**: every round ends with `ctest` 57/57 green.
