@@ -854,7 +854,7 @@ Vector<RecordId> BPlusTree::search(const IndexKey& key) {
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf(key);
+    PageId leaf_id = find_leaf_with_parent(key, nullptr);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
     while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
@@ -893,7 +893,7 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf(low);
+    PageId leaf_id = find_leaf_with_parent(low, nullptr);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
 
@@ -929,7 +929,7 @@ u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high) {
     ReadGuard guard(tree_latch_);
     if (root_page_id_ == kNullPageId) return 0;
 
-    PageId leaf_id = find_leaf(low);
+    PageId leaf_id = find_leaf_with_parent(low, nullptr);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
     u64 count = 0;
@@ -988,7 +988,7 @@ u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
     if (root_page_id_ == kNullPageId) return 0;
 
     if (*leaf_id == kNullPageId) {
-        *leaf_id = find_leaf(low);
+        *leaf_id = find_leaf_with_parent(low, nullptr);
         *slot_idx = 0;
         if (*leaf_id == kNullPageId) return 0;
     }
@@ -1062,7 +1062,7 @@ bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
     if (root_page_id_ == kNullPageId) return false;
 
     if (*leaf_id == kNullPageId) {
-        *leaf_id = find_leaf(low);
+        *leaf_id = find_leaf_with_parent(low, nullptr);
         *slot_idx = 0;
     }
 
