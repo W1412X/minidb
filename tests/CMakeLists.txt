@@ -58,6 +58,8 @@ add_test(NAME full_sql_suite
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/full_sql_suite.sh $<TARGET_FILE:minidb>)
 add_test(NAME join_syntax_strict
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/join_syntax_strict.sh $<TARGET_FILE:minidb>)
+add_test(NAME semantic_validation
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/semantic_validation.sh $<TARGET_FILE:minidb>)
 add_test(NAME join_optimizer
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/join_optimizer.sh $<TARGET_FILE:minidb>)
 add_test(NAME filter_pushdown

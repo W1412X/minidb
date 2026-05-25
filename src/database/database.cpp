@@ -469,10 +469,15 @@ bool Database::create_index(const String& name, const String& table_name,
     }
 
     IndexEntry probe;
+    probe.table_id = table->table_id;
     probe.key_columns = key_cols;
-    {
-        HeapFile* heap = get_heap_file(table->table_id);
-        PageId first_page = heap->first_data_page_id();
+
+    Vector<BTreeBulkEntry> entries;
+    entries.reserve(table->num_tuples);
+    HashMap<String, bool> seen_keys;
+    HeapFile* heap = get_heap_file(table->table_id);
+    PageId first_page = heap->first_data_page_id();
+    if (first_page != kNullPageId) {
         u32 file_id = file_id_from_page(first_page);
         u32 page_num = page_num_from_page(first_page);
         u32 pages = heap->meta().num_data_pages;
@@ -488,53 +493,50 @@ bool Database::create_index(const String& name, const String& table_name,
                 Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset,
                                                            table->schema, lp->length);
                 if (tuple.xmax() != kInvalidTxnId) continue;
-                if (!index_key_from_tuple(probe, tuple).fits()) {
+                IndexKey key = index_key_from_tuple(probe, tuple);
+                if (!key.fits()) {
                     pool_->unpin_page(page_id);
                     return false;
                 }
-            }
-            pool_->unpin_page(page_id);
-        }
-    }
-
-    if (unique) {
-        HashMap<String, bool> seen_keys;
-        HeapFile* heap = get_heap_file(table->table_id);
-        PageId first_page = heap->first_data_page_id();
-        u32 file_id = file_id_from_page(first_page);
-        u32 page_num = page_num_from_page(first_page);
-        u32 pages = heap->meta().num_data_pages;
-        for (u32 p = 0; p < pages; p++, page_num++) {
-            PageId page_id = make_page_id(file_id, page_num);
-            auto result = pool_->fetch_page(page_id, true);
-            if (!result.ok()) continue;
-            Page* page = result.value();
-            u16 num_tuples = page->header()->num_tuples;
-
-            for (u16 slot = 0; slot < num_tuples; slot++) {
-                const LinePointer* lp = page->line_pointer(slot);
-                if (!lp || !lp->is_valid()) continue;
-                Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset, table->schema, lp->length);
-                if (tuple.xmax() != kInvalidTxnId) continue;
-                String key;
-                if (make_projected_tuple_key(tuple, key_cols, true, &key)) {
-                    if (seen_keys.find(key)) {
+                if (unique) {
+                    String unique_key;
+                    if (!make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
                         pool_->unpin_page(page_id);
                         return false;
                     }
-                    seen_keys.insert(key, true);
+                    if (seen_keys.find(unique_key)) {
+                        pool_->unpin_page(page_id);
+                        return false;
+                    }
+                    seen_keys.insert(unique_key, true);
                 }
+                entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
             pool_->unpin_page(page_id);
         }
     }
+    entries.sort([](const BTreeBulkEntry& a, const BTreeBulkEntry& b) {
+        if (a.key != b.key) return a.key < b.key;
+        if (a.rid.page_id != b.rid.page_id) return a.rid.page_id < b.rid.page_id;
+        return a.rid.slot_idx < b.rid.slot_idx;
+    });
 
     u32 index_id = catalog_.create_index(name, table->table_id, key_cols, unique);
     if (index_id == 0) {
         return false;
     }
     IndexEntry* index = catalog_.get_index(name);
-    rebuild_index(index);
+    auto tree = UniquePtr<BPlusTree>(new BPlusTree(index_id, pool_.get()));
+    tree->create();
+    BPlusTree* tree_ptr = tree.get();
+    index_trees_[index_id] = static_cast<UniquePtr<BPlusTree>&&>(tree);
+    if (!tree_ptr->bulk_load_sorted(entries)) {
+        catalog_.drop_index(name);
+        index_trees_.erase(index_id);
+        return false;
+    }
+    index->root_page_id = tree_ptr->root_page_id();
+    index->state = IndexState::kValid;
     save_catalog();
         if (wal_) {
         u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
@@ -995,14 +997,16 @@ void Database::rebuild_index(IndexEntry* index) {
     tree->create();
     BPlusTree* tree_ptr = tree.get();
     index_trees_[index->index_id] = static_cast<UniquePtr<BPlusTree>&&>(tree);
-    index->root_page_id = tree_ptr->root_page_id();
 
     HeapFile* heap = get_heap_file(index->table_id);
     PageId first_page = heap->first_data_page_id();
     if (first_page == kNullPageId) {
+        index->root_page_id = tree_ptr->root_page_id();
         index->state = IndexState::kValid;   // empty table, trivially in sync
         return;
     }
+
+    Vector<BTreeBulkEntry> entries;
     u32 file_id = file_id_from_page(first_page);
     u32 page_num = page_num_from_page(first_page);
     u32 pages = heap->meta().num_data_pages;
@@ -1020,11 +1024,18 @@ void Database::rebuild_index(IndexEntry* index) {
             if (tuple.xmax() != kInvalidTxnId) continue;
             IndexKey key = index_key_from_tuple(*index, tuple);
             if (key.fits()) {
-                tree_ptr->insert(key, RecordId(page_id, slot));
+                entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
         }
         pool_->unpin_page(page_id);
     }
+    entries.sort([](const BTreeBulkEntry& a, const BTreeBulkEntry& b) {
+        if (a.key != b.key) return a.key < b.key;
+        if (a.rid.page_id != b.rid.page_id) return a.rid.page_id < b.rid.page_id;
+        return a.rid.slot_idx < b.rid.slot_idx;
+    });
+    if (!tree_ptr->bulk_load_sorted(entries)) return;
+    index->root_page_id = tree_ptr->root_page_id();
     // Atomic flip back to valid. A failure mid-rebuild would have returned
     // earlier and left the entry kRebuilding so the optimiser keeps refusing.
     index->state = IndexState::kValid;

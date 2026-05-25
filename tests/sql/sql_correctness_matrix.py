@@ -82,7 +82,7 @@ def main() -> int:
             ("SELECT MIN(amount), MAX(amount), SUM(amount) FROM orders WHERE user_id = 3;", [("10", "16", "39")]),
             ("SELECT COUNT(*) FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 20);", [("11",)]),
             ("SELECT COUNT(*) FROM empty_t;", [("0",)]),
-            ("SELECT COUNT(score), SUM(score), MIN(score), MAX(score) FROM empty_t;", [("0", "NULL", "NULL", "NULL")]),
+            ("SELECT COUNT(v), SUM(v), MIN(v), MAX(v) FROM empty_t;", [("0", "NULL", "NULL", "NULL")]),
         ]
         for sql, expected in expected_queries:
             assert_rows_equal(minidb_query(args.bin, db_dir, sql, seed), expected, seed, sql)

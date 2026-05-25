@@ -48,6 +48,14 @@ static Value compare_result(const Value& left, const Value& right, const String&
     return Value();
 }
 
+bool ExpressionEvaluator::predicate_truth(const Value& value, bool* truth) {
+    if (truth) *truth = false;
+    if (value.is_null()) return true;
+    if (value.type_id() != TypeId::kBool) return false;
+    if (truth) *truth = value.get_bool();
+    return true;
+}
+
 // LIKE pattern matching: % = any character sequence, _ = single character
 static bool like_match(const char* str, u32 str_len, const char* pat, u32 pat_len) {
     u32 si = 0, pi = 0;
@@ -185,22 +193,34 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
 
             // AND: SQL three-valued logic.
             if (op == "AND") {
+                bool left_truth = false;
+                bool right_truth = false;
+                if (!predicate_truth(left, &left_truth) ||
+                    !predicate_truth(right, &right_truth)) {
+                    return Value();
+                }
                 if (is_null(left) || is_null(right)) {
-                    if (!is_null(left) && !left.get_bool()) return Value(false);
-                    if (!is_null(right) && !right.get_bool()) return Value(false);
+                    if (!is_null(left) && !left_truth) return Value(false);
+                    if (!is_null(right) && !right_truth) return Value(false);
                     return Value();  // NULL
                 }
-                return Value(left.get_bool() && right.get_bool());
+                return Value(left_truth && right_truth);
             }
 
             // OR: SQL three-valued logic.
             if (op == "OR") {
+                bool left_truth = false;
+                bool right_truth = false;
+                if (!predicate_truth(left, &left_truth) ||
+                    !predicate_truth(right, &right_truth)) {
+                    return Value();
+                }
                 if (is_null(left) || is_null(right)) {
-                    if (!is_null(left) && left.get_bool()) return Value(true);
-                    if (!is_null(right) && right.get_bool()) return Value(true);
+                    if (!is_null(left) && left_truth) return Value(true);
+                    if (!is_null(right) && right_truth) return Value(true);
                     return Value();  // NULL
                 }
-                return Value(left.get_bool() || right.get_bool());
+                return Value(left_truth || right_truth);
             }
 
             // Arithmetic: NULL propagation.
@@ -254,7 +274,9 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
 
             if (expr.op == "NOT") {
                 if (is_null(child)) return Value();  // NOT NULL = NULL
-                return Value(!child.get_bool());
+                bool child_truth = false;
+                if (!predicate_truth(child, &child_truth)) return Value();
+                return Value(!child_truth);
             }
 
             if (expr.op == "IS_NULL") {
@@ -282,7 +304,9 @@ Value ExpressionEvaluator::evaluate(const Expression& expr, const Tuple& tuple) 
         case ExprType::kCase: {
             for (u32 i = 0; i < expr.when_clauses.size(); i++) {
                 Value cond = evaluate(*expr.when_clauses[i].first, tuple);
-                if (!is_null(cond) && cond.get_bool()) {
+                bool cond_truth = false;
+                if (!predicate_truth(cond, &cond_truth)) return Value();
+                if (cond_truth) {
                     return evaluate(*expr.when_clauses[i].second, tuple);
                 }
             }

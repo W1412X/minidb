@@ -39,6 +39,32 @@ SQL
 CREATE INDEX dup_idx_k ON dup_idx(k);
 EXPLAIN SELECT * FROM dup_idx WHERE k = 1;
 SELECT COUNT(*) AS c FROM dup_idx WHERE k = 1;
+CREATE TABLE dup_cycle (id INT PRIMARY KEY, k INT);
+SQL
+    batch=""
+    count=0
+    for i in $(seq 1 1000); do
+        key=$((i % 10 + 1))
+        if [[ -z "$batch" ]]; then
+            batch="($i,$key)"
+        else
+            batch="$batch,($i,$key)"
+        fi
+        count=$((count + 1))
+        if [[ "$count" -eq 40 ]]; then
+            printf 'INSERT INTO dup_cycle VALUES %s;\n' "$batch"
+            batch=""
+            count=0
+        fi
+    done
+    if [[ -n "$batch" ]]; then
+        printf 'INSERT INTO dup_cycle VALUES %s;\n' "$batch"
+    fi
+    cat <<'SQL'
+CREATE INDEX dup_cycle_k ON dup_cycle(k);
+EXPLAIN SELECT COUNT(*) FROM dup_cycle WHERE k >= 3 AND k <= 7;
+SELECT COUNT(*) AS c FROM dup_cycle WHERE k = 5;
+SELECT COUNT(*) AS c FROM dup_cycle WHERE k >= 3 AND k <= 7;
 exit
 SQL
 } > "$SQL_FILE"
@@ -60,3 +86,6 @@ grep -q '^1 | 1$' "$OUT_FILE"
 grep -q '^2 | 2$' "$OUT_FILE"
 grep -q 'IndexScan table=dup_idx' "$OUT_FILE"
 grep -q '^1000$' "$OUT_FILE"
+grep -q 'IndexScan table=dup_cycle' "$OUT_FILE"
+grep -q '^100$' "$OUT_FILE"
+grep -q '^500$' "$OUT_FILE"

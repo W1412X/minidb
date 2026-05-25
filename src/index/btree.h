@@ -34,6 +34,14 @@ struct RecordId {
     bool operator!=(const RecordId& o) const { return !(*this == o); }
 };
 
+struct BTreeBulkEntry {
+    IndexKey key;
+    RecordId rid;
+
+    BTreeBulkEntry() = default;
+    BTreeBulkEntry(const IndexKey& k, const RecordId& r) : key(k), rid(r) {}
+};
+
 static constexpr u32 kIndexNodeHeaderSize = 8;
 static constexpr u32 kIndexKeyStart = kPageHeaderSize + kIndexNodeHeaderSize;
 static constexpr u32 kRecordIdSize = 10;
@@ -73,10 +81,12 @@ public:
     void create();
     bool open();
     bool insert(const IndexKey& key, const RecordId& rid);
+    bool bulk_load_sorted(const Vector<BTreeBulkEntry>& entries);
     bool remove(const IndexKey& key, const RecordId& rid);
     Vector<RecordId> search(const IndexKey& key);
     Vector<RecordId> range_search(const IndexKey& low, const IndexKey& high);
-    u64 range_count(const IndexKey& low, const IndexKey& high);
+    u64 range_count(const IndexKey& low, const IndexKey& high,
+                    bool start_at_leftmost = false);
     bool scan_next(const IndexKey& low, const IndexKey& high,
                    PageId* leaf_id, u16* slot_idx,
                    const RecordId* skip_rid, RecordId* rid);
@@ -99,7 +109,8 @@ public:
                          PageId* leaf_id, u16* slot_idx,
                          const RecordId* skip_rid,
                          IndexKey* out_keys, RecordId* out_rids,
-                         u32 capacity);
+                         u32 capacity,
+                         bool start_at_leftmost = false);
     bool validate_structure(String* error = nullptr) const;
     PageId root_page_id() const { return root_page_id_; }
 
@@ -108,6 +119,7 @@ private:
                        HashMap<PageId, bool>* visited, String* error) const;
     PageId find_leaf(const IndexKey& key) const;
     PageId find_leaf_with_parent(const IndexKey& key, PageId* parent_id) const;
+    PageId find_leaf_lower_bound(const IndexKey& key) const;
     bool insert_into_leaf(PageId leaf_id, const IndexKey& key, const RecordId& rid,
                           u16* num_keys_after);
     bool split_leaf(PageId leaf_id, PageId parent_id);

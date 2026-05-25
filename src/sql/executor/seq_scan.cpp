@@ -336,7 +336,10 @@ ExecResult SeqScanExecutor::next() {
                         cond = ExpressionEvaluator::evaluate(*pushed_predicate_,
                                                               tr.tuple);
                     }
-                    pass = !cond.is_null() && cond.get_bool();
+                    if (!ExpressionEvaluator::predicate_truth(cond, &pass)) {
+                        set_executor_error("predicate expression must be BOOL");
+                        return ExecResult::empty();
+                    }
                 }
                 if (!pass) continue;
             }

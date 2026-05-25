@@ -54,7 +54,12 @@ ExecResult NestedLoopJoinExecutor::next() {
 
                 Tuple combined(output_schema_, combined_values);
                 Value cond = ExpressionEvaluator::evaluate(*on_condition_, combined);
-                if (!cond.is_null() && cond.get_bool()) {
+                bool pass = false;
+                if (!ExpressionEvaluator::predicate_truth(cond, &pass)) {
+                    set_executor_error("JOIN ON expression must be BOOL");
+                    return ExecResult::empty();
+                }
+                if (pass) {
                     right_matched_ = true;
                     return make_combined_tuple(left_tuple_, rr.tuple);
                 }

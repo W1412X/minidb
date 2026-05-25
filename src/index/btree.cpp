@@ -125,10 +125,12 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
     PageId leaf_id = kNullPageId;
 
     // Fast path for monotonic / append-heavy workloads: if we have a cached
-    // "hot leaf" from the previous insert and the new key still belongs
-    // beyond that leaf's smallest key, jump straight to it and skip the
-    // O(log N) root-to-leaf descent. The leaf itself still binary-searches
-    // for the insert slot, so out-of-order keys within the leaf are fine.
+    // "hot leaf" from the previous insert and the new key appends to that
+    // leaf's right edge, jump straight to it and skip the O(log N)
+    // root-to-leaf descent. Reusing a cached leaf for arbitrary in-leaf
+    // insertion is not safe: with cyclic/non-unique keys, the cached leaf's
+    // first key can be <= the new key even though an earlier leaf is the
+    // correct global insertion point.
     if (hot_leaf_id_ != kNullPageId &&
         !hot_leaf_first_key_.empty() &&
         key >= hot_leaf_first_key_) {
@@ -136,12 +138,18 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
         if (pg_result.ok()) {
             Page* page = pg_result.value();
             // Make sure the cached leaf is still a leaf (could have changed
-            // through a concurrent rebuild) and that the next leaf either
-            // doesn't exist or has a strictly greater first key — otherwise
-            // the new key really belongs further right.
+            // through a concurrent rebuild), that the key appends after this
+            // leaf's current high key, and that the next leaf either doesn't
+            // exist or has a strictly greater first key.
             bool usable = page->data()[kPageHeaderSize] == 1;
             if (usable) {
                 u16 n = leaf_num_keys(page);
+                if (n == 0) {
+                    usable = false;
+                } else {
+                    IndexKey last_key = leaf_key(page, n - 1);
+                    if (key < last_key) usable = false;
+                }
                 PageId next_leaf = leaf_next(page);
                 if (next_leaf != kNullPageId && n > 0) {
                     auto next_res = pool_->fetch_page(next_leaf);
@@ -193,6 +201,118 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
         }
         pool_->unpin_page(leaf_id);
     }
+    return true;
+}
+
+bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
+    WriteGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) {
+        create();
+    }
+
+    hot_leaf_id_ = kNullPageId;
+    hot_leaf_first_key_ = IndexKey();
+    hot_leaf_parent_id_ = kNullPageId;
+
+    if (entries.empty()) return true;
+
+    struct LevelEntry {
+        PageId page_id;
+        IndexKey first_key;
+    };
+    auto bulk_alloc_page_id = [&]() {
+        return make_page_id(index_id_, next_page_num_++);
+    };
+
+    Vector<LevelEntry> level;
+    level.reserve((entries.size() + kIndexMaxKeys - 1) / kIndexMaxKeys);
+
+    PageId prev_leaf = kNullPageId;
+    u32 pos = 0;
+    bool first_leaf = true;
+    while (pos < entries.size()) {
+        PageId leaf_id = first_leaf ? root_page_id_ : bulk_alloc_page_id();
+        Page* leaf = nullptr;
+        if (first_leaf) {
+            auto result = pool_->fetch_page(leaf_id);
+            if (!result.ok()) return false;
+            leaf = result.value();
+            leaf->init(leaf_id, PageType::kIndexData);
+            leaf->data()[kPageHeaderSize] = 1;
+        } else {
+            auto result = pool_->new_page(leaf_id, PageType::kIndexData);
+            if (!result.ok()) return false;
+            leaf = result.value();
+            leaf->init(leaf_id, PageType::kIndexData);
+            leaf->data()[kPageHeaderSize] = 1;
+        }
+
+        u16 count = 0;
+        while (pos < entries.size() && count < kIndexMaxKeys) {
+            if (!leaf_set_key(leaf, count, entries[pos].key)) {
+                pool_->unpin_page(leaf_id);
+                return false;
+            }
+            leaf_set_rid(leaf, count, entries[pos].rid);
+            count++;
+            pos++;
+        }
+        leaf_set_keys(leaf, count);
+        leaf_set_next(leaf, kNullPageId);
+        pool_->mark_dirty(leaf_id);
+        pool_->unpin_page(leaf_id);
+
+        if (prev_leaf != kNullPageId) {
+            auto prev_result = pool_->fetch_page(prev_leaf);
+            if (!prev_result.ok()) return false;
+            leaf_set_next(prev_result.value(), leaf_id);
+            pool_->mark_dirty(prev_leaf);
+            pool_->unpin_page(prev_leaf);
+        }
+
+        level.push_back(LevelEntry{leaf_id, entries[pos - count].key});
+        prev_leaf = leaf_id;
+        first_leaf = false;
+    }
+
+    while (level.size() > 1) {
+        Vector<LevelEntry> next_level;
+        next_level.reserve((level.size() + kIndexMaxKeys) / (kIndexMaxKeys + 1));
+
+        u32 i = 0;
+        while (i < level.size()) {
+            u32 remaining = level.size() - i;
+            u16 child_count = static_cast<u16>(
+                remaining > kIndexMaxKeys + 1 ? kIndexMaxKeys + 1 : remaining);
+            PageId node_id = bulk_alloc_page_id();
+            auto result = pool_->new_page(node_id, PageType::kIndexData);
+            if (!result.ok()) return false;
+            Page* node = result.value();
+            node->init(node_id, PageType::kIndexData);
+            node->data()[kPageHeaderSize] = 0;
+
+            internal_set_num_keys(node, static_cast<u16>(child_count - 1));
+            for (u16 child = 0; child < child_count; child++) {
+                internal_set_child(node, child, level[i + child].page_id);
+                if (child > 0) {
+                    if (!internal_set_key(node, static_cast<u16>(child - 1),
+                                          level[i + child].first_key)) {
+                        pool_->unpin_page(node_id);
+                        return false;
+                    }
+                }
+            }
+
+            pool_->mark_dirty(node_id);
+            pool_->unpin_page(node_id);
+            next_level.push_back(LevelEntry{node_id, level[i].first_key});
+            i += child_count;
+        }
+        level = static_cast<Vector<LevelEntry>&&>(next_level);
+    }
+
+    root_page_id_ = level[0].page_id;
+    save_meta();
     return true;
 }
 
@@ -856,7 +976,7 @@ Vector<RecordId> BPlusTree::search(const IndexKey& key) {
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf_with_parent(key, nullptr);
+    PageId leaf_id = find_leaf_lower_bound(key);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
     while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
@@ -895,7 +1015,7 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf_with_parent(low, nullptr);
+    PageId leaf_id = find_leaf_lower_bound(low);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
 
@@ -927,11 +1047,13 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     return results;
 }
 
-u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high) {
+u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high,
+                           bool start_at_leftmost) {
     ReadGuard guard(tree_latch_);
     if (root_page_id_ == kNullPageId) return 0;
 
-    PageId leaf_id = find_leaf_with_parent(low, nullptr);
+    PageId leaf_id = start_at_leftmost ? leftmost_leaf()
+                                       : find_leaf_lower_bound(low);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
     u64 count = 0;
@@ -984,74 +1106,80 @@ u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
                                 PageId* leaf_id, u16* slot_idx,
                                 const RecordId* skip_rid,
                                 IndexKey* out_keys, RecordId* out_rids,
-                                u32 capacity) {
+                                u32 capacity,
+                                bool start_at_leftmost) {
     if (!leaf_id || !slot_idx || !out_keys || !out_rids || capacity == 0) return 0;
     ReadGuard guard(tree_latch_);
     if (root_page_id_ == kNullPageId) return 0;
 
     if (*leaf_id == kNullPageId) {
-        *leaf_id = find_leaf_with_parent(low, nullptr);
+        *leaf_id = start_at_leftmost ? leftmost_leaf()
+                                     : find_leaf_lower_bound(low);
         *slot_idx = 0;
         if (*leaf_id == kNullPageId) return 0;
     }
 
-    auto result = pool_->fetch_page(*leaf_id, true);
-    if (!result.ok()) {
-        *leaf_id = kNullPageId;
-        return 0;
-    }
-    Page* page = result.value();
-    u16 n = leaf_num_keys(page);
     const bool prefix_mode = (low == high && low.column_count() > 0);
-
     u32 written = 0;
-    while (*slot_idx < n && written < capacity) {
-        u16 idx = *slot_idx;
-        IndexKey k = leaf_key(page, idx);
-        if (prefix_mode && low.column_count() < k.column_count()) {
-            // Composite-key prefix search: keep walking until either the
-            // prefix no longer matches or the key has overshot.
-            if (!k.starts_with(low)) {
-                if (k > low) {
+
+    while (*leaf_id != kNullPageId && written < capacity) {
+        auto result = pool_->fetch_page(*leaf_id, true);
+        if (!result.ok()) {
+            *leaf_id = kNullPageId;
+            return written;
+        }
+        Page* page = result.value();
+        u16 n = leaf_num_keys(page);
+
+        while (*slot_idx < n && written < capacity) {
+            u16 idx = *slot_idx;
+            IndexKey k = leaf_key(page, idx);
+            if (prefix_mode && low.column_count() < k.column_count()) {
+                // Composite-key prefix search: keep walking until either the
+                // prefix no longer matches or the key has overshot.
+                if (!k.starts_with(low)) {
+                    if (k > low) {
+                        pool_->unpin_page(*leaf_id);
+                        *leaf_id = kNullPageId;
+                        return written;
+                    }
+                    *slot_idx = static_cast<u16>(*slot_idx + 1);
+                    continue;
+                }
+            } else {
+                if (k > high) {
                     pool_->unpin_page(*leaf_id);
                     *leaf_id = kNullPageId;
                     return written;
                 }
+                if (k < low) {
+                    *slot_idx = static_cast<u16>(*slot_idx + 1);
+                    continue;
+                }
+            }
+            RecordId candidate = leaf_rid(page, idx);
+            if (skip_rid && candidate == *skip_rid) {
                 *slot_idx = static_cast<u16>(*slot_idx + 1);
                 continue;
             }
-        } else {
-            if (k > high) {
-                pool_->unpin_page(*leaf_id);
-                *leaf_id = kNullPageId;
-                return written;
-            }
-            if (k < low) {
-                *slot_idx = static_cast<u16>(*slot_idx + 1);
-                continue;
-            }
-        }
-        RecordId candidate = leaf_rid(page, idx);
-        if (skip_rid && candidate == *skip_rid) {
+            out_keys[written] = static_cast<IndexKey&&>(k);
+            out_rids[written] = candidate;
+            written++;
             *slot_idx = static_cast<u16>(*slot_idx + 1);
-            continue;
         }
-        out_keys[written] = static_cast<IndexKey&&>(k);
-        out_rids[written] = candidate;
-        written++;
-        *slot_idx = static_cast<u16>(*slot_idx + 1);
-    }
 
-    if (*slot_idx >= n) {
-        // Exhausted this leaf; reposition cursor at the start of the next.
-        PageId next = leaf_next(page);
-        pool_->unpin_page(*leaf_id);
-        *leaf_id = next;
-        *slot_idx = 0;
-    } else {
-        // Still entries left in the current leaf — drop the pin; caller
-        // will resume here on the next batch.
-        pool_->unpin_page(*leaf_id);
+        if (*slot_idx >= n) {
+            // Exhausted this leaf; reposition cursor at the start of the next.
+            PageId next = leaf_next(page);
+            pool_->unpin_page(*leaf_id);
+            *leaf_id = next;
+            *slot_idx = 0;
+        } else {
+            // Still entries left in the current leaf — drop the pin; caller
+            // will resume here on the next batch.
+            pool_->unpin_page(*leaf_id);
+            break;
+        }
     }
     return written;
 }
@@ -1064,7 +1192,7 @@ bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
     if (root_page_id_ == kNullPageId) return false;
 
     if (*leaf_id == kNullPageId) {
-        *leaf_id = find_leaf_with_parent(low, nullptr);
+        *leaf_id = find_leaf_lower_bound(low);
         *slot_idx = 0;
     }
 
@@ -1240,6 +1368,42 @@ PageId BPlusTree::find_leaf(const IndexKey& key) const {
     return find_leaf_with_parent(key, nullptr);
 }
 
+PageId BPlusTree::find_leaf_lower_bound(const IndexKey& key) const {
+    PageId current = root_page_id_;
+    HashMap<PageId, bool> visited;
+    u32 hops = 0;
+
+    while (current != kNullPageId && hops < kMaxPageChainHops) {
+        if (visited.find(current)) break;
+        visited.insert(current, true);
+        hops++;
+        auto result = const_cast<BufferPool*>(pool_)->fetch_page(current);
+        if (!result.ok()) break;
+
+        Page* page = result.value();
+        if (page->data()[kPageHeaderSize] == 1) {
+            const_cast<BufferPool*>(pool_)->unpin_page(current);
+            return current;
+        }
+
+        u16 n = internal_num_keys(page);
+        u16 lo = 0, hi = n;
+        while (lo < hi) {
+            u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+            IndexKey mid_key = internal_key(page, mid);
+            if (key <= mid_key) {
+                hi = mid;
+            } else {
+                lo = static_cast<u16>(mid + 1);
+            }
+        }
+        PageId child = internal_child(page, lo);
+        const_cast<BufferPool*>(pool_)->unpin_page(current);
+        current = child;
+    }
+    return current;
+}
+
 PageId BPlusTree::leftmost_leaf() const {
     if (root_page_id_ == kNullPageId) return kNullPageId;
 
@@ -1287,10 +1451,11 @@ PageId BPlusTree::find_leaf_with_parent(const IndexKey& key, PageId* parent_id) 
         }
 
         u16 n = internal_num_keys(page);
-        // Binary search for the first separator key K[i] >= search key.
-        // We descend into child[i] in that case (left side of equal keys
-        // so leaf-chain scans see duplicates split across adjacent leaves).
-        // If no such i exists, descend the rightmost child[n].
+        // Binary search for the first separator key K[i] > search key.
+        // Separators store the first key of the right child, so equality
+        // belongs to the right side for insertion/point lookup. Non-unique
+        // range scans that need the first duplicate leaf use a separate
+        // leftmost-leaf scan path.
         // Each comparison still allocates an IndexKey, but log2(n) is far
         // better than n for the fan-out we now achieve after the 512→128
         // key-size reduction (≈57 keys per internal node).
@@ -1298,7 +1463,7 @@ PageId BPlusTree::find_leaf_with_parent(const IndexKey& key, PageId* parent_id) 
         while (lo < hi) {
             u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
             IndexKey mid_key = internal_key(page, mid);
-            if (key <= mid_key) {
+            if (key < mid_key) {
                 hi = mid;
             } else {
                 lo = static_cast<u16>(mid + 1);
