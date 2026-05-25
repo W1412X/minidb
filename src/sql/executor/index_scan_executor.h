@@ -22,8 +22,7 @@ public:
     IndexScanExecutor(BufferPool* pool, HeapFile* heap, BPlusTree* index,
                       const IndexKey& search_key, bool is_range,
                       const IndexKey& range_high, const Schema& output_schema,
-                      TransactionManager* txn_mgr = nullptr,
-                      bool index_unique = true);
+                      TransactionManager* txn_mgr = nullptr);
     ~IndexScanExecutor() override;
     void init() override;
     ExecResult next() override;
@@ -51,7 +50,6 @@ private:
     RecordId last_rid_;
     u32 table_id_;
     HeapFile* heap_;
-    bool index_unique_;
     // Cache the last heap page pinned across next() calls. Clustered indexes
     // (the common case for INSERT-ordered data) return RIDs to the same heap
     // page in a run; reusing the pin saves a fetch/unpin pair per row.
@@ -78,7 +76,7 @@ public:
     IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index, const IndexKey& search_key,
                           bool is_range, const IndexKey& range_high,
                           const Schema& output_schema, TransactionManager* txn_mgr = nullptr,
-                          HeapFile* heap = nullptr, bool index_unique = true);
+                          HeapFile* heap = nullptr);
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
@@ -97,7 +95,6 @@ private:
     bool has_last_index_rid_;
     TransactionManager* txn_mgr_;
     HeapFile* heap_;  // VM-based optimization: skip heap fetch for all-visible pages
-    bool index_unique_;
     // Same batched-iterator buffer pattern as IndexScanExecutor — see the
     // comment there for rationale.
     static constexpr u32 kBatchSize = 32;
