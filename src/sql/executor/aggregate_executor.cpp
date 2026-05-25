@@ -63,6 +63,15 @@ static double numeric_value_as_double(const Value& value, bool* ok) {
     }
 }
 
+static bool having_passes(const Value& cond) {
+    bool pass = false;
+    if (!ExpressionEvaluator::predicate_truth(cond, &pass)) {
+        set_executor_error("HAVING expression must be BOOL");
+        return false;
+    }
+    return pass;
+}
+
 static void advance_agg(AggState* state, AggFunc func, const Value& input, bool distinct = false) {
     if (!state) return;
     if (distinct) {
@@ -182,7 +191,7 @@ void AggregateExecutor::compute_groups() {
         if (having_) {
             Tuple check(output_schema_, row);
             Value cond = ExpressionEvaluator::evaluate(*having_, check);
-            if (cond.is_null() || !cond.get_bool()) return;
+            if (!having_passes(cond)) return;
         }
         result_groups_.push_back(static_cast<Vector<Value>&&>(row));
         return;
@@ -256,7 +265,7 @@ void AggregateExecutor::compute_groups() {
         if (having_) {
             Tuple check(output_schema_, row);
             Value cond = ExpressionEvaluator::evaluate(*having_, check);
-            if (cond.is_null() || !cond.get_bool()) continue;
+            if (!having_passes(cond)) continue;
         }
         result_groups_.push_back(static_cast<Vector<Value>&&>(row));
     }
@@ -368,7 +377,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             if (having_) {
                 Tuple check(output_schema_, row);
                 Value cond = ExpressionEvaluator::evaluate(*having_, check);
-                if (cond.is_null() || !cond.get_bool()) return;
+                if (!having_passes(cond)) return;
             }
             result_groups_.push_back(static_cast<Vector<Value>&&>(row));
         };
@@ -471,7 +480,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         if (having_) {
             Tuple check(output_schema_, row);
             Value cond = ExpressionEvaluator::evaluate(*having_, check);
-            if (cond.is_null() || !cond.get_bool()) return;
+            if (!having_passes(cond)) return;
         }
         result_groups_.push_back(static_cast<Vector<Value>&&>(row));
     };

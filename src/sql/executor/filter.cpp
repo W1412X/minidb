@@ -1,4 +1,5 @@
 #include "sql/executor/filter.h"
+#include "sql/executor/executor.h"
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
 
@@ -27,7 +28,12 @@ ExecResult FilterExecutor::next() {
         if (!ExpressionEvaluator::fast_evaluate(*predicate_, result.tuple, &cond)) {
             cond = ExpressionEvaluator::evaluate(*predicate_, result.tuple);
         }
-        if (!cond.is_null() && cond.get_bool()) return result;
+        bool pass = false;
+        if (!ExpressionEvaluator::predicate_truth(cond, &pass)) {
+            set_executor_error("predicate expression must be BOOL");
+            return ExecResult::empty();
+        }
+        if (pass) return result;
     }
 }
 

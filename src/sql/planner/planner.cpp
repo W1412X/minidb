@@ -5,6 +5,7 @@
 #include "sql/planner/planner.h"
 #include "sql/optimizer/optimizer.h"
 #include "sql/executor/expression_evaluator.h"
+#include "sql/planner/semantic_validator.h"
 #include <cstdio>
 
 namespace minidb {
@@ -218,6 +219,10 @@ UniquePtr<PlanNode> Planner::plan_select(const SelectStmt& stmt) {
         if (stmt.limit >= 0) sort->top_n = stmt.limit + (stmt.offset > 0 ? stmt.offset : 0);
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
+            if (!SemanticValidator::validate_order_expression(stmt.order_by[i].expression.get(),
+                                           union_schema, stmt.select_list)) {
+                return UniquePtr<PlanNode>();
+            }
             SortKey sk;
             sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
             sk.ascending = stmt.order_by[i].ascending;
@@ -295,6 +300,15 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
             right_plan = UniquePtr<PlanNode>(right_scan.release());
         }
 
+        Schema join_schema = merged_schema;
+        for (u32 i = 0; i < right_schema.column_count(); i++) {
+            join_schema.add_column(right_schema.get_column(i));
+        }
+        if (join.on_condition &&
+            !SemanticValidator::require_bool_expression(join.on_condition.get(), join_schema)) {
+            return UniquePtr<PlanNode>();
+        }
+
         auto join_plan = make_unique<JoinPlan>();
         join_plan->left = UniquePtr<PlanNode>(current.release());
         join_plan->right = UniquePtr<PlanNode>(right_plan.release());
@@ -303,9 +317,7 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
             : UniquePtr<Expression>();
         join_plan->join_type = join.type;
 
-        for (u32 i = 0; i < right_schema.column_count(); i++) {
-            merged_schema.add_column(right_schema.get_column(i));
-        }
+        merged_schema = join_schema;
         join_plan->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(join_plan.release());
     }
@@ -316,15 +328,35 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
     // into the underlying scan via `pushed_predicate` so that no separate
     // Filter operator survives in the executor pipeline.
     if (stmt.where_clause && !where_satisfied_by_index) {
+        if (!SemanticValidator::require_bool_expression(stmt.where_clause.get(), merged_schema)) {
+            return UniquePtr<PlanNode>();
+        }
         auto filter = make_unique<FilterPlan>();
         filter->child = UniquePtr<PlanNode>(current.release());
         filter->predicate = UniquePtr<Expression>(stmt.where_clause->clone());
         filter->output_schema = merged_schema;
         current = UniquePtr<PlanNode>(filter.release());
+    } else if (stmt.where_clause &&
+               !SemanticValidator::require_bool_expression(stmt.where_clause.get(), merged_schema)) {
+        return UniquePtr<PlanNode>();
     }
 
     // Aggregation (GROUP BY / HAVING / COUNT/SUM/AVG/MIN/MAX)
     if (has_aggregate(stmt.select_list) || !stmt.group_by.empty()) {
+        for (u32 i = 0; i < stmt.select_list.size(); i++) {
+            if (!SemanticValidator::validate_expression(stmt.select_list[i].get(), merged_schema)) {
+                return UniquePtr<PlanNode>();
+            }
+        }
+        for (u32 i = 0; i < stmt.group_by.size(); i++) {
+            if (!SemanticValidator::validate_expression(stmt.group_by[i].get(), merged_schema)) {
+                return UniquePtr<PlanNode>();
+            }
+        }
+        if (stmt.having && !SemanticValidator::require_bool_expression(stmt.having.get(), merged_schema)) {
+            return UniquePtr<PlanNode>();
+        }
+
         auto agg = make_unique<AggregatePlan>();
         agg->child = UniquePtr<PlanNode>(current.release());
 
@@ -468,6 +500,12 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
     bool order_applied_before_projection = false;
     if (include_tail && !stmt.order_by.empty() && !stmt.distinct &&
         !has_aggregate(stmt.select_list)) {
+        for (u32 i = 0; i < stmt.order_by.size(); i++) {
+            if (!SemanticValidator::validate_order_expression(stmt.order_by[i].expression.get(),
+                                           merged_schema, stmt.select_list)) {
+                return UniquePtr<PlanNode>();
+            }
+        }
         auto sort = make_unique<SortPlan>();
         if (stmt.limit >= 0) sort->top_n = stmt.limit + (stmt.offset > 0 ? stmt.offset : 0);
         sort->child = UniquePtr<PlanNode>(current.release());
@@ -516,6 +554,9 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         Schema out_schema;
         for (u32 i = 0; i < stmt.select_list.size(); i++) {
             const auto& expr = stmt.select_list[i];
+            if (!SemanticValidator::validate_expression(expr.get(), merged_schema)) {
+                return UniquePtr<PlanNode>();
+            }
             if (expr->type == ExprType::kColumnRef) {
                 int idx = -1;
                 if (!expr->table_name.empty()) {
@@ -560,6 +601,12 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
 
     // ORDER BY
     if (include_tail && !stmt.order_by.empty() && !order_applied_before_projection) {
+        for (u32 i = 0; i < stmt.order_by.size(); i++) {
+            if (!SemanticValidator::validate_order_expression(stmt.order_by[i].expression.get(),
+                                           merged_schema, stmt.select_list)) {
+                return UniquePtr<PlanNode>();
+            }
+        }
         auto sort = make_unique<SortPlan>();
         if (stmt.limit >= 0) sort->top_n = stmt.limit + (stmt.offset > 0 ? stmt.offset : 0);
         sort->child = UniquePtr<PlanNode>(current.release());
@@ -660,14 +707,19 @@ UniquePtr<PlanNode> Planner::plan_delete(const DeleteStmt& stmt) {
     auto plan = make_unique<DeletePlan>();
     plan->table_id = table->table_id;
     plan->output_schema = table->schema;
+    Schema access_schema = schema_with_table_name(
+        table->schema, stmt.table.alias.empty() ? table->table_name : stmt.table.alias);
+    if (stmt.where_clause && !SemanticValidator::require_bool_expression(stmt.where_clause.get(), access_schema)) {
+        return UniquePtr<PlanNode>();
+    }
     bool where_satisfied_by_index = false;
     UniquePtr<PlanNode> child = plan_table_access(
-        table, table->schema, stmt.where_clause.get(), &where_satisfied_by_index);
+        table, access_schema, stmt.where_clause.get(), &where_satisfied_by_index);
     if (stmt.where_clause && !where_satisfied_by_index) {
         auto filter = make_unique<FilterPlan>();
         filter->child = UniquePtr<PlanNode>(child.release());
         filter->predicate = UniquePtr<Expression>(stmt.where_clause->clone());
-        filter->output_schema = table->schema;
+        filter->output_schema = access_schema;
         child = UniquePtr<PlanNode>(filter.release());
     }
     plan->child = UniquePtr<PlanNode>(child.release());
@@ -680,15 +732,26 @@ UniquePtr<PlanNode> Planner::plan_update(const UpdateStmt& stmt) {
     auto plan = make_unique<UpdatePlan>();
     plan->table_id = table->table_id;
     plan->output_schema = table->schema;
+    Schema access_schema = schema_with_table_name(
+        table->schema, stmt.table.alias.empty() ? table->table_name : stmt.table.alias);
     for (u32 i = 0; i < stmt.set_clauses.size(); i++) {
+        if (table->schema.get_column_index(stmt.set_clauses[i].first) < 0) {
+            return UniquePtr<PlanNode>();
+        }
+        if (!SemanticValidator::validate_expression(stmt.set_clauses[i].second.get(), table->schema)) {
+            return UniquePtr<PlanNode>();
+        }
         Pair<String, UniquePtr<Expression>> clause;
         clause.first = stmt.set_clauses[i].first;
         clause.second = UniquePtr<Expression>(stmt.set_clauses[i].second->clone());
         plan->set_clauses.push_back(static_cast<Pair<String, UniquePtr<Expression>>&&>(clause));
     }
+    if (stmt.where_clause && !SemanticValidator::require_bool_expression(stmt.where_clause.get(), access_schema)) {
+        return UniquePtr<PlanNode>();
+    }
     bool where_satisfied_by_index = false;
     UniquePtr<PlanNode> child = plan_table_access(
-        table, table->schema, stmt.where_clause.get(), &where_satisfied_by_index);
+        table, access_schema, stmt.where_clause.get(), &where_satisfied_by_index);
     if (stmt.where_clause) {
         plan->where_clause = UniquePtr<Expression>(stmt.where_clause->clone());
     }
@@ -696,7 +759,7 @@ UniquePtr<PlanNode> Planner::plan_update(const UpdateStmt& stmt) {
         auto filter = make_unique<FilterPlan>();
         filter->child = UniquePtr<PlanNode>(child.release());
         filter->predicate = UniquePtr<Expression>(stmt.where_clause->clone());
-        filter->output_schema = table->schema;
+        filter->output_schema = access_schema;
         child = UniquePtr<PlanNode>(filter.release());
     }
     plan->child = UniquePtr<PlanNode>(child.release());

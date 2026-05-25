@@ -1,4 +1,6 @@
 #include "sql/executor/compiled_predicate.h"
+#include "sql/executor/executor.h"
+#include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
 
 namespace minidb {
@@ -123,33 +125,52 @@ bool CompiledPredicate::passes(const Tuple& tuple) const {
             case Node::Kind::kAnd: {
                 const Value& l = s[static_cast<u32>(node.left)];
                 const Value& r = s[static_cast<u32>(node.right)];
+                bool lb = false;
+                bool rb = false;
+                if (!ExpressionEvaluator::predicate_truth(l, &lb) ||
+                    !ExpressionEvaluator::predicate_truth(r, &rb)) {
+                    set_executor_error("predicate expression must be BOOL");
+                    return false;
+                }
                 // SQL 3VL: FALSE AND anything is FALSE (even NULL).
-                if ((!l.is_null() && !l.get_bool()) ||
-                    (!r.is_null() && !r.get_bool())) {
+                if ((!l.is_null() && !lb) ||
+                    (!r.is_null() && !rb)) {
                     s[i] = Value(false);
                 } else if (l.is_null() || r.is_null()) {
                     s[i] = Value();
                 } else {
-                    s[i] = Value(l.get_bool() && r.get_bool());
+                    s[i] = Value(lb && rb);
                 }
                 break;
             }
             case Node::Kind::kOr: {
                 const Value& l = s[static_cast<u32>(node.left)];
                 const Value& r = s[static_cast<u32>(node.right)];
-                if ((!l.is_null() && l.get_bool()) ||
-                    (!r.is_null() && r.get_bool())) {
+                bool lb = false;
+                bool rb = false;
+                if (!ExpressionEvaluator::predicate_truth(l, &lb) ||
+                    !ExpressionEvaluator::predicate_truth(r, &rb)) {
+                    set_executor_error("predicate expression must be BOOL");
+                    return false;
+                }
+                if ((!l.is_null() && lb) ||
+                    (!r.is_null() && rb)) {
                     s[i] = Value(true);
                 } else if (l.is_null() || r.is_null()) {
                     s[i] = Value();
                 } else {
-                    s[i] = Value(l.get_bool() || r.get_bool());
+                    s[i] = Value(lb || rb);
                 }
                 break;
             }
             case Node::Kind::kNot: {
                 const Value& c = s[static_cast<u32>(node.left)];
-                s[i] = c.is_null() ? Value() : Value(!c.get_bool());
+                bool cb = false;
+                if (!ExpressionEvaluator::predicate_truth(c, &cb)) {
+                    set_executor_error("predicate expression must be BOOL");
+                    return false;
+                }
+                s[i] = c.is_null() ? Value() : Value(!cb);
                 break;
             }
             case Node::Kind::kIsNull:
@@ -162,7 +183,12 @@ bool CompiledPredicate::passes(const Tuple& tuple) const {
     }
     const Value& v = s[static_cast<u32>(root_)];
     // WHERE semantics: TRUE passes, FALSE/NULL fail.
-    return !v.is_null() && v.get_bool();
+    bool pass = false;
+    if (!ExpressionEvaluator::predicate_truth(v, &pass)) {
+        set_executor_error("predicate expression must be BOOL");
+        return false;
+    }
+    return pass;
 }
 
 } // namespace minidb
