@@ -204,6 +204,115 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
     return true;
 }
 
+bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
+    WriteGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) {
+        create();
+    }
+
+    hot_leaf_id_ = kNullPageId;
+    hot_leaf_first_key_ = IndexKey();
+    hot_leaf_parent_id_ = kNullPageId;
+
+    if (entries.empty()) return true;
+
+    struct LevelEntry {
+        PageId page_id;
+        IndexKey first_key;
+    };
+
+    Vector<LevelEntry> level;
+    level.reserve((entries.size() + kIndexMaxKeys - 1) / kIndexMaxKeys);
+
+    PageId prev_leaf = kNullPageId;
+    u32 pos = 0;
+    bool first_leaf = true;
+    while (pos < entries.size()) {
+        PageId leaf_id = first_leaf ? root_page_id_ : alloc_page_id();
+        Page* leaf = nullptr;
+        if (first_leaf) {
+            auto result = pool_->fetch_page(leaf_id);
+            if (!result.ok()) return false;
+            leaf = result.value();
+            leaf->init(leaf_id, PageType::kIndexData);
+            leaf->data()[kPageHeaderSize] = 1;
+        } else {
+            auto result = pool_->new_page(leaf_id, PageType::kIndexData);
+            if (!result.ok()) return false;
+            leaf = result.value();
+            leaf->init(leaf_id, PageType::kIndexData);
+            leaf->data()[kPageHeaderSize] = 1;
+        }
+
+        u16 count = 0;
+        while (pos < entries.size() && count < kIndexMaxKeys) {
+            if (!leaf_set_key(leaf, count, entries[pos].key)) {
+                pool_->unpin_page(leaf_id);
+                return false;
+            }
+            leaf_set_rid(leaf, count, entries[pos].rid);
+            count++;
+            pos++;
+        }
+        leaf_set_keys(leaf, count);
+        leaf_set_next(leaf, kNullPageId);
+        pool_->mark_dirty(leaf_id);
+        pool_->unpin_page(leaf_id);
+
+        if (prev_leaf != kNullPageId) {
+            auto prev_result = pool_->fetch_page(prev_leaf);
+            if (!prev_result.ok()) return false;
+            leaf_set_next(prev_result.value(), leaf_id);
+            pool_->mark_dirty(prev_leaf);
+            pool_->unpin_page(prev_leaf);
+        }
+
+        level.push_back(LevelEntry{leaf_id, entries[pos - count].key});
+        prev_leaf = leaf_id;
+        first_leaf = false;
+    }
+
+    while (level.size() > 1) {
+        Vector<LevelEntry> next_level;
+        next_level.reserve((level.size() + kIndexMaxKeys) / (kIndexMaxKeys + 1));
+
+        u32 i = 0;
+        while (i < level.size()) {
+            u32 remaining = level.size() - i;
+            u16 child_count = static_cast<u16>(
+                remaining > kIndexMaxKeys + 1 ? kIndexMaxKeys + 1 : remaining);
+            PageId node_id = alloc_page_id();
+            auto result = pool_->new_page(node_id, PageType::kIndexData);
+            if (!result.ok()) return false;
+            Page* node = result.value();
+            node->init(node_id, PageType::kIndexData);
+            node->data()[kPageHeaderSize] = 0;
+
+            internal_set_num_keys(node, static_cast<u16>(child_count - 1));
+            for (u16 child = 0; child < child_count; child++) {
+                internal_set_child(node, child, level[i + child].page_id);
+                if (child > 0) {
+                    if (!internal_set_key(node, static_cast<u16>(child - 1),
+                                          level[i + child].first_key)) {
+                        pool_->unpin_page(node_id);
+                        return false;
+                    }
+                }
+            }
+
+            pool_->mark_dirty(node_id);
+            pool_->unpin_page(node_id);
+            next_level.push_back(LevelEntry{node_id, level[i].first_key});
+            i += child_count;
+        }
+        level = static_cast<Vector<LevelEntry>&&>(next_level);
+    }
+
+    root_page_id_ = level[0].page_id;
+    save_meta();
+    return true;
+}
+
 // ============================================================
 // remove
 // ============================================================

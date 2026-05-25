@@ -995,14 +995,16 @@ void Database::rebuild_index(IndexEntry* index) {
     tree->create();
     BPlusTree* tree_ptr = tree.get();
     index_trees_[index->index_id] = static_cast<UniquePtr<BPlusTree>&&>(tree);
-    index->root_page_id = tree_ptr->root_page_id();
 
     HeapFile* heap = get_heap_file(index->table_id);
     PageId first_page = heap->first_data_page_id();
     if (first_page == kNullPageId) {
+        index->root_page_id = tree_ptr->root_page_id();
         index->state = IndexState::kValid;   // empty table, trivially in sync
         return;
     }
+
+    Vector<BTreeBulkEntry> entries;
     u32 file_id = file_id_from_page(first_page);
     u32 page_num = page_num_from_page(first_page);
     u32 pages = heap->meta().num_data_pages;
@@ -1020,11 +1022,18 @@ void Database::rebuild_index(IndexEntry* index) {
             if (tuple.xmax() != kInvalidTxnId) continue;
             IndexKey key = index_key_from_tuple(*index, tuple);
             if (key.fits()) {
-                tree_ptr->insert(key, RecordId(page_id, slot));
+                entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
         }
         pool_->unpin_page(page_id);
     }
+    entries.sort([](const BTreeBulkEntry& a, const BTreeBulkEntry& b) {
+        if (a.key != b.key) return a.key < b.key;
+        if (a.rid.page_id != b.rid.page_id) return a.rid.page_id < b.rid.page_id;
+        return a.rid.slot_idx < b.rid.slot_idx;
+    });
+    if (!tree_ptr->bulk_load_sorted(entries)) return;
+    index->root_page_id = tree_ptr->root_page_id();
     // Atomic flip back to valid. A failure mid-rebuild would have returned
     // earlier and left the entry kRebuilding so the optimiser keeps refusing.
     index->state = IndexState::kValid;
