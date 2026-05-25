@@ -47,6 +47,13 @@ struct SeqScanPlan : PlanNode {
     u32 table_id;
     String table_name;
     Vector<u32> projected_columns;
+    // Optional pushed-down WHERE predicate. When set, the scan evaluates the
+    // predicate inline on each visible tuple and only yields tuples whose
+    // predicate is true. Logically a `Filter(SeqScan(t))` is rewritten by
+    // the planner into `SeqScan(t, pred)` so that the executor's per-row
+    // virtual-call + result-move overhead is amortized to zero — and so
+    // rows that fail the filter never have to construct an ExecResult.
+    UniquePtr<Expression> pushed_predicate;
     SeqScanPlan() { type = PlanNodeType::kSeqScan; }
 };
 
@@ -57,6 +64,10 @@ struct IndexScanPlan : PlanNode {
     IndexKey search_key;
     bool is_range;
     IndexKey range_high;
+    // Residual predicate left over after the index range constrained the
+    // search key. Evaluated inline against each candidate heap tuple before
+    // emission, so rows failing it don't pay the result-move cost.
+    UniquePtr<Expression> pushed_predicate;
     IndexScanPlan() : table_id(0), index_id(0), is_range(false) {
         type = PlanNodeType::kIndexScan;
     }

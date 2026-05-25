@@ -27,6 +27,50 @@ def check(desc, needle, out, negate=False):
         FAIL += 1
         BUGS.append((desc, needle))
         print(f"  FAIL: {desc}")
+        print("    output tail:")
+        for line in out.splitlines()[-12:]:
+            print(f"      {line}")
+
+def check_line(desc, expected, out, negate=False):
+    global PASS, FAIL
+    lines = [line.strip() for line in out.splitlines()]
+    found = expected in lines
+    if negate: found = not found
+    if found:
+        PASS += 1
+    else:
+        FAIL += 1
+        BUGS.append((desc, expected))
+        print(f"  FAIL: {desc}")
+        print("    output tail:")
+        for line in out.splitlines()[-12:]:
+            print(f"      {line}")
+
+def show_tables(out):
+    tables = []
+    in_tables = False
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped == "Tables:":
+            in_tables = True
+            continue
+        if in_tables:
+            if not stripped or stripped == "Goodbye.":
+                continue
+            tables.append(stripped)
+    return tables
+
+def check_table_absent(desc, table, out):
+    global PASS, FAIL
+    if table not in show_tables(out):
+        PASS += 1
+    else:
+        FAIL += 1
+        BUGS.append((desc, table))
+        print(f"  FAIL: {desc}")
+        print("    output tail:")
+        for line in out.splitlines()[-12:]:
+            print(f"      {line}")
 
 # =================================================================
 print("=== 1. DDL ===")
@@ -39,7 +83,7 @@ try:
     check("DESC UNIQUE", "YES", run("DESC t;", db))
     run("CREATE TABLE t2 (id INT PRIMARY KEY);", db)
     run("DROP TABLE t2;", db)
-    check("DROP TABLE gone", "t2", run("SHOW TABLES;", db), negate=True)
+    check_table_absent("DROP TABLE gone", "t2", run("SHOW TABLES;", db))
 finally:
     shutil.rmtree(db)
 
@@ -195,7 +239,7 @@ try:
     run(["BEGIN;", "DELETE FROM t WHERE id = 2;", "ROLLBACK;"], db)
     check("DELETE ROLLBACK", "2", run("SELECT COUNT(*) FROM t;", db))
     run(["BEGIN;", "INSERT INTO t VALUES (4, 40);", "COMMIT;"], db)
-    check("COMMIT after ROLLBACK", "3", run("SELECT COUNT(*) FROM t;", db))
+    check_line("COMMIT after ROLLBACK", "3", run("SELECT COUNT(*) FROM t;", db))
 finally:
     shutil.rmtree(db)
 

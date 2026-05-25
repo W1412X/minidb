@@ -50,6 +50,11 @@ out="$(
         'DROP INDEX idx_v;' \
         'EXPLAIN SELECT * FROM t WHERE v = 30;' \
         'EXPLAIN SELECT * FROM t WHERE v = 30 AND id = 3;' \
+        'CREATE TABLE rt (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO rt VALUES (6, 60), (7, 70), (8, 80);' \
+        'EXPLAIN UPDATE rt SET id = id + 100, v = v + 1 WHERE id BETWEEN 6 AND 8;' \
+        'UPDATE rt SET id = id + 100, v = v + 1 WHERE id BETWEEN 6 AND 8;' \
+        'SELECT id, v FROM rt WHERE id = 107;' \
         'SELECT COUNT(*), SUM(v), AVG(v), MIN(v), MAX(v) FROM t;' \
         'CREATE TABLE u (id INT, w INT);' \
         'INSERT INTO u VALUES (1, 100), (3, 300);' \
@@ -72,16 +77,23 @@ require_contains 'Plan: cost=' "$out"
 require_contains 'IndexScan table=t index=1000 range=[1,2]' "$out"
 require_contains 'Update
   IndexScan table=t index=1000 key=2' "$out"
+require_contains 'Update
+  IndexScan table=rt' "$out"
+require_contains 'range=[6,8]' "$out"
 require_contains 'Delete
   IndexScan table=t index=1000 key=4' "$out"
 require_contains 'IndexScan table=t index=1002 key=30' "$out"
-require_contains 'Filter
-  SeqScan table=t' "$out"
-require_contains 'Filter
-  IndexScan table=t index=1000 key=3' "$out"
+# Filter is now pushed directly into the scan operator — the executor pipeline
+# no longer instantiates a separate FilterExecutor when the predicate sits
+# atop a SeqScan/IndexScan. EXPLAIN still surfaces the predicate via the
+# `Filter=pushed` annotation on the scan line.
+require_contains 'SeqScan table=t' "$out"
+require_contains 'Filter=pushed' "$out"
+require_contains 'IndexScan table=t index=1000 key=3' "$out"
 require_contains 'HashJoin cost=' "$out"
 require_contains '2 | b | 20' "$out"
 require_contains '4 | 40' "$out"
+require_contains '107 | 71' "$out"
 require_contains '2 | 40 | 20' "$out"
 require_contains '1 | 100' "$out"
 require_contains '3 | 300' "$out"
@@ -137,6 +149,8 @@ extra_out="$(
         'CREATE UNIQUE INDEX uq_ab ON uq (a, b);' \
         'INSERT INTO uq VALUES (1, 1, "x"), (1, 2, "y"), (NULL, 1, "n1"), (NULL, 1, "n2");' \
         'INSERT INTO uq VALUES (1, 1, "dup");' \
+        'UPDATE uq SET c = "z" WHERE a = 1;' \
+        'SELECT c FROM uq WHERE a = 1 AND b = 2;' \
         'SELECT COUNT(*) FROM uq;' \
         'CREATE TABLE alias_t (id INT PRIMARY KEY, v INT);' \
         'INSERT INTO alias_t VALUES (1, 10), (2, 20);' \
@@ -145,6 +159,8 @@ extra_out="$(
 )"
 require_contains 'affected_rows
 0' "$extra_out"
+require_contains 'c
+z' "$extra_out"
 require_contains 'agg_0
 4' "$extra_out"
 require_contains 'IndexOnlyScan table=alias_t' "$extra_out"

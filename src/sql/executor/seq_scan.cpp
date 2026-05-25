@@ -5,6 +5,8 @@
 #include "sql/executor/seq_scan.h"
 #include "sql/executor/filter.h"
 #include "sql/executor/project.h"
+#include "sql/executor/expression_evaluator.h"
+#include "sql/parser/ast.h"
 #include "record/tuple.h"
 #include "transaction/transaction.h"
 #include <cstring>
@@ -22,16 +24,80 @@ SeqScanExecutor::SeqScanExecutor(BufferPool* pool, HeapFile* heap, const Schema&
       projected_columns_(projected_columns),
       current_page_id_(kNullPageId), current_slot_(0), finished_(false),
       scan_file_id_(0), scan_next_page_num_(0), pages_remaining_(0),
-      last_rid_(), txn_mgr_(txn_mgr) {}
+      last_rid_(), txn_mgr_(txn_mgr),
+      pinned_page_(nullptr), pinned_num_tuples_(0),
+      has_redirects_on_page_(false), track_reads_(false) {
+    for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+}
 
 SeqScanExecutor::SeqScanExecutor(BufferPool* pool, HeapFile* heap, const Schema& schema,
                                  TransactionManager* txn_mgr)
     : SeqScanExecutor(pool, heap, schema, schema, Vector<u32>(), txn_mgr) {}
 
+SeqScanExecutor::~SeqScanExecutor() {
+    // Drop any page still pinned by an aborted iteration (LIMIT, error, etc.)
+    release_pinned_page();
+}
+
+void SeqScanExecutor::release_pinned_page() {
+    if (pinned_page_) {
+        pool_->unpin_page(current_page_id_);
+        pinned_page_ = nullptr;
+        pinned_num_tuples_ = 0;
+        has_redirects_on_page_ = false;
+        for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+    }
+}
+
+// Pre-scan the page once to find all REDIRECT targets; subsequent per-slot
+// checks become O(1) bitmap lookups instead of O(num_tuples). Redirects are
+// rare in INSERT-heavy workloads, so we also cache a fast-path flag.
+void SeqScanExecutor::prepare_page(Page* page) {
+    pinned_page_ = page;
+    pinned_num_tuples_ = page->header()->num_tuples;
+    has_redirects_on_page_ = false;
+    for (u32 i = 0; i < kRedirectBitmapWords; i++) redirect_target_bits_[i] = 0;
+    for (u16 i = 0; i < pinned_num_tuples_; i++) {
+        const LinePointer* lp = page->line_pointer(i);
+        if (lp && lp->is_redirect()) {
+            SlotIdx target = page->redirect_target(i);
+            if (target != kNullSlot && target < (kRedirectBitmapWords * 64)) {
+                redirect_target_bits_[target >> 6] |= (1ULL << (target & 63));
+                has_redirects_on_page_ = true;
+            }
+        }
+    }
+}
+
+bool SeqScanExecutor::is_redirect_target_cached(SlotIdx slot) const {
+    if (!has_redirects_on_page_) return false;
+    if (slot >= (kRedirectBitmapWords * 64)) return false;
+    return (redirect_target_bits_[slot >> 6] >> (slot & 63)) & 1ULL;
+}
+
+void SeqScanExecutor::set_pushed_predicate(UniquePtr<Expression> pred) {
+    pushed_predicate_ = static_cast<UniquePtr<Expression>&&>(pred);
+    pushed_compile_ok_ = false;   // re-compile on next init()
+}
+
 void SeqScanExecutor::init() {
+    release_pinned_page();
     PageId first = heap_->first_data_page_id();
     current_slot_ = 0;
     skipped_rids_.clear();
+    // SSI read tracking is only required for Serializable transactions; cache
+    // the decision once at init() so the inner loop skips the per-row check.
+    track_reads_ = txn_mgr_ && txn_mgr_->current() &&
+                   txn_mgr_->current()->isolation() == IsolationLevel::kSerializable;
+    // (Re-)compile pushed predicate against the output schema. We compile
+    // against output_schema_ because the predicate has already been
+    // rewritten by the planner to reference the columns this scan emits.
+    if (pushed_predicate_) {
+        pushed_compile_ok_ = compiled_pushed_.compile(pushed_predicate_.get(),
+                                                       output_schema_);
+    } else {
+        pushed_compile_ok_ = false;
+    }
     if (first == kNullPageId) {
         current_page_id_ = kNullPageId;
         finished_ = true;
@@ -81,7 +147,8 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
         return follow_version_chain(page, target);
     }
     if (!lp->is_valid()) return ExecResult::empty();
-    if (is_redirect_target(page, slot)) return ExecResult::empty();
+    // O(1) bitmap check instead of O(num_tuples) line-pointer scan.
+    if (is_redirect_target_cached(slot)) return ExecResult::empty();
 
     Tuple tuple = Tuple::deserialize_projected_from_page(
         page->data() + lp->offset, storage_schema_, output_schema_,
@@ -99,7 +166,11 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
     // MVCC: Check if current version is visible to current transaction
     if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
         last_rid_ = RecordId(current_page_id_, slot);
-        txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
+        // Skip read tracking entirely for snapshot-isolation transactions
+        // (the call is a no-op internally but still costs a function entry).
+        if (track_reads_) {
+            txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
+        }
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
     }
 
@@ -221,39 +292,60 @@ void SeqScanExecutor::mark_skip_rid(PageId page_id, SlotIdx slot_idx) {
 
 ExecResult SeqScanExecutor::next() {
     while (!finished_) {
-        if (pages_remaining_ == 0) {
-            finished_ = true;
-            break;
-        }
-        auto result = pool_->fetch_page(current_page_id_, true);
-        if (!result.ok()) {
-            pages_remaining_--;
-            scan_next_page_num_++;
+        // Pin the current page once; reuse it across many next() calls until
+        // we exhaust its slots. The previous version did fetch+unpin per emit,
+        // costing two latch ops and a hash lookup per row.
+        if (!pinned_page_) {
             if (pages_remaining_ == 0) {
                 finished_ = true;
-                current_page_id_ = kNullPageId;
-            } else {
-                current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
+                break;
             }
-            continue;
+            auto result = pool_->fetch_page(current_page_id_, true);
+            if (!result.ok()) {
+                pages_remaining_--;
+                scan_next_page_num_++;
+                if (pages_remaining_ == 0) {
+                    finished_ = true;
+                    current_page_id_ = kNullPageId;
+                } else {
+                    current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
+                }
+                continue;
+            }
+            prepare_page(result.value());
+            current_slot_ = 0;
         }
 
-        Page* page = result.value();
-        u16 num_tuples = page->header()->num_tuples;
-
-        while (current_slot_ < num_tuples) {
+        // Emit tuples from the pinned page until we hit one that is visible
+        // AND satisfies the pushed-down predicate (if any). Filter pushdown:
+        // a row that fails the predicate never crosses this operator boundary.
+        while (current_slot_ < pinned_num_tuples_) {
             u16 slot = current_slot_;
             current_slot_++;
+            ExecResult tr = try_tuple(pinned_page_, slot);
+            if (!tr.ok()) continue;
 
-            ExecResult tr = try_tuple(page, slot);
-            if (tr.ok()) {
-                pool_->unpin_page(current_page_id_);
-                return tr;
+            if (pushed_predicate_) {
+                bool pass;
+                if (pushed_compile_ok_) {
+                    pass = compiled_pushed_.passes(tr.tuple);
+                } else {
+                    Value cond;
+                    if (!ExpressionEvaluator::fast_evaluate(*pushed_predicate_,
+                                                             tr.tuple, &cond)) {
+                        cond = ExpressionEvaluator::evaluate(*pushed_predicate_,
+                                                              tr.tuple);
+                    }
+                    pass = !cond.is_null() && cond.get_bool();
+                }
+                if (!pass) continue;
             }
+            // Page stays pinned — caller will come back for more tuples.
+            return tr;
         }
 
-        // Done with this page; advance to the next.
-        pool_->unpin_page(current_page_id_);
+        // Done with this page; advance to the next and drop the pin.
+        release_pinned_page();
         pages_remaining_--;
         current_slot_ = 0;
         scan_next_page_num_++;
@@ -264,7 +356,233 @@ ExecResult SeqScanExecutor::next() {
             current_page_id_ = make_page_id(scan_file_id_, scan_next_page_num_);
         }
     }
+    release_pinned_page();
     return ExecResult::empty();
+}
+
+// fast_count — counts visible tuples without deserializing column data.
+// AggregateExecutor delegates SELECT COUNT(*) to this when projection-free.
+// We only read the per-tuple xmin/xmax header (16 bytes) and the line-pointer
+// type bits, skipping Value/String allocation entirely. With our cached
+// is_visible fast-path this is roughly an order of magnitude faster than the
+// Volcano next() loop for COUNT(*) on large tables.
+bool SeqScanExecutor::fast_count(u64* count) {
+    if (!count) return false;
+    // Fast count is only valid when the scan emits EVERY visible row.
+    // A pushed-down predicate filters rows; falling back to the regular
+    // next() loop keeps the count correct.
+    if (pushed_predicate_) return false;
+    *count = 0;
+    PageId first = heap_->first_data_page_id();
+    if (first == kNullPageId) return true;
+    u32 file_id = file_id_from_page(first);
+    u32 page_num = page_num_from_page(first);
+    u32 pages = heap_->meta().num_data_pages;
+    Transaction* txn = txn_mgr_ ? txn_mgr_->current() : nullptr;
+
+    for (u32 p = 0; p < pages; p++, page_num++) {
+        if (executor_cancelled()) return false;
+        PageId pid = make_page_id(file_id, page_num);
+        auto result = pool_->fetch_page(pid, true);
+        if (!result.ok()) continue;
+        Page* page = result.value();
+        u16 num_tuples = page->header()->num_tuples;
+        for (u16 slot = 0; slot < num_tuples; slot++) {
+            const LinePointer* lp = page->line_pointer(slot);
+            if (!lp || !lp->is_valid()) continue;
+            if (lp->is_redirect()) continue;   // redirects are reached via target slot
+            if (static_cast<u32>(lp->offset) + 16 > kPageSize) continue;
+            // Read only xmin (8B) and xmax (8B); skip rest of the tuple.
+            u64 xmin = 0, xmax = 0;
+            const byte* base = page->data() + lp->offset;
+            std::memcpy(&xmin, base, 8);
+            std::memcpy(&xmax, base + 8, 8);
+            bool visible;
+            if (!txn) {
+                visible = (xmax == kInvalidTxnId);
+            } else {
+                visible = txn_mgr_->is_visible(xmin, xmax, *txn);
+            }
+            if (visible) (*count)++;
+        }
+        pool_->unpin_page(pid);
+    }
+    return true;
+}
+
+struct FastAggState {
+    AggFunc func;
+    u64 count;
+    Value value;
+    bool has_value;
+    double double_sum;
+
+    FastAggState() : func(AggFunc::kCount), count(0), value(),
+                     has_value(false), double_sum(0.0) {}
+};
+
+static bool fast_numeric_as_double(const Value& value, double* out) {
+    if (!out || value.is_null()) return false;
+    switch (value.type_id()) {
+        case TypeId::kBool:
+            *out = value.get_bool() ? 1.0 : 0.0;
+            return true;
+        case TypeId::kInt32:
+            *out = static_cast<double>(value.get_int32());
+            return true;
+        case TypeId::kInt64:
+            *out = static_cast<double>(value.get_int64());
+            return true;
+        case TypeId::kFloat:
+            *out = static_cast<double>(value.get_float());
+            return true;
+        case TypeId::kDouble:
+            *out = value.get_double();
+            return true;
+        default:
+            return false;
+    }
+}
+
+static Value finalize_fast_agg(const FastAggState& state) {
+    if (!state.has_value) {
+        if (state.func == AggFunc::kCount) return Value(static_cast<i64>(0));
+        return Value();
+    }
+    if (state.func == AggFunc::kCount) return Value(static_cast<i64>(state.count));
+    if (state.func == AggFunc::kAvg) {
+        return state.count == 0 ? Value() : Value(state.double_sum / static_cast<double>(state.count));
+    }
+    return state.value;
+}
+
+bool SeqScanExecutor::fast_plain_aggregate(const Vector<AggregateColumn>& aggregates,
+                                           Vector<Value>* row) {
+    if (!row || aggregates.empty() || pushed_predicate_ || txn_mgr_) return false;
+
+    Vector<int> column_indices;
+    column_indices.reserve(aggregates.size());
+    for (u32 a = 0; a < aggregates.size(); a++) {
+        const AggregateColumn& agg = aggregates[a];
+        if (agg.distinct) return false;
+        if (!agg.argument) {
+            if (agg.func != AggFunc::kCount) return false;
+            column_indices.push_back(-1);
+            continue;
+        }
+        const Expression* expr = agg.argument.get();
+        if (!expr || expr->type != ExprType::kColumnRef) return false;
+        int idx = expr->table_name.empty()
+            ? storage_schema_.get_column_index(expr->column_name)
+            : storage_schema_.get_column_index(expr->table_name, expr->column_name);
+        if (idx < 0) return false;
+        column_indices.push_back(idx);
+    }
+
+    Vector<FastAggState> states;
+    states.resize(aggregates.size());
+    for (u32 a = 0; a < aggregates.size(); a++) {
+        states[a].func = aggregates[a].func;
+    }
+
+    PageId first = heap_->first_data_page_id();
+    if (first == kNullPageId) {
+        row->clear();
+        for (u32 a = 0; a < states.size(); a++) row->push_back(finalize_fast_agg(states[a]));
+        return true;
+    }
+    u32 file_id = file_id_from_page(first);
+    u32 page_num = page_num_from_page(first);
+    u32 pages = heap_->meta().num_data_pages;
+
+    for (u32 p = 0; p < pages; p++, page_num++) {
+        if (executor_cancelled()) return false;
+        PageId pid = make_page_id(file_id, page_num);
+        auto result = pool_->fetch_page(pid, true);
+        if (!result.ok()) continue;
+        Page* page = result.value();
+        u16 num_tuples = page->header()->num_tuples;
+        for (u16 slot = 0; slot < num_tuples; slot++) {
+            const LinePointer* lp = page->line_pointer(slot);
+            if (!lp || !lp->is_valid() || lp->is_redirect()) continue;
+            if (static_cast<u32>(lp->offset) + 26 > kPageSize) continue;
+            u64 xmax = 0;
+            PageId next_page = kNullPageId;
+            SlotIdx next_slot = kNullSlot;
+            if (!Tuple::read_header_from_page(page->data() + lp->offset, lp->length,
+                                              nullptr, &xmax, &next_page, &next_slot)) {
+                pool_->unpin_page(pid);
+                return false;
+            }
+            // Fall back for pages containing old versions; the regular scan
+            // handles version-chain traversal. This keeps the fast path simple
+            // and exact for all-visible append-mostly tables.
+            (void)next_slot;
+            if (xmax != kInvalidTxnId || next_page != kNullPageId) {
+                pool_->unpin_page(pid);
+                return false;
+            }
+
+            for (u32 a = 0; a < aggregates.size(); a++) {
+                FastAggState& state = states[a];
+                if (column_indices[a] < 0) {
+                    state.count++;
+                    state.has_value = true;
+                    continue;
+                }
+                Value v;
+                if (!Tuple::read_column_from_page(page->data() + lp->offset, storage_schema_,
+                                                  static_cast<u32>(column_indices[a]),
+                                                  lp->length, &v)) {
+                    pool_->unpin_page(pid);
+                    return false;
+                }
+                if (v.is_null()) continue;
+                if (!state.has_value) {
+                    state.value = v;
+                    state.has_value = true;
+                    state.count = 1;
+                    double d = 0.0;
+                    if (fast_numeric_as_double(v, &d)) state.double_sum = d;
+                    continue;
+                }
+                switch (state.func) {
+                    case AggFunc::kCount:
+                        state.count++;
+                        break;
+                    case AggFunc::kSum:
+                        state.value = state.value + v;
+                        state.count++;
+                        break;
+                    case AggFunc::kAvg: {
+                        double d = 0.0;
+                        if (!fast_numeric_as_double(v, &d)) {
+                            pool_->unpin_page(pid);
+                            return false;
+                        }
+                        state.double_sum += d;
+                        state.count++;
+                        break;
+                    }
+                    case AggFunc::kMin:
+                        if (v < state.value) state.value = v;
+                        state.count++;
+                        break;
+                    case AggFunc::kMax:
+                        if (v > state.value) state.value = v;
+                        state.count++;
+                        break;
+                }
+            }
+        }
+        pool_->unpin_page(pid);
+    }
+
+    row->clear();
+    for (u32 a = 0; a < states.size(); a++) {
+        row->push_back(finalize_fast_agg(states[a]));
+    }
+    return true;
 }
 
 const Schema& SeqScanExecutor::output_schema() const { return output_schema_; }

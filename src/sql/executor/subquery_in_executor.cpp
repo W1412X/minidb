@@ -1,4 +1,5 @@
 #include "sql/executor/subquery_in_executor.h"
+#include "common/tuple_key.h"
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
 
@@ -16,7 +17,7 @@ SubqueryInExecutor::SubqueryInExecutor(
 
 void SubqueryInExecutor::init() {
     child_->init();
-    subquery_values_.clear();
+    subquery_keys_.clear();
     subquery_materialized_ = false;
     subquery_has_nulls_ = false;
 }
@@ -26,10 +27,8 @@ bool SubqueryInExecutor::in_set(const Value& v) const {
         // NULL = NULL is UNKNOWN in SQL, never matches for equality
         return false;
     }
-    for (u32 i = 0; i < subquery_values_.size(); i++) {
-        if (!subquery_values_[i].is_null() && v == subquery_values_[i]) return true;
-    }
-    return false;
+    String key = encode_value_key(v);
+    return subquery_keys_.find(key) != nullptr;
 }
 
 ExecResult SubqueryInExecutor::next() {
@@ -40,8 +39,11 @@ ExecResult SubqueryInExecutor::next() {
             ExecResult r = subquery_exec_->next();
             if (!r.ok()) break;
             Value val = r.tuple.get_value(right_col_idx_);
-            if (val.is_null()) subquery_has_nulls_ = true;
-            subquery_values_.push_back(static_cast<Value&&>(val));
+            if (val.is_null()) {
+                subquery_has_nulls_ = true;
+            } else {
+                subquery_keys_.insert(encode_value_key(val), true);
+            }
         }
         subquery_materialized_ = true;
     }

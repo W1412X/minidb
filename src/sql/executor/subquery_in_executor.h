@@ -5,6 +5,8 @@
 #pragma once
 
 #include "sql/executor/executor.h"
+#include "container/hash_map.h"
+#include "container/string.h"
 #include "container/unique_ptr.h"
 #include "container/vector.h"
 #include "record/value.h"
@@ -33,7 +35,7 @@ private:
     UniquePtr<Expression> left_expr_;
     u32 right_col_idx_;
     Schema output_schema_;
-    Vector<Value> subquery_values_;
+    HashMap<String, bool> subquery_keys_;
     bool subquery_materialized_;
     bool not_;
     bool subquery_has_nulls_;

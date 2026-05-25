@@ -77,15 +77,24 @@ Result<Pair<PageId, SlotIdx>> HeapFile::insert_tuple(const byte* data, u16 lengt
     if (!last_result.ok()) return last_result.error();
     Page* last_page = last_result.value();
 
-    // Prune DEAD tuples first
-    last_page->prune();
-    pool_->mark_dirty(last_pid);
+    // Only prune+dirty when there is actually DEAD work to do. The previous
+    // unconditional prune+mark_dirty added a full page scan and a partition
+    // latch acquisition to every single insert, even on fresh pages where
+    // there is nothing to reclaim.
+    if (last_page->prune() > 0) {
+        pool_->mark_dirty(last_pid);
+    }
 
     if (last_page->has_enough_space(length)) {
         SlotIdx slot = last_page->insert_tuple(data, length);
         if (slot != kNullSlot) {
-            if (lsn != 0) pool_->set_page_lsn(last_pid, lsn);
-            pool_->mark_dirty(last_pid);
+            // set_page_lsn already marks the frame dirty, so the redundant
+            // mark_dirty call here was a wasted partition-latch operation.
+            if (lsn != 0) {
+                pool_->set_page_lsn(last_pid, lsn);
+            } else {
+                pool_->mark_dirty(last_pid);
+            }
             pool_->unpin_page(last_pid);
             meta_.num_tuples++;
             note_meta_changed();
@@ -191,9 +200,11 @@ Result<HeapFile::InsertReservation> HeapFile::prepare_insert(u16 length) {
 
     Page* last_page = last_result.value();
 
-    // Prune DEAD tuples first to reclaim recyclable space.
-    last_page->prune();
-    pool_->mark_dirty(last_pid);
+    // Prune is a no-op fast-path when the page has no DEAD slots, so we can
+    // call it cheaply and only mark dirty when work actually happened.
+    if (last_page->prune() > 0) {
+        pool_->mark_dirty(last_pid);
+    }
 
     if (last_page->has_enough_space(length)) {
         SlotIdx slot = predict_slot(last_page, length);
@@ -208,8 +219,9 @@ Result<HeapFile::InsertReservation> HeapFile::prepare_insert(u16 length) {
         auto fsm_result = pool_->fetch_page(fsm_pid);
         if (fsm_result.ok()) {
             Page* fsm_page = fsm_result.value();
-            fsm_page->prune();
-            pool_->mark_dirty(fsm_pid);
+            if (fsm_page->prune() > 0) {
+                pool_->mark_dirty(fsm_pid);
+            }
             if (fsm_page->has_enough_space(length)) {
                 SlotIdx slot = predict_slot(fsm_page, length);
                 pool_->unpin_page(fsm_pid);
@@ -383,9 +395,10 @@ Result<HeapFile::InPageReservation> HeapFile::prepare_insert_in_page(PageId page
 
     Page* page = result.value();
 
-    // Prune DEAD tuples first to free up reclaimable space.
-    page->prune();
-    pool_->mark_dirty(page_id);
+    // Prune is a no-op fast-path when there are no DEAD slots.
+    if (page->prune() > 0) {
+        pool_->mark_dirty(page_id);
+    }
 
     if (!page->has_enough_space(length)) {
         pool_->unpin_page(page_id);
@@ -445,9 +458,10 @@ Result<Pair<PageId, SlotIdx>> HeapFile::insert_tuple_in_page(PageId page_id,
 
     Page* page = result.value();
 
-    // Prune DEAD tuples first
-    page->prune();
-    pool_->mark_dirty(page_id);
+    // Prune is a no-op fast-path when there are no DEAD slots.
+    if (page->prune() > 0) {
+        pool_->mark_dirty(page_id);
+    }
 
     if (!page->has_enough_space(length)) {
         pool_->unpin_page(page_id);
@@ -503,6 +517,46 @@ bool HeapFile::mark_deleted(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn)
     // DELETE invalidates the page's all-visible status.
     vm_.clear_page(page_id);
 
+    pool_->unpin_page(page_id);
+    return true;
+}
+
+bool HeapFile::mark_deleted_if_current(PageId page_id, SlotIdx slot_idx, u64 xmax,
+                                       u64 lsn, bool* conflict) {
+    if (conflict) *conflict = false;
+    LockGuard guard(latch_);
+    auto result = pool_->fetch_page(page_id);
+    if (!result.ok()) return false;
+
+    Page* page = result.value();
+    const LinePointer* lp = page->line_pointer(slot_idx);
+    if (!lp || !lp->is_valid()) {
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    if (static_cast<u32>(lp->offset) + 16 > kPageSize || lp->length < 16) {
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    byte* xmax_ptr = page->data() + lp->offset + 8;
+    u64 current_xmax = 0;
+    std::memcpy(&current_xmax, xmax_ptr, 8);
+    if (current_xmax != kInvalidTxnId && current_xmax != xmax) {
+        if (conflict) *conflict = true;
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    std::memcpy(xmax_ptr, &xmax, 8);
+
+    if (lsn != 0) {
+        u64 current_lsn = page->header()->lsn;
+        if (lsn > current_lsn) pool_->set_page_lsn(page_id, lsn);
+    }
+    pool_->mark_dirty(page_id);
+    vm_.clear_page(page_id);
     pool_->unpin_page(page_id);
     return true;
 }

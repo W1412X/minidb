@@ -177,13 +177,16 @@ u64 WalManager::log_insert(u64 txn_id, u32 table_id, PageId page_id, SlotIdx slo
     buf.data_size = size;
 
     u32 total = sizeof(buf) + size;
-    byte* full = static_cast<byte*>(std::malloc(total));
+    // Stack buffer for typical tuples (<1KB), heap fallback for large ones.
+    static constexpr u32 kStackBufSize = 1024;
+    byte stack_buf[kStackBufSize];
+    byte* full = total <= kStackBufSize ? stack_buf : static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &buf, sizeof(buf));
     if (size > 0) std::memcpy(full + sizeof(buf), data, size);
 
     u64 lsn = write_record(WalType::kInsert, txn_id, full, total);
-    std::free(full);
+    if (full != stack_buf) std::free(full);
     return lsn;
 }
 
@@ -220,21 +223,21 @@ u64 WalManager::log_update(u64 txn_id, u32 table_id,
     buf.data_size = size;
 
     u32 total = sizeof(buf) + size;
-    byte* full = static_cast<byte*>(std::malloc(total));
+    static constexpr u32 kStackBufSize = 1024;
+    byte stack_buf[kStackBufSize];
+    byte* full = total <= kStackBufSize ? stack_buf : static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &buf, sizeof(buf));
     if (size > 0) std::memcpy(full + sizeof(buf), new_data, size);
 
     u64 lsn = write_record(WalType::kUpdate, txn_id, full, total);
-    std::free(full);
+    if (full != stack_buf) std::free(full);
     return lsn;
 }
 
 u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid) {
     u32 key_size = key.encoded_size();
     if (key_size == 0 || key_size > 0xffff) return 0;
-    std::vector<byte> key_buf(key_size);
-    if (!key.encode(key_buf.data(), key_size)) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -246,12 +249,17 @@ u64 WalManager::log_index_insert(u64 txn_id, u32 index_id, const IndexKey& key, 
     hdr.slot_idx = rid.slot_idx;
     hdr.key_size = static_cast<u16>(key_size);
     u32 total = sizeof(hdr) + key_size;
-    byte* full = static_cast<byte*>(std::malloc(total));
+    static constexpr u32 kStackBufSize = 512;
+    byte stack_buf[kStackBufSize];
+    byte* full = total <= kStackBufSize ? stack_buf : static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &hdr, sizeof(hdr));
-    std::memcpy(full + sizeof(hdr), key_buf.data(), key_size);
+    if (!key.encode(full + sizeof(hdr), key_size)) {
+        if (full != stack_buf) std::free(full);
+        return 0;
+    }
     u64 lsn = write_record(WalType::kIndexInsert, txn_id, full, total);
-    std::free(full);
+    if (full != stack_buf) std::free(full);
     return lsn;
 }
 
@@ -315,8 +323,6 @@ u64 WalManager::log_ddl(u64 txn_id, DdlOp op, u32 table_id, u32 aux, const Strin
 u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const IndexKey& key, const RecordId& rid) {
     u32 key_size = key.encoded_size();
     if (key_size == 0 || key_size > 0xffff) return 0;
-    std::vector<byte> key_buf(key_size);
-    if (!key.encode(key_buf.data(), key_size)) return 0;
     struct __attribute__((packed)) {
         u32 index_id;
         u64 page_id;
@@ -328,12 +334,17 @@ u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const IndexKey& key, 
     hdr.slot_idx = rid.slot_idx;
     hdr.key_size = static_cast<u16>(key_size);
     u32 total = sizeof(hdr) + key_size;
-    byte* full = static_cast<byte*>(std::malloc(total));
+    static constexpr u32 kStackBufSize = 512;
+    byte stack_buf[kStackBufSize];
+    byte* full = total <= kStackBufSize ? stack_buf : static_cast<byte*>(std::malloc(total));
     if (!full) return 0;
     std::memcpy(full, &hdr, sizeof(hdr));
-    std::memcpy(full + sizeof(hdr), key_buf.data(), key_size);
+    if (!key.encode(full + sizeof(hdr), key_size)) {
+        if (full != stack_buf) std::free(full);
+        return 0;
+    }
     u64 lsn = write_record(WalType::kIndexDelete, txn_id, full, total);
-    std::free(full);
+    if (full != stack_buf) std::free(full);
     return lsn;
 }
 
@@ -413,7 +424,12 @@ bool WalManager::flush_commit(u64 lsn) {
     pending_commit_waiters_++;
     const bool leader = (pending_commit_waiters_ == 1);
     if (leader) {
-        commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
+        // Only wait for followers if there is concurrent activity that might
+        // batch with us. When we are the sole committer (pending == 1), the
+        // timed_wait just adds latency for nothing — skip straight to fsync.
+        if (pending_commit_waiters_ > 1) {
+            commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
+        }
         const bool ok = flush_buffer() && fsync(fd_) == 0;
         if (ok) durable_lsn_ = last_written_lsn_;
         group_commit_batches_++;
@@ -735,6 +751,24 @@ bool WalManager::recover(Database* db) {
             }
         }
 
+        auto rollback_insert_if_xmin = [db](HeapFile* heap, PageId page_id,
+                                            SlotIdx slot_idx, u64 txn_id, u64 lsn) {
+            if (!heap) return false;
+            auto pg_res = db->pool().fetch_page(page_id);
+            if (!pg_res.ok()) return false;
+            Page* pg = pg_res.value();
+            const LinePointer* lp = pg->line_pointer(slot_idx);
+            if (!lp || !lp->is_valid() || lp->offset + 8 > kPageSize) {
+                db->pool().unpin_page(page_id);
+                return false;
+            }
+            u64 slot_xmin = 0;
+            std::memcpy(&slot_xmin, pg->data() + lp->offset, 8);
+            db->pool().unpin_page(page_id);
+            if (slot_xmin != txn_id) return false;
+            return heap->rollback_insert(page_id, slot_idx, lsn);
+        };
+
         for (i32 i = static_cast<i32>(undo_refs.size()) - 1; i >= 0; i--) {
             const ReplayRef& ref = undo_refs[static_cast<u32>(i)];
             Vector<byte> data;
@@ -754,24 +788,11 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&ih, data.data(), sizeof(ih));
                 HeapFile* heap = db->get_heap_file(ih.table_id);
                 if (heap) {
-                    // Safety check: only rollback if the slot's xmin still matches
-                    // the rolled-back transaction. If a committed INSERT reused the
-                    // slot, the xmin will be different and we must NOT roll it back.
-                    auto pg_res = db->pool().fetch_page(ih.page_id);
-                    if (pg_res.ok()) {
-                        Page* pg = pg_res.value();
-                        const LinePointer* lp = pg->line_pointer(ih.slot_idx);
-                        if (lp && lp->is_valid() && lp->offset + 8 <= kPageSize) {
-                            u64 slot_xmin = 0;
-                            std::memcpy(&slot_xmin, pg->data() + lp->offset, 8);
-                            db->pool().unpin_page(ih.page_id);
-                            if (slot_xmin == ref.hdr.txn_id) {
-                                heap->rollback_insert(ih.page_id, ih.slot_idx, ref.hdr.lsn);
-                                needs_index_rebuild = true;
-                            }
-                        } else {
-                            db->pool().unpin_page(ih.page_id);
-                        }
+                    // Only rollback if the slot still belongs to this txn. A
+                    // later committed insert may have reused the reclaimed slot.
+                    if (rollback_insert_if_xmin(heap, ih.page_id, ih.slot_idx,
+                                                ref.hdr.txn_id, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
                     }
                 }
             } else if (ref.hdr.type == WalType::kDelete) {
@@ -785,7 +806,7 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&dh, data.data(), sizeof(dh));
                 HeapFile* heap = db->get_heap_file(dh.table_id);
                 if (heap) {
-                    heap->mark_deleted(dh.page_id, dh.slot_idx, kInvalidTxnId, ref.hdr.lsn);
+                    heap->rollback_delete(dh.page_id, dh.slot_idx, ref.hdr.lsn);
                     needs_index_rebuild = true;
                 }
             } else if (ref.hdr.type == WalType::kUpdate) {
@@ -802,9 +823,13 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&uh, data.data(), sizeof(uh));
                 HeapFile* heap = db->get_heap_file(uh.table_id);
                 if (heap) {
-                    heap->mark_deleted(uh.old_page_id, uh.old_slot_idx, kInvalidTxnId, ref.hdr.lsn);
-                    heap->rollback_insert(uh.new_page_id, uh.new_slot_idx, ref.hdr.lsn);
-                    needs_index_rebuild = true;
+                    if (heap->rollback_delete(uh.old_page_id, uh.old_slot_idx, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
+                    }
+                    if (rollback_insert_if_xmin(heap, uh.new_page_id, uh.new_slot_idx,
+                                                ref.hdr.txn_id, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
+                    }
                 }
             }
         }

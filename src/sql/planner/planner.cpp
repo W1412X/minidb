@@ -310,7 +310,11 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         current = UniquePtr<PlanNode>(join_plan.release());
     }
 
-    // Filter (WHERE)
+    // Filter (WHERE) — emit as a FilterPlan; the optimizer's
+    // `optimize_filter` rewrites it into IndexScan when an index covers
+    // the predicate, and ultimately pushes residual conjuncts directly
+    // into the underlying scan via `pushed_predicate` so that no separate
+    // Filter operator survives in the executor pipeline.
     if (stmt.where_clause && !where_satisfied_by_index) {
         auto filter = make_unique<FilterPlan>();
         filter->child = UniquePtr<PlanNode>(current.release());

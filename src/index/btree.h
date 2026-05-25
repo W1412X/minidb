@@ -76,12 +76,30 @@ public:
     bool remove(const IndexKey& key, const RecordId& rid);
     Vector<RecordId> search(const IndexKey& key);
     Vector<RecordId> range_search(const IndexKey& low, const IndexKey& high);
+    u64 range_count(const IndexKey& low, const IndexKey& high);
     bool scan_next(const IndexKey& low, const IndexKey& high,
                    PageId* leaf_id, u16* slot_idx,
                    const RecordId* skip_rid, RecordId* rid);
     bool scan_next_entry(const IndexKey& low, const IndexKey& high,
                          PageId* leaf_id, u16* slot_idx,
                          const RecordId* skip_rid, IndexKey* key, RecordId* rid);
+
+    // Batched range iterator: returns up to `capacity` (key, RecordId) pairs
+    // matching [low, high] in a single call. The leaf page is fetched and
+    // released exactly once per call regardless of how many entries it
+    // yields, which collapses N×(per-row latch + hash-map lookup + atomic
+    // pin) into a single set per batch. Cursor state lives in the caller-
+    // owned PageId/slot pair, identical to scan_next_entry's contract.
+    //
+    // Returns the number of entries written. A return < capacity means
+    // either the range is exhausted (leaf_id reset to kNullPageId) or this
+    // leaf yielded everything in range; the caller can keep calling until
+    // the returned count is 0 to fully drain the iterator.
+    u32 range_scan_batch(const IndexKey& low, const IndexKey& high,
+                         PageId* leaf_id, u16* slot_idx,
+                         const RecordId* skip_rid,
+                         IndexKey* out_keys, RecordId* out_rids,
+                         u32 capacity);
     bool validate_structure(String* error = nullptr) const;
     PageId root_page_id() const { return root_page_id_; }
 
@@ -139,6 +157,16 @@ private:
     BufferPool* pool_;
     u32 next_page_num_;
     mutable RwLock tree_latch_;  // W8: Per-tree latch for concurrent safety
+
+    // Monotonic-insert fast path. Bulk loads (especially serial primary keys)
+    // hammer the rightmost leaf — every full root-to-leaf descent is wasted.
+    // We cache the most recent leaf id we successfully inserted into; if the
+    // next key is >= that leaf's first key, we try it before paying the full
+    // descent. The cache is invalidated on any split that retargets the
+    // rightmost edge.
+    PageId hot_leaf_id_ = kNullPageId;
+    IndexKey hot_leaf_first_key_;       // smallest key on hot_leaf_id_
+    PageId hot_leaf_parent_id_ = kNullPageId;
 };
 
 } // namespace minidb

@@ -949,6 +949,11 @@ void REPL::print_plan(const PlanNode* plan, int indent) {
             auto* p = static_cast<const SeqScanPlan*>(plan);
             printf("SeqScan table=%s", p->table_name.c_str());
             if (!p->projected_columns.empty()) printf(" projected_cols=%u", p->projected_columns.size());
+            // Surface pushed-down predicates so EXPLAIN still discloses that
+            // a filter is applied — even though no separate FilterExecutor
+            // exists in the runtime tree, the work is happening inside the
+            // scan operator.
+            if (p->pushed_predicate) printf(" Filter=pushed");
             printf(" cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
             print_note(plan);
@@ -964,6 +969,7 @@ void REPL::print_plan(const PlanNode* plan, int indent) {
             } else {
                 printf(" key=%s", p->search_key.to_string().c_str());
             }
+            if (p->pushed_predicate) printf(" Filter=pushed");
             printf(" cost=%.2f..%.2f rows=%.0f",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
             print_note(plan);

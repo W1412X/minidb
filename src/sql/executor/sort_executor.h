@@ -57,6 +57,7 @@ private:
     std::string temp_dir_;
     std::vector<std::string> spill_files_;
     std::vector<RunCursor> run_cursors_;
+    std::vector<u32> merge_heap_;
 };
 
 } // namespace minidb

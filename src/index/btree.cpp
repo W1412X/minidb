@@ -121,13 +121,77 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
         create();
     }
 
-    PageId leaf_id = find_leaf(key);
-    PageId parent_id = find_parent(root_page_id_, leaf_id);
+    PageId parent_id = kNullPageId;
+    PageId leaf_id = kNullPageId;
+
+    // Fast path for monotonic / append-heavy workloads: if we have a cached
+    // "hot leaf" from the previous insert and the new key still belongs
+    // beyond that leaf's smallest key, jump straight to it and skip the
+    // O(log N) root-to-leaf descent. The leaf itself still binary-searches
+    // for the insert slot, so out-of-order keys within the leaf are fine.
+    if (hot_leaf_id_ != kNullPageId &&
+        !hot_leaf_first_key_.empty() &&
+        key >= hot_leaf_first_key_) {
+        auto pg_result = pool_->fetch_page(hot_leaf_id_);
+        if (pg_result.ok()) {
+            Page* page = pg_result.value();
+            // Make sure the cached leaf is still a leaf (could have changed
+            // through a concurrent rebuild) and that the next leaf either
+            // doesn't exist or has a strictly greater first key — otherwise
+            // the new key really belongs further right.
+            bool usable = page->data()[kPageHeaderSize] == 1;
+            if (usable) {
+                u16 n = leaf_num_keys(page);
+                PageId next_leaf = leaf_next(page);
+                if (next_leaf != kNullPageId && n > 0) {
+                    auto next_res = pool_->fetch_page(next_leaf);
+                    if (next_res.ok()) {
+                        IndexKey first_next = leaf_key(next_res.value(), 0);
+                        if (key >= first_next) usable = false;
+                        pool_->unpin_page(next_leaf);
+                    }
+                }
+            }
+            pool_->unpin_page(hot_leaf_id_);
+            if (usable) {
+                leaf_id = hot_leaf_id_;
+                parent_id = hot_leaf_parent_id_;
+            }
+        }
+    }
+
+    // Slow path: full descent from root. find_leaf_with_parent collapses the
+    // descent + parent lookup into one pass.
+    if (leaf_id == kNullPageId) {
+        leaf_id = find_leaf_with_parent(key, &parent_id);
+        if (leaf_id == kNullPageId) {
+            leaf_id = find_leaf(key);
+            parent_id = find_parent(root_page_id_, leaf_id);
+        }
+    }
+
     u16 num_keys_after = 0;
     if (!insert_into_leaf(leaf_id, key, rid, &num_keys_after)) return false;
 
     if (num_keys_after > kIndexMaxKeys) {
+        // Splits restructure the rightmost edge; invalidate the hot cache.
+        hot_leaf_id_ = kNullPageId;
+        hot_leaf_first_key_ = IndexKey();
+        hot_leaf_parent_id_ = kNullPageId;
         return split_leaf(leaf_id, parent_id);
+    }
+
+    // Successful insert without split — update the hot-leaf cache to this
+    // leaf so the next monotonic insert can skip the descent.
+    hot_leaf_id_ = leaf_id;
+    hot_leaf_parent_id_ = parent_id;
+    auto pg_result = pool_->fetch_page(leaf_id);
+    if (pg_result.ok()) {
+        Page* page = pg_result.value();
+        if (leaf_num_keys(page) > 0) {
+            hot_leaf_first_key_ = leaf_key(page, 0);
+        }
+        pool_->unpin_page(leaf_id);
     }
     return true;
 }
@@ -161,15 +225,17 @@ bool BPlusTree::remove(const IndexKey& key, const RecordId& rid) {
         }
 
         u16 n = internal_num_keys(page);
-        PageId child = internal_child(page, 0);
-        for (u16 i = 0; i < n; i++) {
-            IndexKey k = internal_key(page, i);
-            if (key <= k) {
-                child = internal_child(page, i);
-                break;
+        u16 lo = 0, hi = n;
+        while (lo < hi) {
+            u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+            IndexKey mid_key = internal_key(page, mid);
+            if (key <= mid_key) {
+                hi = mid;
+            } else {
+                lo = static_cast<u16>(mid + 1);
             }
-            child = internal_child(page, i + 1);
         }
+        PageId child = internal_child(page, lo);
         pool_->unpin_page(current);
         current = child;
     }
@@ -790,7 +856,7 @@ Vector<RecordId> BPlusTree::search(const IndexKey& key) {
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf(key);
+    PageId leaf_id = find_leaf_with_parent(key, nullptr);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
     while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
@@ -829,7 +895,7 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     Vector<RecordId> results;
     if (root_page_id_ == kNullPageId) return results;
 
-    PageId leaf_id = find_leaf(low);
+    PageId leaf_id = find_leaf_with_parent(low, nullptr);
     HashMap<PageId, bool> visited;
     u32 hops = 0;
 
@@ -861,11 +927,133 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     return results;
 }
 
+u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high) {
+    ReadGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) return 0;
+
+    PageId leaf_id = find_leaf_with_parent(low, nullptr);
+    HashMap<PageId, bool> visited;
+    u32 hops = 0;
+    u64 count = 0;
+    const bool prefix_mode = (low == high && low.column_count() > 0);
+
+    while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
+        if (visited.find(leaf_id)) break;
+        visited.insert(leaf_id, true);
+        hops++;
+        auto result = pool_->fetch_page(leaf_id, true);
+        if (!result.ok()) break;
+
+        Page* page = result.value();
+        u16 n = leaf_num_keys(page);
+        for (u16 i = 0; i < n; i++) {
+            IndexKey k = leaf_key(page, i);
+            if (prefix_mode && low.column_count() < k.column_count()) {
+                if (k.starts_with(low)) {
+                    count++;
+                    continue;
+                }
+                if (k > low) {
+                    pool_->unpin_page(leaf_id);
+                    return count;
+                }
+                continue;
+            }
+            if (k > high) {
+                pool_->unpin_page(leaf_id);
+                return count;
+            }
+            if (k >= low) count++;
+        }
+
+        PageId next = leaf_next(page);
+        pool_->unpin_page(leaf_id);
+        leaf_id = next;
+    }
+    return count;
+}
+
 bool BPlusTree::scan_next(const IndexKey& low, const IndexKey& high,
                           PageId* leaf_id, u16* slot_idx,
                           const RecordId* skip_rid, RecordId* rid) {
     IndexKey key;
     return scan_next_entry(low, high, leaf_id, slot_idx, skip_rid, &key, rid);
+}
+
+u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
+                                PageId* leaf_id, u16* slot_idx,
+                                const RecordId* skip_rid,
+                                IndexKey* out_keys, RecordId* out_rids,
+                                u32 capacity) {
+    if (!leaf_id || !slot_idx || !out_keys || !out_rids || capacity == 0) return 0;
+    ReadGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) return 0;
+
+    if (*leaf_id == kNullPageId) {
+        *leaf_id = find_leaf_with_parent(low, nullptr);
+        *slot_idx = 0;
+        if (*leaf_id == kNullPageId) return 0;
+    }
+
+    auto result = pool_->fetch_page(*leaf_id, true);
+    if (!result.ok()) {
+        *leaf_id = kNullPageId;
+        return 0;
+    }
+    Page* page = result.value();
+    u16 n = leaf_num_keys(page);
+    const bool prefix_mode = (low == high && low.column_count() > 0);
+
+    u32 written = 0;
+    while (*slot_idx < n && written < capacity) {
+        u16 idx = *slot_idx;
+        IndexKey k = leaf_key(page, idx);
+        if (prefix_mode && low.column_count() < k.column_count()) {
+            // Composite-key prefix search: keep walking until either the
+            // prefix no longer matches or the key has overshot.
+            if (!k.starts_with(low)) {
+                if (k > low) {
+                    pool_->unpin_page(*leaf_id);
+                    *leaf_id = kNullPageId;
+                    return written;
+                }
+                *slot_idx = static_cast<u16>(*slot_idx + 1);
+                continue;
+            }
+        } else {
+            if (k > high) {
+                pool_->unpin_page(*leaf_id);
+                *leaf_id = kNullPageId;
+                return written;
+            }
+            if (k < low) {
+                *slot_idx = static_cast<u16>(*slot_idx + 1);
+                continue;
+            }
+        }
+        RecordId candidate = leaf_rid(page, idx);
+        if (skip_rid && candidate == *skip_rid) {
+            *slot_idx = static_cast<u16>(*slot_idx + 1);
+            continue;
+        }
+        out_keys[written] = static_cast<IndexKey&&>(k);
+        out_rids[written] = candidate;
+        written++;
+        *slot_idx = static_cast<u16>(*slot_idx + 1);
+    }
+
+    if (*slot_idx >= n) {
+        // Exhausted this leaf; reposition cursor at the start of the next.
+        PageId next = leaf_next(page);
+        pool_->unpin_page(*leaf_id);
+        *leaf_id = next;
+        *slot_idx = 0;
+    } else {
+        // Still entries left in the current leaf — drop the pin; caller
+        // will resume here on the next batch.
+        pool_->unpin_page(*leaf_id);
+    }
+    return written;
 }
 
 bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
@@ -876,7 +1064,7 @@ bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
     if (root_page_id_ == kNullPageId) return false;
 
     if (*leaf_id == kNullPageId) {
-        *leaf_id = find_leaf(low);
+        *leaf_id = find_leaf_with_parent(low, nullptr);
         *slot_idx = 0;
     }
 
@@ -1045,37 +1233,11 @@ bool BPlusTree::validate_structure(String* error) const {
 }
 
 // ============================================================
-// find_leaf — top-down traversal, unpin all internal nodes, caller responsible for leaf unpin
+// find_leaf — top-down traversal, unpin all internal nodes.
 // ============================================================
 
 PageId BPlusTree::find_leaf(const IndexKey& key) const {
-    PageId leaf_id = leftmost_leaf();
-    PageId candidate = leaf_id;
-    HashMap<PageId, bool> visited;
-    u32 hops = 0;
-    while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
-        if (visited.find(leaf_id)) break;
-        visited.insert(leaf_id, true);
-        hops++;
-        auto result = const_cast<BufferPool*>(pool_)->fetch_page(leaf_id, true);
-        if (!result.ok()) break;
-        Page* page = result.value();
-        u16 n = leaf_num_keys(page);
-        PageId next = leaf_next(page);
-        if (n == 0) {
-            candidate = leaf_id;
-            const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
-            if (next == kNullPageId) return candidate;
-            leaf_id = next;
-            continue;
-        }
-        IndexKey last = leaf_key(page, n - 1);
-        candidate = leaf_id;
-        const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
-        if (key <= last || next == kNullPageId) return candidate;
-        leaf_id = next;
-    }
-    return candidate;
+    return find_leaf_with_parent(key, nullptr);
 }
 
 PageId BPlusTree::leftmost_leaf() const {
@@ -1125,18 +1287,24 @@ PageId BPlusTree::find_leaf_with_parent(const IndexKey& key, PageId* parent_id) 
         }
 
         u16 n = internal_num_keys(page);
-        PageId child = internal_child(page, 0);
-
-        for (u16 i = 0; i < n; i++) {
-            IndexKey k = internal_key(page, i);
-            // For duplicate keys, descend to the left side of an equal separator
-            // so leaf-chain scans can see duplicates split across adjacent leaves.
-            if (key <= k) {
-                child = internal_child(page, i);
-                break;
+        // Binary search for the first separator key K[i] >= search key.
+        // We descend into child[i] in that case (left side of equal keys
+        // so leaf-chain scans see duplicates split across adjacent leaves).
+        // If no such i exists, descend the rightmost child[n].
+        // Each comparison still allocates an IndexKey, but log2(n) is far
+        // better than n for the fan-out we now achieve after the 512→128
+        // key-size reduction (≈57 keys per internal node).
+        u16 lo = 0, hi = n;
+        while (lo < hi) {
+            u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+            IndexKey mid_key = internal_key(page, mid);
+            if (key <= mid_key) {
+                hi = mid;
+            } else {
+                lo = static_cast<u16>(mid + 1);
             }
-            child = internal_child(page, i + 1);
         }
+        PageId child = internal_child(page, lo);
 
         const_cast<BufferPool*>(pool_)->unpin_page(current);
         parent = current;
@@ -1159,11 +1327,31 @@ bool BPlusTree::insert_into_leaf(PageId leaf_id, const IndexKey& key, const Reco
     Page* page = result.value();
     u16 n = leaf_num_keys(page);
 
+    // Fast path for the bulk-load pattern: if the new key is >= the current
+    // largest key, append at the end without scanning. Each leaf_key() call
+    // performs a full IndexKey::decode (heap allocations for Vector<Value>
+    // and any VARCHAR strings) — skipping the linear scan saves O(n) decodes
+    // per insert when the workload is sequential (common for serial PKs).
     u16 pos = n;
-    for (u16 i = 0; i < n; i++) {
-        if (key < leaf_key(page, i)) {
-            pos = i;
-            break;
+    if (n > 0) {
+        IndexKey last_key = leaf_key(page, n - 1);
+        if (key >= last_key) {
+            pos = n;  // append; no scan
+        } else {
+            // Binary search the leaf for the correct insertion position.
+            // n is small (≤57) but at one heap allocation per decode this is
+            // still O(log n) decodes instead of O(n).
+            u16 lo = 0, hi = n;
+            while (lo < hi) {
+                u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+                IndexKey mid_key = leaf_key(page, mid);
+                if (key < mid_key) {
+                    hi = mid;
+                } else {
+                    lo = static_cast<u16>(mid + 1);
+                }
+            }
+            pos = lo;
         }
     }
 

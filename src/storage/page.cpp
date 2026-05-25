@@ -190,6 +190,21 @@ u16 Page::prune() {
     PageHeader* hdr = header();
     u16 reclaimed = 0;
 
+    // Early-out fast path: if there are no DEAD slots, the page already has
+    // its tuple data area densely packed and there is nothing to compact.
+    // The previous implementation unconditionally heap-allocated 8KB scratch
+    // and did two memcpy passes over the whole page — every INSERT paid that
+    // cost on the destination page, even when the page was freshly created.
+    bool any_dead = false;
+    for (u16 i = 0; i < hdr->num_tuples; i++) {
+        LinePointer* lp = line_pointer(i);
+        if (lp && lp->is_dead()) {
+            any_dead = true;
+            break;
+        }
+    }
+    if (!any_dead) return 0;
+
     for (u16 i = 0; i < hdr->num_tuples; i++) {
         LinePointer* lp = line_pointer(i);
         if (lp && lp->is_dead()) {
@@ -198,8 +213,10 @@ u16 Page::prune() {
         }
     }
 
-    // Compact the tuple data area, keeping only NORMAL tuples.
-    byte* tmp = new byte[kPageSize];
+    // Stack-allocated scratch instead of `new byte[kPageSize]` — avoids a
+    // malloc/free pair per prune. kPageSize = 8KB which is well within the
+    // pthread default stack size.
+    byte tmp[kPageSize];
     u16 write_end = kDataUpperBound;
     for (u16 i = 0; i < hdr->num_tuples; i++) {
         const LinePointer* lp = line_pointer(i);
@@ -218,8 +235,6 @@ u16 Page::prune() {
         lp->offset = cursor;
     }
     hdr->free_space_offset = kPageHeaderSize + hdr->num_tuples * kLinePointerSize;
-
-    delete[] tmp;
     return reclaimed;
 }
 
