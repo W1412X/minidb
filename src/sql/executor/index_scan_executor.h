@@ -27,6 +27,7 @@ public:
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
+    bool fast_count(u64* count) override;
     bool last_record_id(RecordId* rid) const override;
 
     // Pushed-down residual predicate (the portion of WHERE that the index
@@ -48,6 +49,7 @@ private:
     TransactionManager* txn_mgr_;
     RecordId last_rid_;
     u32 table_id_;
+    HeapFile* heap_;
     // Cache the last heap page pinned across next() calls. Clustered indexes
     // (the common case for INSERT-ordered data) return RIDs to the same heap
     // page in a run; reusing the pin saves a fetch/unpin pair per row.

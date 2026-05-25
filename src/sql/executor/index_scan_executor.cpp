@@ -16,7 +16,7 @@ IndexScanExecutor::IndexScanExecutor(
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
       has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_(),
-      table_id_(heap ? heap->table_id() : 0),
+      table_id_(heap ? heap->table_id() : 0), heap_(heap),
       cached_heap_page_id_(kNullPageId), cached_heap_page_(nullptr) {}
 
 IndexScanExecutor::~IndexScanExecutor() {
@@ -274,6 +274,77 @@ ExecResult IndexScanExecutor::next() {
 }
 
 const Schema& IndexScanExecutor::output_schema() const { return output_schema_; }
+
+bool IndexScanExecutor::fast_count(u64* count) {
+    if (!count || pushed_predicate_) return false;
+    *count = 0;
+
+    IndexKey high = is_range_ ? range_high_ : search_key_;
+    PageId leaf_id = kNullPageId;
+    u16 slot_idx = 0;
+    RecordId last_index_rid;
+    bool has_last = false;
+    IndexKey keys[kBatchSize];
+    RecordId rids[kBatchSize];
+    PageId cached_page_id = kNullPageId;
+    Page* cached_page = nullptr;
+
+    auto release_cached = [&]() {
+        if (cached_page) {
+            pool_->unpin_page(cached_page_id);
+            cached_page = nullptr;
+            cached_page_id = kNullPageId;
+        }
+    };
+
+    while (true) {
+        if (executor_cancelled()) {
+            release_cached();
+            return false;
+        }
+        const RecordId* skip = has_last ? &last_index_rid : nullptr;
+        u32 n = index_->range_scan_batch(search_key_, high, &leaf_id, &slot_idx,
+                                         skip, keys, rids, kBatchSize);
+        if (n == 0) break;
+        for (u32 i = 0; i < n; i++) {
+            RecordId rid = rids[i];
+            last_index_rid = rid;
+            has_last = true;
+
+            if (heap_ && heap_->vm().is_visible(rid.page_id)) {
+                (*count)++;
+                continue;
+            }
+
+            Page* page = nullptr;
+            if (cached_page && cached_page_id == rid.page_id) {
+                page = cached_page;
+            } else {
+                release_cached();
+                auto page_result = pool_->fetch_page(rid.page_id, true);
+                if (!page_result.ok()) continue;
+                cached_page = page_result.value();
+                cached_page_id = rid.page_id;
+                page = cached_page;
+            }
+
+            SlotIdx visible_slot = rid.slot_idx;
+            const LinePointer* lp = page->line_pointer(visible_slot);
+            if (lp && lp->is_redirect()) {
+                SlotIdx target = page->redirect_target(visible_slot);
+                if (target != kNullSlot) visible_slot = target;
+                lp = page->line_pointer(visible_slot);
+            }
+            if (lp && lp->is_valid() && visible_header(pool_, txn_mgr_, page, visible_slot)) {
+                (*count)++;
+            }
+        }
+        if (leaf_id == kNullPageId) break;
+    }
+
+    release_cached();
+    return true;
+}
 
 bool IndexScanExecutor::last_record_id(RecordId* rid) const {
     if (!rid) return false;
