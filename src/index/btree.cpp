@@ -225,15 +225,17 @@ bool BPlusTree::remove(const IndexKey& key, const RecordId& rid) {
         }
 
         u16 n = internal_num_keys(page);
-        PageId child = internal_child(page, 0);
-        for (u16 i = 0; i < n; i++) {
-            IndexKey k = internal_key(page, i);
-            if (key <= k) {
-                child = internal_child(page, i);
-                break;
+        u16 lo = 0, hi = n;
+        while (lo < hi) {
+            u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
+            IndexKey mid_key = internal_key(page, mid);
+            if (key <= mid_key) {
+                hi = mid;
+            } else {
+                lo = static_cast<u16>(mid + 1);
             }
-            child = internal_child(page, i + 1);
         }
+        PageId child = internal_child(page, lo);
         pool_->unpin_page(current);
         current = child;
     }
