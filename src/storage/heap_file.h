@@ -145,6 +145,8 @@ public:
 
     // MVCC: soft-delete (only stamp xmax, no physical removal).
     bool mark_deleted(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn = 0);
+    bool mark_deleted_if_current(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn,
+                                 bool* conflict);
 
     // MVCC: set xmin (on INSERT).
     bool set_xmin(PageId page_id, SlotIdx slot_idx, u64 xmin, u64 lsn = 0);

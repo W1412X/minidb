@@ -521,6 +521,46 @@ bool HeapFile::mark_deleted(PageId page_id, SlotIdx slot_idx, u64 xmax, u64 lsn)
     return true;
 }
 
+bool HeapFile::mark_deleted_if_current(PageId page_id, SlotIdx slot_idx, u64 xmax,
+                                       u64 lsn, bool* conflict) {
+    if (conflict) *conflict = false;
+    LockGuard guard(latch_);
+    auto result = pool_->fetch_page(page_id);
+    if (!result.ok()) return false;
+
+    Page* page = result.value();
+    const LinePointer* lp = page->line_pointer(slot_idx);
+    if (!lp || !lp->is_valid()) {
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    if (static_cast<u32>(lp->offset) + 16 > kPageSize || lp->length < 16) {
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    byte* xmax_ptr = page->data() + lp->offset + 8;
+    u64 current_xmax = 0;
+    std::memcpy(&current_xmax, xmax_ptr, 8);
+    if (current_xmax != kInvalidTxnId && current_xmax != xmax) {
+        if (conflict) *conflict = true;
+        pool_->unpin_page(page_id);
+        return false;
+    }
+
+    std::memcpy(xmax_ptr, &xmax, 8);
+
+    if (lsn != 0) {
+        u64 current_lsn = page->header()->lsn;
+        if (lsn > current_lsn) pool_->set_page_lsn(page_id, lsn);
+    }
+    pool_->mark_dirty(page_id);
+    vm_.clear_page(page_id);
+    pool_->unpin_page(page_id);
+    return true;
+}
+
 bool HeapFile::set_xmin(PageId page_id, SlotIdx slot_idx, u64 xmin, u64 lsn) {
     LockGuard guard(latch_);
     auto result = pool_->fetch_page(page_id);

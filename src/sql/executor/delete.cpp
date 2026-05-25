@@ -44,38 +44,20 @@ ExecResult DeleteExecutor::next() {
             }
             if (!explicit_txn) autocommit_record_locks.push_back(rid);
 
-            // Write-write conflict detection — re-read xmax after taking the
-            // row lock to confirm no other transaction has already deleted
-            // or updated this row.
-            {
-                auto pg = db_->pool().fetch_page(rid.page_id);
-                if (!pg.ok()) {
-                    set_executor_error("could not read row for delete");
-                    return ExecResult::empty();
-                }
-                Page* p = pg.value();
-                const LinePointer* lp = p->line_pointer(rid.slot_idx);
-                if (!lp || !lp->is_valid() || lp->offset + 16 > kPageSize) {
-                    db_->pool().unpin_page(rid.page_id);
-                    set_executor_error("could not serialize access due to concurrent update");
-                    return ExecResult::empty();
-                }
-                u64 cur_xmax = 0;
-                std::memcpy(&cur_xmax, p->data() + lp->offset + 8, 8);
-                db_->pool().unpin_page(rid.page_id);
-                if (cur_xmax != kInvalidTxnId && cur_xmax != txn_id) {
-                    set_executor_error("could not serialize access due to concurrent update");
-                    return ExecResult::empty();
-                }
-            }
-
             // DELIBERATELY does NOT call db_->delete_index_entries here.
             // Under snapshot isolation, an older transaction may still need
             // to find this tuple via IndexScan; the entry stays until GC
             // can prove no live snapshot can see the row anymore. The heap
             // tuple's xmax is set below, and IndexScan filters by visibility.
             u64 lsn = wal_ ? wal_->log_delete(txn_id, table_id_, rid.page_id, rid.slot_idx) : 0;
-            heap_->mark_deleted(rid.page_id, rid.slot_idx, txn_id, lsn);
+            bool conflict = false;
+            if (!heap_->mark_deleted_if_current(rid.page_id, rid.slot_idx,
+                                                txn_id, lsn, &conflict)) {
+                set_executor_error(conflict
+                    ? "could not serialize access due to concurrent update"
+                    : "could not read row for delete");
+                return ExecResult::empty();
+            }
             if (txn_mgr_ && txn_mgr_->current()) {
                 txn_mgr_->record_delete(table_id_, rid);
             }
