@@ -149,6 +149,8 @@ extra_out="$(
         'CREATE UNIQUE INDEX uq_ab ON uq (a, b);' \
         'INSERT INTO uq VALUES (1, 1, "x"), (1, 2, "y"), (NULL, 1, "n1"), (NULL, 1, "n2");' \
         'INSERT INTO uq VALUES (1, 1, "dup");' \
+        'UPDATE uq SET c = "z" WHERE a = 1;' \
+        'SELECT c FROM uq WHERE a = 1 AND b = 2;' \
         'SELECT COUNT(*) FROM uq;' \
         'CREATE TABLE alias_t (id INT PRIMARY KEY, v INT);' \
         'INSERT INTO alias_t VALUES (1, 10), (2, 20);' \
@@ -157,6 +159,8 @@ extra_out="$(
 )"
 require_contains 'affected_rows
 0' "$extra_out"
+require_contains 'c
+z' "$extra_out"
 require_contains 'agg_0
 4' "$extra_out"
 require_contains 'IndexOnlyScan table=alias_t' "$extra_out"

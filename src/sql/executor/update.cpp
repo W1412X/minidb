@@ -97,6 +97,15 @@ static String record_id_key(const RecordId& rid) {
     return key;
 }
 
+static bool group_intersects_columns(const Vector<u32>& group, const Vector<u32>& cols) {
+    for (u32 i = 0; i < group.size(); i++) {
+        for (u32 j = 0; j < cols.size(); j++) {
+            if (group[i] == cols[j]) return true;
+        }
+    }
+    return false;
+}
+
 UpdateExecutor::UpdateExecutor(BufferPool* pool, HeapFile* heap, const Schema& schema,
                                Vector<Pair<String, UniquePtr<Expression>>> set_clauses,
                                UniquePtr<Executor> child,
@@ -125,31 +134,12 @@ bool UpdateExecutor::row_satisfies_schema(const Vector<Value>& row) const {
 }
 
 bool UpdateExecutor::violates_unique_constraints(const Vector<Value>& row,
-                                                 const RecordId& self_rid) const {
+                                                 const RecordId& self_rid,
+                                                 const Vector<Vector<u32>>& unique_groups) const {
     if (!catalog_) return false;
     TableEntry* table = catalog_->get_table(table_id_);
     if (!table) return false;
-
-    Vector<Vector<u32>> unique_groups;
-    for (u32 i = 0; i < schema_.column_count(); i++) {
-        if (schema_.get_column(i).is_primary) {
-            Vector<u32> cols;
-            cols.push_back(i);
-            unique_groups.push_back(static_cast<Vector<u32>&&>(cols));
-        } else if (schema_.get_column(i).is_unique) {
-            Vector<u32> cols;
-            cols.push_back(i);
-            unique_groups.push_back(static_cast<Vector<u32>&&>(cols));
-        }
-    }
-
     Vector<IndexEntry*> indexes = catalog_->get_indexes(table_id_);
-    for (u32 i = 0; i < indexes.size(); i++) {
-        if (indexes[i] && indexes[i]->is_unique) {
-            unique_groups.push_back(indexes[i]->key_columns);
-        }
-    }
-
     if (unique_groups.empty()) return false;
 
     Vector<Vector<u32>> heap_checked_groups;
@@ -251,20 +241,26 @@ ExecResult UpdateExecutor::next() {
     // Check if HOT update is possible (no indexed columns modified)
     bool hot_eligible = catalog_ ? !catalog_->any_column_indexed(table_id_, modified_cols) : false;
 
-    Vector<Vector<u32>> unique_groups;
+    Vector<Vector<u32>> all_unique_groups;
     for (u32 i = 0; i < schema_.column_count(); i++) {
         if (schema_.get_column(i).is_primary || schema_.get_column(i).is_unique) {
             Vector<u32> cols;
             cols.push_back(i);
-            unique_groups.push_back(static_cast<Vector<u32>&&>(cols));
+            all_unique_groups.push_back(static_cast<Vector<u32>&&>(cols));
         }
     }
     if (catalog_) {
         Vector<IndexEntry*> indexes = catalog_->get_indexes(table_id_);
         for (u32 i = 0; i < indexes.size(); i++) {
             if (indexes[i] && indexes[i]->is_unique) {
-                unique_groups.push_back(indexes[i]->key_columns);
+                all_unique_groups.push_back(indexes[i]->key_columns);
             }
+        }
+    }
+    Vector<Vector<u32>> unique_groups;
+    for (u32 g = 0; g < all_unique_groups.size(); g++) {
+        if (group_intersects_columns(all_unique_groups[g], modified_cols)) {
+            unique_groups.push_back(all_unique_groups[g]);
         }
     }
     HashMap<String, bool> pending_unique_keys;
@@ -359,7 +355,10 @@ ExecResult UpdateExecutor::next() {
             set_executor_error(reason);
             return ExecResult::empty();
         }
-        if (violates_unique_constraints(new_values, old_rid)) continue;
+        if (!unique_groups.empty() &&
+            violates_unique_constraints(new_values, old_rid, unique_groups)) {
+            continue;
+        }
         bool batch_unique_conflict = false;
         Vector<String> row_unique_keys;
         for (u32 g = 0; g < unique_groups.size(); g++) {

@@ -36,7 +36,8 @@ public:
 
 private:
     bool row_satisfies_schema(const Vector<Value>& row) const;
-    bool violates_unique_constraints(const Vector<Value>& row, const RecordId& self_rid) const;
+    bool violates_unique_constraints(const Vector<Value>& row, const RecordId& self_rid,
+                                     const Vector<Vector<u32>>& unique_groups) const;
 
     BufferPool* pool_;
     HeapFile* heap_;
