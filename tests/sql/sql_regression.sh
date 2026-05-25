@@ -50,6 +50,11 @@ out="$(
         'DROP INDEX idx_v;' \
         'EXPLAIN SELECT * FROM t WHERE v = 30;' \
         'EXPLAIN SELECT * FROM t WHERE v = 30 AND id = 3;' \
+        'CREATE TABLE rt (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO rt VALUES (6, 60), (7, 70), (8, 80);' \
+        'EXPLAIN UPDATE rt SET id = id + 100, v = v + 1 WHERE id BETWEEN 6 AND 8;' \
+        'UPDATE rt SET id = id + 100, v = v + 1 WHERE id BETWEEN 6 AND 8;' \
+        'SELECT id, v FROM rt WHERE id = 107;' \
         'SELECT COUNT(*), SUM(v), AVG(v), MIN(v), MAX(v) FROM t;' \
         'CREATE TABLE u (id INT, w INT);' \
         'INSERT INTO u VALUES (1, 100), (3, 300);' \
@@ -72,6 +77,9 @@ require_contains 'Plan: cost=' "$out"
 require_contains 'IndexScan table=t index=1000 range=[1,2]' "$out"
 require_contains 'Update
   IndexScan table=t index=1000 key=2' "$out"
+require_contains 'Update
+  IndexScan table=rt' "$out"
+require_contains 'range=[6,8]' "$out"
 require_contains 'Delete
   IndexScan table=t index=1000 key=4' "$out"
 require_contains 'IndexScan table=t index=1002 key=30' "$out"
@@ -85,6 +93,7 @@ require_contains 'IndexScan table=t index=1000 key=3' "$out"
 require_contains 'HashJoin cost=' "$out"
 require_contains '2 | b | 20' "$out"
 require_contains '4 | 40' "$out"
+require_contains '107 | 71' "$out"
 require_contains '2 | 40 | 20' "$out"
 require_contains '1 | 100' "$out"
 require_contains '3 | 300' "$out"

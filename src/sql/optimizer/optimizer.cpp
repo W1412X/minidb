@@ -908,22 +908,11 @@ UniquePtr<PlanNode> Optimizer::optimize_node(UniquePtr<PlanNode> plan) {
 
         case PlanNodeType::kUpdate: {
             auto* p = static_cast<UpdatePlan*>(plan.get());
-            bool modifies_indexed_column = false;
-            TableEntry* table = catalog_ ? catalog_->get_table(p->table_id) : nullptr;
-            if (table) {
-                Vector<u32> modified_cols;
-                for (u32 i = 0; i < p->set_clauses.size(); i++) {
-                    int idx = table->schema.get_column_index(p->set_clauses[i].first);
-                    if (idx >= 0) modified_cols.push_back(static_cast<u32>(idx));
-                }
-                modifies_indexed_column = catalog_->any_column_indexed(p->table_id, modified_cols);
-            }
-            bool point_update = p->where_clause &&
-                                p->where_clause->type == ExprType::kBinaryOp &&
-                                p->where_clause->op == "=";
-            if (!modifies_indexed_column || point_update) {
-                p->child = optimize_node(static_cast<UniquePtr<PlanNode>&&>(p->child));
-            }
+            // UPDATE materialises target RIDs before mutating the heap, so
+            // index scans over the column being updated are Halloween-safe.
+            // Let the normal scan optimizer choose equality/range paths for
+            // both HOT and non-HOT updates.
+            p->child = optimize_node(static_cast<UniquePtr<PlanNode>&&>(p->child));
             estimate_unary(p, p->child.get(), 1.0, 0.03);
             p->optimizer_note = "update";
             return plan;

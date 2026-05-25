@@ -461,12 +461,13 @@ ExecResult UpdateExecutor::next() {
                         txn_mgr_->record_delete(table_id_, old_rid);
                         txn_mgr_->record_insert(table_id_, new_record_id);
                     }
-                    if (db_ && hot_eligible) {
+                    if (db_) {
                         // Do NOT eagerly remove the old version's index
                         // entry — under SI an older snapshot may still need
                         // to find the old row through this index. GC removes
-                        // it later. We still insert the new version's entry
-                        // so newer snapshots find the new row.
+                        // it later. Insert the new version's entries
+                        // incrementally so non-HOT UPDATE does not rebuild
+                        // every table index after each statement.
                         if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
                             set_executor_error("index insert failed");
                             return ExecResult::empty();
@@ -486,10 +487,6 @@ ExecResult UpdateExecutor::next() {
             db_->lock_manager().unlock_record(txn_id, table_id_, autocommit_record_locks[i]);
         }
     }
-    if (db_ && count > 0 && !hot_eligible) {
-        db_->rebuild_indexes_for_table(table_id_);
-    }
-
     Vector<Value> rv;
     rv.push_back(Value(static_cast<i32>(count)));
     return ExecResult::ok(Tuple(result_schema_, rv));
