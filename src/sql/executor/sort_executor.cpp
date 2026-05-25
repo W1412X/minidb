@@ -32,6 +32,7 @@ void SortExecutor::init() {
     temp_bytes_ = 0;
     buffer_.clear();
     top_heap_.clear();
+    merge_heap_.clear();
     cleanup_spill_files();
 }
 
@@ -222,6 +223,7 @@ bool SortExecutor::read_run_tuple(std::FILE* file, Tuple* out) {
 bool SortExecutor::init_merge() {
     if (merge_initialized_) return true;
     merge_initialized_ = true;
+    merge_heap_.clear();
     for (const std::string& path : spill_files_) {
         RunCursor cursor;
         cursor.path = path;
@@ -234,11 +236,16 @@ bool SortExecutor::init_merge() {
         if (executor_error()) return false;
         if (cursor.has_tuple) {
             run_cursors_.push_back(static_cast<RunCursor&&>(cursor));
+            merge_heap_.push_back(static_cast<u32>(run_cursors_.size() - 1));
         } else {
             std::fclose(cursor.file);
             unlink(cursor.path.c_str());
         }
     }
+    auto worse_run = [this](u32 a, u32 b) {
+        return compare_tuples(run_cursors_[a].tuple, run_cursors_[b].tuple) > 0;
+    };
+    std::make_heap(merge_heap_.begin(), merge_heap_.end(), worse_run);
     return true;
 }
 
@@ -251,6 +258,7 @@ void SortExecutor::cleanup_spill_files() {
         if (!cursor.path.empty()) unlink(cursor.path.c_str());
     }
     run_cursors_.clear();
+    merge_heap_.clear();
     for (const std::string& path : spill_files_) {
         unlink(path.c_str());
     }
@@ -262,19 +270,20 @@ ExecResult SortExecutor::next() {
     if (executor_error()) return ExecResult::empty();
     if (spilled_) {
         if (!init_merge() || executor_error()) return ExecResult::empty();
-        i32 best = -1;
-        for (u32 i = 0; i < run_cursors_.size(); i++) {
-            if (!run_cursors_[i].has_tuple) continue;
-            if (best < 0 || compare_tuples(run_cursors_[i].tuple,
-                                           run_cursors_[static_cast<u32>(best)].tuple) < 0) {
-                best = static_cast<i32>(i);
-            }
-        }
-        if (best < 0) return ExecResult::empty();
-        RunCursor& cursor = run_cursors_[static_cast<u32>(best)];
+        if (merge_heap_.empty()) return ExecResult::empty();
+        auto worse_run = [this](u32 a, u32 b) {
+            return compare_tuples(run_cursors_[a].tuple, run_cursors_[b].tuple) > 0;
+        };
+        std::pop_heap(merge_heap_.begin(), merge_heap_.end(), worse_run);
+        u32 best = merge_heap_.back();
+        merge_heap_.pop_back();
+        RunCursor& cursor = run_cursors_[best];
         Tuple out = static_cast<Tuple&&>(cursor.tuple);
         cursor.has_tuple = read_run_tuple(cursor.file, &cursor.tuple);
-        if (!cursor.has_tuple && !executor_error()) {
+        if (cursor.has_tuple) {
+            merge_heap_.push_back(best);
+            std::push_heap(merge_heap_.begin(), merge_heap_.end(), worse_run);
+        } else if (!executor_error()) {
             if (cursor.file) {
                 std::fclose(cursor.file);
                 cursor.file = nullptr;
