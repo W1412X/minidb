@@ -7,6 +7,10 @@ static bool is_numeric_type(TypeId type) {
            type == TypeId::kFloat || type == TypeId::kDouble;
 }
 
+static bool is_aggregate_numeric_type(TypeId type) {
+    return type == TypeId::kBool || is_numeric_type(type);
+}
+
 static bool is_comparison_op(const String& op) {
     return op == "=" || op == "<>" || op == "!=" || op == "<" ||
            op == ">" || op == "<=" || op == ">=" || op == "LIKE";
@@ -139,7 +143,7 @@ bool SemanticValidator::require_bool_expression(const Expression* expr,
                                                 const Schema& scope) {
     TypeId type = TypeId::kNull;
     if (!infer_expression_type(expr, scope, &type)) return false;
-    return type == TypeId::kBool;
+    return type == TypeId::kBool || type == TypeId::kNull;
 }
 
 bool SemanticValidator::validate_expression(const Expression* expr,
@@ -187,7 +191,7 @@ static bool infer_aggregate_type(const Expression* expr, const Schema& scope,
         }
         if (expr->op == "SUM" || expr->op == "SUM_DISTINCT" ||
             expr->op == "AVG" || expr->op == "AVG_DISTINCT") {
-            if (arg_type != TypeId::kNull && !is_numeric_type(arg_type)) return false;
+            if (arg_type != TypeId::kNull && !is_aggregate_numeric_type(arg_type)) return false;
         }
         if (expr->op == "AVG" || expr->op == "AVG_DISTINCT") {
             if (out) *out = TypeId::kDouble;
