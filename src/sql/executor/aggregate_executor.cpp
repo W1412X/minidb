@@ -2,6 +2,7 @@
 #include "common/tuple_key.h"
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -446,6 +447,16 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         cursors.push_back(static_cast<RunCursor&&>(c));
     }
 
+    std::vector<u32> merge_heap;
+    merge_heap.reserve(cursors.size());
+    for (u32 i = 0; i < cursors.size(); i++) {
+        if (cursors[i].has_tuple) merge_heap.push_back(i);
+    }
+    auto worse_cursor = [&cursors](u32 a, u32 b) {
+        return cursors[a].key > cursors[b].key;
+    };
+    std::make_heap(merge_heap.begin(), merge_heap.end(), worse_cursor);
+
     String current_key;
     Vector<Value> current_values;
     Vector<AggState> states(aggregates_.size());
@@ -465,17 +476,12 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         result_groups_.push_back(static_cast<Vector<Value>&&>(row));
     };
 
-    while (true) {
+    while (!merge_heap.empty()) {
         if (executor_cancelled()) break;
-        i32 best = -1;
-        for (u32 i = 0; i < cursors.size(); i++) {
-            if (!cursors[i].has_tuple) continue;
-            if (best < 0 || cursors[i].key < cursors[static_cast<u32>(best)].key) {
-                best = static_cast<i32>(i);
-            }
-        }
-        if (best < 0) break;
-        RunCursor& c = cursors[static_cast<u32>(best)];
+        std::pop_heap(merge_heap.begin(), merge_heap.end(), worse_cursor);
+        u32 best = merge_heap.back();
+        merge_heap.pop_back();
+        RunCursor& c = cursors[best];
         if (!have_group || c.key != current_key) {
             flush_group();
             current_key = c.key;
@@ -498,7 +504,11 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         }
         c.has_tuple = read_tuple(c.file, &c.tuple);
         if (executor_error()) break;
-        if (c.has_tuple) c.key = key_for_tuple(c.tuple);
+        if (c.has_tuple) {
+            c.key = key_for_tuple(c.tuple);
+            merge_heap.push_back(best);
+            std::push_heap(merge_heap.begin(), merge_heap.end(), worse_cursor);
+        }
     }
     flush_group();
 
