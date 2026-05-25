@@ -76,6 +76,7 @@ public:
     bool remove(const IndexKey& key, const RecordId& rid);
     Vector<RecordId> search(const IndexKey& key);
     Vector<RecordId> range_search(const IndexKey& low, const IndexKey& high);
+    u64 range_count(const IndexKey& low, const IndexKey& high);
     bool scan_next(const IndexKey& low, const IndexKey& high,
                    PageId* leaf_id, u16* slot_idx,
                    const RecordId* skip_rid, RecordId* rid);

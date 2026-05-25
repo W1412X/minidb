@@ -925,6 +925,52 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
     return results;
 }
 
+u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high) {
+    ReadGuard guard(tree_latch_);
+    if (root_page_id_ == kNullPageId) return 0;
+
+    PageId leaf_id = find_leaf(low);
+    HashMap<PageId, bool> visited;
+    u32 hops = 0;
+    u64 count = 0;
+    const bool prefix_mode = (low == high && low.column_count() > 0);
+
+    while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
+        if (visited.find(leaf_id)) break;
+        visited.insert(leaf_id, true);
+        hops++;
+        auto result = pool_->fetch_page(leaf_id, true);
+        if (!result.ok()) break;
+
+        Page* page = result.value();
+        u16 n = leaf_num_keys(page);
+        for (u16 i = 0; i < n; i++) {
+            IndexKey k = leaf_key(page, i);
+            if (prefix_mode && low.column_count() < k.column_count()) {
+                if (k.starts_with(low)) {
+                    count++;
+                    continue;
+                }
+                if (k > low) {
+                    pool_->unpin_page(leaf_id);
+                    return count;
+                }
+                continue;
+            }
+            if (k > high) {
+                pool_->unpin_page(leaf_id);
+                return count;
+            }
+            if (k >= low) count++;
+        }
+
+        PageId next = leaf_next(page);
+        pool_->unpin_page(leaf_id);
+        leaf_id = next;
+    }
+    return count;
+}
+
 bool BPlusTree::scan_next(const IndexKey& low, const IndexKey& high,
                           PageId* leaf_id, u16* slot_idx,
                           const RecordId* skip_rid, RecordId* rid) {

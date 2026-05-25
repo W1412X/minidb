@@ -280,6 +280,18 @@ bool IndexScanExecutor::fast_count(u64* count) {
     *count = 0;
 
     IndexKey high = is_range_ ? range_high_ : search_key_;
+    if (heap_) {
+        u32 visible_pages = 0;
+        u32 frozen_pages = 0;
+        heap_->vm().stats(&visible_pages, &frozen_pages);
+        (void)frozen_pages;
+        if (heap_->meta().num_data_pages > 0 &&
+            visible_pages >= heap_->meta().num_data_pages) {
+            *count = index_->range_count(search_key_, high);
+            return true;
+        }
+    }
+
     PageId leaf_id = kNullPageId;
     u16 slot_idx = 0;
     RecordId last_index_rid;
@@ -288,6 +300,9 @@ bool IndexScanExecutor::fast_count(u64* count) {
     RecordId rids[kBatchSize];
     PageId cached_page_id = kNullPageId;
     Page* cached_page = nullptr;
+    bool use_vm = heap_ && heap_->vm().size() != 0;
+    PageId cached_vm_page_id = kNullPageId;
+    bool cached_vm_visible = false;
 
     auto release_cached = [&]() {
         if (cached_page) {
@@ -311,9 +326,15 @@ bool IndexScanExecutor::fast_count(u64* count) {
             last_index_rid = rid;
             has_last = true;
 
-            if (heap_ && heap_->vm().is_visible(rid.page_id)) {
-                (*count)++;
-                continue;
+            if (use_vm) {
+                if (cached_vm_page_id != rid.page_id) {
+                    cached_vm_page_id = rid.page_id;
+                    cached_vm_visible = heap_->vm().is_visible(rid.page_id);
+                }
+                if (cached_vm_visible) {
+                    (*count)++;
+                    continue;
+                }
             }
 
             Page* page = nullptr;
