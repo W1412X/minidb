@@ -1231,37 +1231,11 @@ bool BPlusTree::validate_structure(String* error) const {
 }
 
 // ============================================================
-// find_leaf — top-down traversal, unpin all internal nodes, caller responsible for leaf unpin
+// find_leaf — top-down traversal, unpin all internal nodes.
 // ============================================================
 
 PageId BPlusTree::find_leaf(const IndexKey& key) const {
-    PageId leaf_id = leftmost_leaf();
-    PageId candidate = leaf_id;
-    HashMap<PageId, bool> visited;
-    u32 hops = 0;
-    while (leaf_id != kNullPageId && hops < kMaxPageChainHops) {
-        if (visited.find(leaf_id)) break;
-        visited.insert(leaf_id, true);
-        hops++;
-        auto result = const_cast<BufferPool*>(pool_)->fetch_page(leaf_id, true);
-        if (!result.ok()) break;
-        Page* page = result.value();
-        u16 n = leaf_num_keys(page);
-        PageId next = leaf_next(page);
-        if (n == 0) {
-            candidate = leaf_id;
-            const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
-            if (next == kNullPageId) return candidate;
-            leaf_id = next;
-            continue;
-        }
-        IndexKey last = leaf_key(page, n - 1);
-        candidate = leaf_id;
-        const_cast<BufferPool*>(pool_)->unpin_page(leaf_id);
-        if (key <= last || next == kNullPageId) return candidate;
-        leaf_id = next;
-    }
-    return candidate;
+    return find_leaf_with_parent(key, nullptr);
 }
 
 PageId BPlusTree::leftmost_leaf() const {
