@@ -751,6 +751,24 @@ bool WalManager::recover(Database* db) {
             }
         }
 
+        auto rollback_insert_if_xmin = [db](HeapFile* heap, PageId page_id,
+                                            SlotIdx slot_idx, u64 txn_id, u64 lsn) {
+            if (!heap) return false;
+            auto pg_res = db->pool().fetch_page(page_id);
+            if (!pg_res.ok()) return false;
+            Page* pg = pg_res.value();
+            const LinePointer* lp = pg->line_pointer(slot_idx);
+            if (!lp || !lp->is_valid() || lp->offset + 8 > kPageSize) {
+                db->pool().unpin_page(page_id);
+                return false;
+            }
+            u64 slot_xmin = 0;
+            std::memcpy(&slot_xmin, pg->data() + lp->offset, 8);
+            db->pool().unpin_page(page_id);
+            if (slot_xmin != txn_id) return false;
+            return heap->rollback_insert(page_id, slot_idx, lsn);
+        };
+
         for (i32 i = static_cast<i32>(undo_refs.size()) - 1; i >= 0; i--) {
             const ReplayRef& ref = undo_refs[static_cast<u32>(i)];
             Vector<byte> data;
@@ -770,24 +788,11 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&ih, data.data(), sizeof(ih));
                 HeapFile* heap = db->get_heap_file(ih.table_id);
                 if (heap) {
-                    // Safety check: only rollback if the slot's xmin still matches
-                    // the rolled-back transaction. If a committed INSERT reused the
-                    // slot, the xmin will be different and we must NOT roll it back.
-                    auto pg_res = db->pool().fetch_page(ih.page_id);
-                    if (pg_res.ok()) {
-                        Page* pg = pg_res.value();
-                        const LinePointer* lp = pg->line_pointer(ih.slot_idx);
-                        if (lp && lp->is_valid() && lp->offset + 8 <= kPageSize) {
-                            u64 slot_xmin = 0;
-                            std::memcpy(&slot_xmin, pg->data() + lp->offset, 8);
-                            db->pool().unpin_page(ih.page_id);
-                            if (slot_xmin == ref.hdr.txn_id) {
-                                heap->rollback_insert(ih.page_id, ih.slot_idx, ref.hdr.lsn);
-                                needs_index_rebuild = true;
-                            }
-                        } else {
-                            db->pool().unpin_page(ih.page_id);
-                        }
+                    // Only rollback if the slot still belongs to this txn. A
+                    // later committed insert may have reused the reclaimed slot.
+                    if (rollback_insert_if_xmin(heap, ih.page_id, ih.slot_idx,
+                                                ref.hdr.txn_id, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
                     }
                 }
             } else if (ref.hdr.type == WalType::kDelete) {
@@ -801,7 +806,7 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&dh, data.data(), sizeof(dh));
                 HeapFile* heap = db->get_heap_file(dh.table_id);
                 if (heap) {
-                    heap->mark_deleted(dh.page_id, dh.slot_idx, kInvalidTxnId, ref.hdr.lsn);
+                    heap->rollback_delete(dh.page_id, dh.slot_idx, ref.hdr.lsn);
                     needs_index_rebuild = true;
                 }
             } else if (ref.hdr.type == WalType::kUpdate) {
@@ -818,9 +823,13 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&uh, data.data(), sizeof(uh));
                 HeapFile* heap = db->get_heap_file(uh.table_id);
                 if (heap) {
-                    heap->mark_deleted(uh.old_page_id, uh.old_slot_idx, kInvalidTxnId, ref.hdr.lsn);
-                    heap->rollback_insert(uh.new_page_id, uh.new_slot_idx, ref.hdr.lsn);
-                    needs_index_rebuild = true;
+                    if (heap->rollback_delete(uh.old_page_id, uh.old_slot_idx, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
+                    }
+                    if (rollback_insert_if_xmin(heap, uh.new_page_id, uh.new_slot_idx,
+                                                ref.hdr.txn_id, ref.hdr.lsn)) {
+                        needs_index_rebuild = true;
+                    }
                 }
             }
         }
