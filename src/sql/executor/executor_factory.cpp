@@ -99,11 +99,13 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!heap || !index) return UniquePtr<Executor>();
+            IndexEntry* index_entry = db_.catalog().get_index(scan_plan->index_id);
+            bool index_unique = index_entry ? index_entry->is_unique : true;
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
             auto exec = UniquePtr<IndexScanExecutor>(new IndexScanExecutor(
                 &db_.pool(), heap, index, scan_plan->search_key,
                 scan_plan->is_range, scan_plan->range_high,
-                scan_plan->output_schema, tm));
+                scan_plan->output_schema, tm, index_unique));
             if (scan_plan->pushed_predicate) {
                 auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
                 if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
@@ -115,11 +117,14 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto* scan_plan = static_cast<IndexOnlyScanPlan*>(plan);
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!index) return UniquePtr<Executor>();
+            IndexEntry* index_entry = db_.catalog().get_index(scan_plan->index_id);
+            bool index_unique = index_entry ? index_entry->is_unique : true;
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
             return UniquePtr<Executor>(new IndexOnlyScanExecutor(
                 &db_.pool(), index, scan_plan->search_key, scan_plan->is_range,
-                scan_plan->range_high, scan_plan->output_schema, tm, heap));
+                scan_plan->range_high, scan_plan->output_schema, tm, heap,
+                index_unique));
         }
 
         case PlanNodeType::kFilter: {

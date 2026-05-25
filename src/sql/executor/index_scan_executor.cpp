@@ -10,13 +10,15 @@ IndexScanExecutor::IndexScanExecutor(
     BufferPool* pool, HeapFile* heap, BPlusTree* index,
     const IndexKey& search_key, bool is_range,
     const IndexKey& range_high, const Schema& output_schema,
-    TransactionManager* txn_mgr)
+    TransactionManager* txn_mgr,
+    bool index_unique)
     : pool_(pool), index_(index),
       search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
       has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_(),
       table_id_(heap ? heap->table_id() : 0), heap_(heap),
+      index_unique_(index_unique),
       cached_heap_page_id_(kNullPageId), cached_heap_page_(nullptr) {}
 
 IndexScanExecutor::~IndexScanExecutor() {
@@ -190,7 +192,8 @@ ExecResult IndexScanExecutor::next() {
             const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
             batch_count_ = index_->range_scan_batch(
                 search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
-                skip, batch_keys_, batch_rids_, kBatchSize);
+                skip, batch_keys_, batch_rids_, kBatchSize,
+                !index_unique_);
             batch_pos_ = 0;
             if (batch_count_ == 0) {
                 batch_exhausted_ = true;
@@ -290,7 +293,7 @@ bool IndexScanExecutor::fast_count(u64* count) {
         (void)frozen_pages;
         if (heap_->meta().num_data_pages > 0 &&
             visible_pages >= heap_->meta().num_data_pages) {
-            *count = index_->range_count(search_key_, high);
+            *count = index_->range_count(search_key_, high, !index_unique_);
             return true;
         }
     }
@@ -322,7 +325,8 @@ bool IndexScanExecutor::fast_count(u64* count) {
         }
         const RecordId* skip = has_last ? &last_index_rid : nullptr;
         u32 n = index_->range_scan_batch(search_key_, high, &leaf_id, &slot_idx,
-                                         skip, keys, rids, kBatchSize);
+                                         skip, keys, rids, kBatchSize,
+                                         !index_unique_);
         if (n == 0) break;
         for (u32 i = 0; i < n; i++) {
             RecordId rid = rids[i];
@@ -381,11 +385,13 @@ IndexOnlyScanExecutor::IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index,
                                              bool is_range, const IndexKey& range_high,
                                              const Schema& output_schema,
                                              TransactionManager* txn_mgr,
-                                             HeapFile* heap)
+                                             HeapFile* heap,
+                                             bool index_unique)
     : pool_(pool), index_(index), search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
-      has_last_index_rid_(false), txn_mgr_(txn_mgr), heap_(heap) {}
+      has_last_index_rid_(false), txn_mgr_(txn_mgr), heap_(heap),
+      index_unique_(index_unique) {}
 
 void IndexOnlyScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -405,7 +411,8 @@ ExecResult IndexOnlyScanExecutor::next() {
             const RecordId* skip = has_last_index_rid_ ? &last_index_rid_ : nullptr;
             batch_count_ = index_->range_scan_batch(
                 search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
-                skip, batch_keys_, batch_rids_, kBatchSize);
+                skip, batch_keys_, batch_rids_, kBatchSize,
+                !index_unique_);
             batch_pos_ = 0;
             if (batch_count_ == 0) {
                 batch_exhausted_ = true;
