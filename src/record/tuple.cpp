@@ -340,6 +340,49 @@ Tuple Tuple::deserialize_projected_from_page(const byte* buf,
     return tuple;
 }
 
+bool Tuple::read_header_from_page(const byte* buf, u32 length,
+                                  u64* xmin, u64* xmax,
+                                  PageId* next_page, SlotIdx* next_slot) {
+    if (!buf || length < kTupleHeaderSize) return false;
+    if (xmin) std::memcpy(xmin, buf, 8);
+    if (xmax) std::memcpy(xmax, buf + 8, 8);
+    if (next_page) std::memcpy(next_page, buf + 16, 8);
+    if (next_slot) std::memcpy(next_slot, buf + 24, 2);
+    return true;
+}
+
+bool Tuple::read_column_from_page(const byte* buf, const Schema& schema,
+                                  u32 column_idx, u32 length, Value* out) {
+    if (!buf || !out || length < kTupleHeaderSize || column_idx >= schema.column_count()) {
+        return false;
+    }
+    const byte* end = buf + length;
+    buf += 26;
+    u32 num_cols = 0;
+    std::memcpy(&num_cols, buf, 4);
+    buf += 4;
+    if (column_idx >= num_cols) {
+        *out = schema.get_column(column_idx).default_as_value();
+        return true;
+    }
+    u32 bitmap_size = (num_cols + 7) / 8;
+    if (buf + bitmap_size > end) return false;
+    const byte* bitmap = buf;
+    buf += bitmap_size;
+    for (u32 i = 0; i < num_cols; i++) {
+        bool is_null = (bitmap[i / 8] & (1 << (i % 8))) != 0;
+        if (i == column_idx) {
+            if (is_null) {
+                *out = Value();
+                return true;
+            }
+            return read_value_bounded(buf, end, out);
+        }
+        if (!is_null && !skip_value_bounded(buf, end)) return false;
+    }
+    return false;
+}
+
 u32 Tuple::serialized_size() const {
     u32 num_cols = values_.size();
     u32 size = kTupleHeaderSize;

@@ -410,6 +410,181 @@ bool SeqScanExecutor::fast_count(u64* count) {
     return true;
 }
 
+struct FastAggState {
+    AggFunc func;
+    u64 count;
+    Value value;
+    bool has_value;
+    double double_sum;
+
+    FastAggState() : func(AggFunc::kCount), count(0), value(),
+                     has_value(false), double_sum(0.0) {}
+};
+
+static bool fast_numeric_as_double(const Value& value, double* out) {
+    if (!out || value.is_null()) return false;
+    switch (value.type_id()) {
+        case TypeId::kBool:
+            *out = value.get_bool() ? 1.0 : 0.0;
+            return true;
+        case TypeId::kInt32:
+            *out = static_cast<double>(value.get_int32());
+            return true;
+        case TypeId::kInt64:
+            *out = static_cast<double>(value.get_int64());
+            return true;
+        case TypeId::kFloat:
+            *out = static_cast<double>(value.get_float());
+            return true;
+        case TypeId::kDouble:
+            *out = value.get_double();
+            return true;
+        default:
+            return false;
+    }
+}
+
+static Value finalize_fast_agg(const FastAggState& state) {
+    if (!state.has_value) {
+        if (state.func == AggFunc::kCount) return Value(static_cast<i64>(0));
+        return Value();
+    }
+    if (state.func == AggFunc::kCount) return Value(static_cast<i64>(state.count));
+    if (state.func == AggFunc::kAvg) {
+        return state.count == 0 ? Value() : Value(state.double_sum / static_cast<double>(state.count));
+    }
+    return state.value;
+}
+
+bool SeqScanExecutor::fast_plain_aggregate(const Vector<AggregateColumn>& aggregates,
+                                           Vector<Value>* row) {
+    if (!row || aggregates.empty() || pushed_predicate_ || txn_mgr_) return false;
+
+    Vector<int> column_indices;
+    column_indices.reserve(aggregates.size());
+    for (u32 a = 0; a < aggregates.size(); a++) {
+        const AggregateColumn& agg = aggregates[a];
+        if (agg.distinct) return false;
+        if (!agg.argument) {
+            if (agg.func != AggFunc::kCount) return false;
+            column_indices.push_back(-1);
+            continue;
+        }
+        const Expression* expr = agg.argument.get();
+        if (!expr || expr->type != ExprType::kColumnRef) return false;
+        int idx = expr->table_name.empty()
+            ? storage_schema_.get_column_index(expr->column_name)
+            : storage_schema_.get_column_index(expr->table_name, expr->column_name);
+        if (idx < 0) return false;
+        column_indices.push_back(idx);
+    }
+
+    Vector<FastAggState> states;
+    states.resize(aggregates.size());
+    for (u32 a = 0; a < aggregates.size(); a++) {
+        states[a].func = aggregates[a].func;
+    }
+
+    PageId first = heap_->first_data_page_id();
+    if (first == kNullPageId) {
+        row->clear();
+        for (u32 a = 0; a < states.size(); a++) row->push_back(finalize_fast_agg(states[a]));
+        return true;
+    }
+    u32 file_id = file_id_from_page(first);
+    u32 page_num = page_num_from_page(first);
+    u32 pages = heap_->meta().num_data_pages;
+
+    for (u32 p = 0; p < pages; p++, page_num++) {
+        if (executor_cancelled()) return false;
+        PageId pid = make_page_id(file_id, page_num);
+        auto result = pool_->fetch_page(pid, true);
+        if (!result.ok()) continue;
+        Page* page = result.value();
+        u16 num_tuples = page->header()->num_tuples;
+        for (u16 slot = 0; slot < num_tuples; slot++) {
+            const LinePointer* lp = page->line_pointer(slot);
+            if (!lp || !lp->is_valid() || lp->is_redirect()) continue;
+            if (static_cast<u32>(lp->offset) + 26 > kPageSize) continue;
+            u64 xmax = 0;
+            PageId next_page = kNullPageId;
+            SlotIdx next_slot = kNullSlot;
+            if (!Tuple::read_header_from_page(page->data() + lp->offset, lp->length,
+                                              nullptr, &xmax, &next_page, &next_slot)) {
+                pool_->unpin_page(pid);
+                return false;
+            }
+            // Fall back for pages containing old versions; the regular scan
+            // handles version-chain traversal. This keeps the fast path simple
+            // and exact for all-visible append-mostly tables.
+            (void)next_slot;
+            if (xmax != kInvalidTxnId || next_page != kNullPageId) {
+                pool_->unpin_page(pid);
+                return false;
+            }
+
+            for (u32 a = 0; a < aggregates.size(); a++) {
+                FastAggState& state = states[a];
+                if (column_indices[a] < 0) {
+                    state.count++;
+                    state.has_value = true;
+                    continue;
+                }
+                Value v;
+                if (!Tuple::read_column_from_page(page->data() + lp->offset, storage_schema_,
+                                                  static_cast<u32>(column_indices[a]),
+                                                  lp->length, &v)) {
+                    pool_->unpin_page(pid);
+                    return false;
+                }
+                if (v.is_null()) continue;
+                if (!state.has_value) {
+                    state.value = v;
+                    state.has_value = true;
+                    state.count = 1;
+                    double d = 0.0;
+                    if (fast_numeric_as_double(v, &d)) state.double_sum = d;
+                    continue;
+                }
+                switch (state.func) {
+                    case AggFunc::kCount:
+                        state.count++;
+                        break;
+                    case AggFunc::kSum:
+                        state.value = state.value + v;
+                        state.count++;
+                        break;
+                    case AggFunc::kAvg: {
+                        double d = 0.0;
+                        if (!fast_numeric_as_double(v, &d)) {
+                            pool_->unpin_page(pid);
+                            return false;
+                        }
+                        state.double_sum += d;
+                        state.count++;
+                        break;
+                    }
+                    case AggFunc::kMin:
+                        if (v < state.value) state.value = v;
+                        state.count++;
+                        break;
+                    case AggFunc::kMax:
+                        if (v > state.value) state.value = v;
+                        state.count++;
+                        break;
+                }
+            }
+        }
+        pool_->unpin_page(pid);
+    }
+
+    row->clear();
+    for (u32 a = 0; a < states.size(); a++) {
+        row->push_back(finalize_fast_agg(states[a]));
+    }
+    return true;
+}
+
 const Schema& SeqScanExecutor::output_schema() const { return output_schema_; }
 
 ParallelSeqScanExecutor::ParallelSeqScanExecutor(BufferPool* pool, HeapFile* heap,

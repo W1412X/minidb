@@ -13,6 +13,8 @@
 
 namespace minidb {
 
+struct AggregateColumn;
+
 inline thread_local const char* g_executor_error_message = nullptr;
 inline thread_local bool g_executor_has_deadline = false;
 inline thread_local std::chrono::steady_clock::time_point g_executor_deadline;
@@ -82,6 +84,12 @@ public:
     virtual const Schema& output_schema() const = 0;
     virtual bool fast_count(u64* count) {
         (void)count;
+        return false;
+    }
+    virtual bool fast_plain_aggregate(const Vector<AggregateColumn>& aggregates,
+                                      Vector<Value>* row) {
+        (void)aggregates;
+        (void)row;
         return false;
     }
     virtual bool last_record_id(RecordId* rid) const {

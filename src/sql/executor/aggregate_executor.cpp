@@ -150,6 +150,11 @@ void AggregateExecutor::compute_groups() {
                 return;
             }
         }
+        Vector<Value> fast_row;
+        if (child_->fast_plain_aggregate(aggregates_, &fast_row)) {
+            result_groups_.push_back(static_cast<Vector<Value>&&>(fast_row));
+            return;
+        }
 
         // No GROUP BY: entire table as one group
         Vector<AggState> states(aggregates_.size());

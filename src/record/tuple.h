@@ -52,6 +52,11 @@ public:
                                                  const Schema& output_schema,
                                                  const Vector<u32>& projected_columns,
                                                  u32 length);
+    static bool read_header_from_page(const byte* buf, u32 length,
+                                      u64* xmin, u64* xmax,
+                                      PageId* next_page, SlotIdx* next_slot);
+    static bool read_column_from_page(const byte* buf, const Schema& schema,
+                                      u32 column_idx, u32 length, Value* out);
 
     u32 serialized_size() const;
 

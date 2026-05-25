@@ -30,6 +30,8 @@ public:
     void init() override;
     ExecResult next() override;
     bool fast_count(u64* count) override;
+    bool fast_plain_aggregate(const Vector<AggregateColumn>& aggregates,
+                              Vector<Value>* row) override;
     const Schema& output_schema() const override;
 
     // Install a pushed-down WHERE predicate. The scan owns the AST and
