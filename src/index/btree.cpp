@@ -220,6 +220,9 @@ bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
         PageId page_id;
         IndexKey first_key;
     };
+    auto bulk_alloc_page_id = [&]() {
+        return make_page_id(index_id_, next_page_num_++);
+    };
 
     Vector<LevelEntry> level;
     level.reserve((entries.size() + kIndexMaxKeys - 1) / kIndexMaxKeys);
@@ -228,7 +231,7 @@ bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
     u32 pos = 0;
     bool first_leaf = true;
     while (pos < entries.size()) {
-        PageId leaf_id = first_leaf ? root_page_id_ : alloc_page_id();
+        PageId leaf_id = first_leaf ? root_page_id_ : bulk_alloc_page_id();
         Page* leaf = nullptr;
         if (first_leaf) {
             auto result = pool_->fetch_page(leaf_id);
@@ -281,7 +284,7 @@ bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
             u32 remaining = level.size() - i;
             u16 child_count = static_cast<u16>(
                 remaining > kIndexMaxKeys + 1 ? kIndexMaxKeys + 1 : remaining);
-            PageId node_id = alloc_page_id();
+            PageId node_id = bulk_alloc_page_id();
             auto result = pool_->new_page(node_id, PageType::kIndexData);
             if (!result.ok()) return false;
             Page* node = result.value();
