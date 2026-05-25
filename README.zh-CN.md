@@ -1,10 +1,32 @@
 # MiniDB
 
-MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。项目同时支持单机模式，以及实验性的计算/存储分离模式：计算节点通过 TCP `RemotePageStoreClient` 访问独立 `PageServer` 进程。
+**中文** · [English README](README.md)
 
-当前已实现 MVCC 快照隔离、WAL 崩溃恢复、B+Tree 索引、代价优化器、低内存 spill 路径、SQL TCP Server、PageStore 抽象、独立 PageServer 和远程页读写协议。
+MiniDB 是一个用 C++20 从零实现的关系型数据库内核，面向**学习与实验**：采用 PostgreSQL 风格的 8KB 堆页、MVCC 元组头、WAL 优先刷盘、B+Tree 索引，以及 Volcano 执行器 + 代价优化器。热路径不使用 C++ STL，而是自研容器（`Vector`、`HashMap`、`String` 等），便于控制内存布局与分配行为。
 
-> 当前定位：教学/原型数据库。分布式路径已支持单写 Compute + 远程 PageServer + RO 快照读的基础共享存储形态；还不是带 Raft、多写事务、自动 failover、分片重平衡的完整生产级分布式数据库。
+项目提供两种运行形态：
+
+- **单机模式** — `LocalPageStore` + 本地磁盘，交互式 REPL 与 TCP SQL Server。
+- **共享存储（实验性）** — Compute 通过 TCP 访问独立 `minidb_pageserver`，类似 PolarDB 的计算/存储分离（单写 + 只读快照读）。
+
+> **定位：** 教学 / 原型数据库。适合阅读源码、跑通测试矩阵、改动存储或 SQL 层 — 请勿用于生产。
+>
+> 测试覆盖面已明显扩大（ACID 专项、与 SQLite 差分对比、崩溃恢复、远程 PageServer 等），但高并发边界、优化器改写、极端负载下的索引维护与分布式模式仍可能有缺陷。详见 [已知限制](docs/KNOWN_LIMITATIONS.md) 与 [能力差距清单](docs/CAPABILITY_GAP_CHECKLIST.md)。
+
+## 为什么选 MiniDB？
+
+如果你想**亲手看懂**数据库各层如何协作，而不是只会 `SELECT`，MiniDB 提供了一条可追踪的路径：
+
+| 层次 | 可学习内容 |
+| --- | --- |
+| SQL | 手写词法/语法分析、Planner、规则辅助的代价优化器、各类 Executor |
+| 事务 | MVCC 快照隔离、可选 SSI-lite 可串行化、`undo` 回滚 |
+| 存储 | 页格式、Buffer Pool、双写、校验和、堆 FSM、可见性图相关基础设施 |
+| 索引 | 统一 `IndexKey`、复合 B+Tree、批量建索引、覆盖索引 + heap recheck |
+| 恢复 | WAL、组提交、检查点、崩溃后 lazy 重建索引 |
+| 分布式 | `PageStore` 抽象、TCP PageServer、批量 RPC、RO 快照读 |
+
+建议阅读顺序：[架构说明](docs/ARCHITECTURE.md) → [构建指南](BUILD.md) → 运行 `bash tests/run_all_tests.sh ./build/minidb` → 按 `src/` 子目录 README 深入。
 
 ## 已实现能力
 
@@ -12,124 +34,90 @@ MiniDB 是一个用 C++20 实现的 PostgreSQL 风格关系型数据库内核。
 
 | 类别 | 已实现能力 |
 | --- | --- |
-| DDL | `CREATE TABLE`、`DROP TABLE`、`ALTER TABLE ADD/DROP/RENAME COLUMN`、`CREATE INDEX`、`CREATE UNIQUE INDEX`、复合索引、`DROP INDEX` |
+| DDL | `CREATE TABLE`、`DROP TABLE`、`ALTER TABLE ADD/DROP/RENAME COLUMN`、`CREATE INDEX`、`CREATE UNIQUE INDEX`、复合索引、`DROP INDEX`；`BEGIN`/`ROLLBACK` 内事务性 DDL（见 [DDL 语义](docs/DDL_SEMANTICS.md)） |
 | DML | 多行 `INSERT`、带 `WHERE` 的 `UPDATE` / `DELETE` |
 | 查询 | `SELECT`、`WHERE`、`INNER JOIN`、`LEFT JOIN`、`GROUP BY`、`HAVING`、`ORDER BY ASC/DESC`、`LIMIT/OFFSET`、`DISTINCT`、`UNION/UNION ALL` |
-| 表达式 | 算术、布尔表达式、`CASE WHEN`、`LIKE`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`IN`、`NOT IN`、`CAST`、`COALESCE`、`NULLIF` |
-| 子查询 | 标量子查询、`IN/NOT IN (SELECT ...)` 路径有测试覆盖 |
+| 表达式 | 算术、布尔、`CASE WHEN`、`LIKE`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`IN`、`NOT IN`、`CAST`、`COALESCE`、`NULLIF` |
+| 子查询 | 标量子查询、`IN/NOT IN (SELECT ...)` 有测试覆盖 |
 | 聚合 | `COUNT`、`SUM`、`AVG`、`MIN`、`MAX` |
-| 事务 | `BEGIN`、`COMMIT`、`ROLLBACK` |
+| 约束 | `PRIMARY KEY`、`UNIQUE`、`NOT NULL`、`DEFAULT`、列级 `CHECK`（持久化并在 `INSERT`/`UPDATE` 时校验） |
+| 事务 | `BEGIN`、`COMMIT`、`ROLLBACK`；`SET ISOLATION_LEVEL = SNAPSHOT`（默认）或 `SERIALIZABLE`（SSI-lite） |
 | 预编译 | `PREPARE`、`EXECUTE`、`DEALLOCATE` |
 | 管理 | `SHOW TABLES`、`DESCRIBE`、`EXPLAIN`、只读语句的 `EXPLAIN ANALYZE`、`ANALYZE`、`SHOW CONFIG`、`SHOW STATS` |
-| Server 游标 | TCP Server 模式支持 `DECLARE CURSOR`、`FETCH`、`CLOSE` |
+| Server 游标 | TCP Server 下 `DECLARE CURSOR`、`FETCH`、`CLOSE` |
 
 ### 数据类型
 
-支持 `BOOL`/`BOOLEAN`、`INT`/`INTEGER`、`BIGINT`、`FLOAT`/`REAL`、`DOUBLE`/`DECIMAL`/`NUMERIC`、`VARCHAR(n)`、`TEXT` 和 `NULL`。
+支持 `BOOL`/`BOOLEAN`、`INT`/`INTEGER`、`BIGINT`、`FLOAT`/`REAL`、`DOUBLE`/`DECIMAL`/`NUMERIC`、`VARCHAR(n)`、`TEXT`、`NULL`。
 
-字段约束支持 `PRIMARY KEY`、`UNIQUE`、`NOT NULL` 和 `DEFAULT`。Primary Key 和 Unique 字段会自动创建唯一索引。通过统一的 `IndexKey` 表达支持了复合唯一约束的完整校验与落地。
+主键与单列唯一约束会自动建唯一索引；复合唯一约束通过二进制可比的 `IndexKey` 完整校验。
 
-## 存储引擎
+### 存储引擎
 
-- 8KB 页面，包含 PageHeader 和 line pointer 数组。
-- Heap file 存储表数据。
-- B+Tree 索引基于统一的二进制可比 `IndexKey` 表达，支持多列复合索引、变长键 (`TEXT`/`VARCHAR`)、字节序排序 (bytewise collation) 规则、前缀扫描和范围扫描。
-- 支持索引等值扫描、范围扫描、MVCC 安全的 `IndexOnlyScan` (集成 heap recheck 自动回退可见性校验) 和索引有序输出优化。
-- Buffer Pool 支持可配置大小、LRU、顺序扫描防污染，以及按 page id 分区的 page table/LRU 锁。完整文档化的 Frame 状态机和强化的并发保护 (如并发 `new_page` 保护)。
-- Double-write buffer 用于降低 torn page 风险。
-- Page checksum 用于检测页损坏。
-- FD cache 用于限制打开文件描述符数量。
-- PageStore 抽象包含：
-  - `LocalPageStore`：单机本地存储。
-  - `RemotePageStore`：in-process PageServer 测试路径。
-  - `RemotePageStoreClient`：TCP PageServer 访问路径。
+- 8KB 页面：紧凑页头 + 行指针数组（类 PostgreSQL 的 `LP_NORMAL` / `LP_REDIRECT` / `LP_DEAD`）。
+- 堆表 + **空闲空间映射（FSM）** 辅助选页插入与剪枝。
+- 基于统一 `IndexKey` 的 B+Tree：复合索引、变长键、字节序排序、前缀/范围扫描。
+- 非唯一索引在叶子分裂后的重复键处理；`CREATE INDEX` 走批量排序建树路径。
+- 等值/范围扫描、覆盖索引路径、索引有序优化；MVCC 安全的 `IndexOnlyScan`（无 visibility map 时通过 heap recheck 保证正确性）。
+- Buffer Pool：可配置容量、分区锁、LRU、顺序扫描防污染、文档化的 Frame 状态机。
+- 双写缓冲、页校验和、FD 缓存上限。
+- `PageStore`：`LocalPageStore`、`RemotePageStore`（进程内测试）、`RemotePageStoreClient`（TCP）。
 
-## 计算/存储分离
+### 计算/存储分离
 
-当前已落地一个实验性的共享存储路径：
+实验性共享存储路径：
 
-- 独立 PageServer 二进制：`minidb_pageserver`。
-- Compute 和 PageServer 之间使用 TCP 二进制协议。
-- Compute 端通过 `RemotePageStoreClient` 读写页。
-- 支持 TCP 批量读写页。
-- 客户端支持连接复用、连接超时、IO 超时、重试次数、连接池上限。
-- PageServer 支持最大活跃连接数限制。
-- PageServer 持久化 remote WAL page image。
-- PageServer 持久化 metadata，并在重启后重建 LogIndex，支持 checksum 与 end-marker 尾部校验以防范半写/重启损坏。
-- 写页前检查 page LSN 和 durable LSN。
-- 支持 `storage_read_only` 和 `storage_read_lsn` 的 RO Compute 快照读。
-- 遇到 future page 时，通过持久化 LogIndex/WAL image 返回不超过 `read_lsn` 的页版本。
-- `page_server_replicas` 支持同步写本地 replica 目录，作为复制 MVP 测试路径。
+- 独立进程 `minidb_pageserver`；TCP 二进制协议；批量读写；连接池、超时、重试。
+- 持久化 remote WAL page image；重启后 metadata + LogIndex 重建（checksum + end-marker）。
+- 写页前检查 page LSN / durable LSN；`storage_read_lsn` 只读快照；future page 通过 LogIndex/WAL image 回落版本。
+- `page_server_replicas`：本地同步副本目录（MVP，非独立 follower）。
 
-当前分布式限制：
+**尚未实现：** Raft/ quorum、自动 failover、多写分布式事务、分布式锁、远程紧凑 physical redo。
 
-- 没有 Raft/quorum 复制。
-- 没有自动 PageServer failover。
-- 没有多写 Compute 的分布式事务协议。
-- 没有分布式锁服务。
-- 远程 WAL redo 当前以 page image 重构为主，不是紧凑 physical delta redo。
-- PageServer replica 是本地同步目录副本，不是独立 follower 进程。
+### MVCC 与 WAL
 
-## MVCC 与 WAL
+- 默认快照隔离；`SET ISOLATION_LEVEL = SERIALIZABLE` 启用 SSI-lite（[隔离级别](docs/ISOLATION_LEVELS.md)）。
+- `xmin`/`xmax` 版本链；非索引列更新的 HOT 风格同页版本链（索引行为仍在持续校验，见能力清单）。
+- 事务 `undo`、保存点及补偿 WAL。
+- 可配置事务槽位；基于活跃事务水位的 GC 与版本链剪枝。
+- WAL 优先刷盘、段轮转、8KB 写缓冲、组提交；按时间/大小 checkpoint；崩溃恢复 + lazy 重建索引。
 
-- 快照隔离。
-- Tuple 包含 `xmin` / `xmax` 和版本链指针。
-- 支持 MVCC 安全的同页 HOT (Heap-Only Tuple) 语义，非索引列更新不新增 index entry，scan 会正确追踪重定向和版本链。
-- 支持事务 undo record，回滚不依赖 REDO。
-- GC 基于活跃事务水位线回收旧版本。
-- UPDATE/COMMIT 路径会在安全时主动剪枝旧版本链。
-- WAL-first 数据页刷盘。
-- WAL 支持事务、tuple、index、page allocation 和 checkpoint 记录。
-- WAL 写入支持 8KB buffer 和 group commit。
-- 支持按时间和 WAL 大小触发 checkpoint。
-- 崩溃恢复会从 WAL 恢复，索引支持 lazy rebuild。
+### 查询执行器
 
-## 查询执行器
+Volcano 模型：`SeqScan`（含并行）、`IndexScan`/`IndexOnlyScan`、`Filter`、`Project`、`NestedLoopJoin`、`HashJoin`（含 spill）、`IndexLookupJoin`、`Sort`、`Aggregate`、`Distinct`、`Limit`、`Union`、`SubqueryIn`、DML 执行器。
 
-MiniDB 使用 Volcano iterator 模型，已实现：
+### 优化器
 
-- `SeqScan`：MVCC 可见性、版本链遍历、RID skip-list、投影列 late materialization，大表可选 parallel scan。
-- `IndexScan` / MVCC 安全的 `IndexOnlyScan` (集成 heap recheck fallback)。
-- `Filter`：常见表达式编译快路径，回退通用表达式求值。
-- `Project`。
-- `NestedLoopJoin`。
-- `HashJoin`：等值连接、小侧 build、低 `work_mem` 下 Grace-hash 风格 spill。
-- `IndexLookupJoin`。
-- `Sort`：内存排序、external merge sort、Top-N heap。
-- `Aggregate`：普通/分组聚合、`COUNT(*) JOIN` 快路径和 spill 路径。
-- `Distinct`：去重和 spill。
-- `Limit`、`Union`、`SubqueryIn`、`Insert`、`Update`、`Delete`。
+规则辅助的代价优化；`ANALYZE` 统计（NDV，尚无完整直方图）；谓词/投影下推；HashJoin 小侧、IndexLookupJoin、索引路径与有序扫描消除；远程 IO 代价模型；`EXPLAIN` / `EXPLAIN ANALYZE`。
 
-## 优化器
+### 并发与 Server
 
-- 基于代价选择 scan/join 路径。
-- 使用 `ANALYZE` 产生的行数、页数和 NDV 统计估算选择率。
-- INNER JOIN 单表谓词下推。
-- Scan/count-join 投影下推。
-- HashJoin build 小侧选择。
-- 内侧有索引时选择 IndexLookupJoin。
-- 等值/范围索引路径选择。
-- 投影只需要索引 key 时选择 IndexOnlyScan (集成 heap recheck 自动保障 MVCC 完整可见性)。
-- 索引有序输出可消除兼容的升序 `ORDER BY`。
-- 远程存储模式下使用 remote IO cost model，使随机远程索引查找成本高于本地页读。
-- `EXPLAIN` 输出 cost、rows 和 optimizer note。
-- `EXPLAIN ANALYZE` 对只读语句执行并输出实际行数和耗时。
+表/记录/键锁、DDL 锁、死锁检测；连接/查询/写查询/事务准入；TCP Server、预编译、服务端游标。
 
 ## 构建
 
 ```bash
 mkdir -p build
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
 cmake --build build -j4
 ```
 
-构建产物：
+AddressSanitizer（可选）：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DMINIDB_SANITIZER=address
+cmake --build build -j4
+```
+
+产物：
 
 ```text
-build/minidb             # 交互 Shell 和 SQL TCP Server
-build/minidb_pageserver  # 独立 PageServer 进程
+build/minidb             # 交互 Shell 与 SQL TCP Server
+build/minidb_pageserver  # 独立 PageServer
 build/tests/*            # C++ 单元测试
 ```
+
+详见 [BUILD.md](BUILD.md)。
 
 ## 快速开始：单机
 
@@ -138,13 +126,13 @@ build/tests/*            # C++ 单元测试
 ```
 
 ```sql
-CREATE TABLE users (id INT PRIMARY KEY, name TEXT);
-INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob');
+CREATE TABLE users (id INT PRIMARY KEY, name TEXT, score INT CHECK (score >= 0));
+INSERT INTO users VALUES (1, 'Alice', 90), (2, 'Bob', 85);
 SELECT * FROM users WHERE id = 1;
 EXPLAIN ANALYZE SELECT COUNT(*) FROM users;
 ```
 
-SQL TCP Server：
+TCP Server：
 
 ```bash
 ./build/minidb --dir ./mydata --server --port 5433
@@ -152,8 +140,6 @@ nc 127.0.0.1 5433
 ```
 
 ## 快速开始：独立 PageServer
-
-启动 PageServer：
 
 ```bash
 mkdir -p ./pageserver-data ./compute-data
@@ -171,13 +157,11 @@ EOF
 ./build/minidb_pageserver --dir ./pageserver-data --host 127.0.0.1 --port 15433
 ```
 
-另一个终端启动 Compute：
+另一终端：
 
 ```bash
 ./build/minidb --dir ./compute-data --config ./compute-data/minidb.conf
 ```
-
-示例：
 
 ```sql
 CREATE TABLE remote_t (id INT PRIMARY KEY, v TEXT);
@@ -186,11 +170,11 @@ SELECT COUNT(*) FROM remote_t;
 SHOW STATS;
 ```
 
-`SHOW STATS` 会展示 `remote_read_batches`、`remote_write_batches`、`remote_retries`、`remote_reconnects`、`remote_failures` 等远程存储指标。
+`SHOW STATS` 会展示 `remote_read_batches`、`remote_write_batches`、`remote_retries` 等远程指标。
 
 ## 配置
 
-配置文件为 `key=value` 格式，支持 `#` 注释。单位支持 `B`、`KB`、`MB`、`GB`、`MS`、`S`、`MIN`。
+`key=value` 格式，`#` 注释；单位 `B`/`KB`/`MB`/`GB`/`MS`/`S`/`MIN`。完整说明：[CONFIGURATION_REFERENCE.md](docs/CONFIGURATION_REFERENCE.md)。
 
 常用单机配置：
 
@@ -233,14 +217,13 @@ page_checksum = on
 fd_cache_limit = 1024
 ```
 
-远程 PageServer 配置：
+远程 PageServer：
 
 ```ini
 storage_mode = remote
 page_server_host = 127.0.0.1
 page_server_port = 15433
 page_server_dir = ./pageserver-data
-
 storage_read_only = off
 storage_read_lsn = 0
 page_server_replicas = 0
@@ -253,13 +236,9 @@ remote_max_connections = 8
 page_server_max_connections = 1024
 ```
 
-查看配置：
-
 ```bash
 ./build/minidb --dir ./mydata --show-config
 ```
-
-运行时：
 
 ```sql
 SHOW CONFIG;
@@ -268,7 +247,7 @@ SHOW STATS;
 
 ## 数据目录
 
-单机或 Compute 目录：
+单机 / Compute：
 
 ```text
 mydata/
@@ -281,7 +260,7 @@ mydata/
 └── minidb.conf
 ```
 
-独立 PageServer 目录：
+PageServer：
 
 ```text
 pageserver-data/
@@ -290,10 +269,10 @@ pageserver-data/
 ├── doublewrite.bin
 ├── tables/
 ├── indexes/
-└── replica_1/              # page_server_replicas >= 1 时存在
+└── replica_1/
 ```
 
-TCP remote 模式下，catalog/control/WAL 仍在 Compute 目录，表页和索引页通过 PageServer 读写。
+TCP remote 模式下，catalog/control/WAL 在 Compute 目录，表页与索引页由 PageServer 提供。
 
 ## 测试
 
@@ -302,31 +281,66 @@ cmake -S . -B build -DBUILD_TESTS=ON
 cmake --build build -j4
 
 ctest --test-dir build --output-on-failure
-bash tests/run_all_tests.sh ./build/minidb
+bash tests/run_all_tests.sh ./build/minidb --suite main --seed 12648430
 ```
 
-专项测试：
+报告默认写入 `build/test-report.md`，日志在 `build/test-logs/`。详见 [tests/README.md](tests/README.md)。
+
+| 套件 | 用途 |
+| --- | --- |
+| `pr` | PR 快速子集 |
+| `main` | 推送到 main 或手动全量 |
+| `nightly` | 带 `--stress` 的加压随机测试 |
+
+目录结构：
+
+```text
+tests/
+├── unit/          # C++ 单元测试
+├── sql/           # SQL 正确性、与 SQLite 差分
+├── ddl/           # ALTER、HOT/索引语义
+├── index/         # 复合键、持久化、重建
+├── acid/          # 原子性 · 一致性 · 隔离性 · 持久性
+├── concurrency/   # 多客户端 TCP
+├── storage/       # 远程 PageServer
+├── performance/   # 优化器与批量 DML
+└── regression/    # 端到端回归
+```
+
+示例：
 
 ```bash
+./build/tests/btree_property_test
+./build/tests/index_key_btree_test
 ./build/tests/page_store_remote_test
-./build/tests/wal_buffer_pool_test
-./build/tests/transaction_slots_test
-bash tests/production_regression.sh ./build/minidb
-bash tests/remote_page_store.sh ./build/minidb
-bash tests/join_optimizer.sh ./build/minidb
-bash tests/performance_optimizations.sh ./build/minidb
-bash tests/recovery_smoke.sh ./build/minidb
-bash tests/resource_limits.sh ./build/minidb
+bash tests/storage/remote_page_store.sh ./build/minidb
+bash tests/regression/production_regression.sh ./build/minidb
+bash tests/sql/join_optimizer.sh ./build/minidb
+bash tests/performance/performance_paths.sh ./build/minidb
+bash tests/acid/durability/recovery_smoke.sh ./build/minidb
+python3 tests/sql/differential_sqlite.py ./build/minidb --seed 12648431
+python3 tests/acid/durability/crash_recovery_harness.py ./build/minidb --seed 12648432
 ```
 
-PageServer 测试覆盖 Local PageStore 兼容性、TCP 远程读写、批量 IO、PageServer 重启恢复、持久化 LogIndex/WAL image、RO 快照读、future page 处理和 replica 目录写入。
+## 文档索引
 
-## 生产说明
-
-- [WAL 与恢复协议](docs/WAL_RECOVERY_PROTOCOL.md)
-- [并发控制](docs/CONCURRENCY_CONTROL.md)
-- [优化器成本模型](docs/OPTIMIZER_COST_MODEL.md)
-- [已知限制](docs/KNOWN_LIMITATIONS.md)
+| 文档 | 主题 |
+| --- | --- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统总览、页/元组格式、容器 |
+| [BUILD.md](BUILD.md) | 构建、运行、排错 |
+| [STORAGE_INTERNALS.md](docs/STORAGE_INTERNALS.md) | 存储与 Buffer Pool |
+| [INDEX_INTERNALS.md](docs/INDEX_INTERNALS.md) | B+Tree 与 IndexKey |
+| [TRANSACTION_MVCC.md](docs/TRANSACTION_MVCC.md) | MVCC、undo、CLOG |
+| [ISOLATION_LEVELS.md](docs/ISOLATION_LEVELS.md) | SI 与 SSI-lite |
+| [WAL_RECOVERY_PROTOCOL.md](docs/WAL_RECOVERY_PROTOCOL.md) | WAL 与恢复 |
+| [CONCURRENCY_CONTROL.md](docs/CONCURRENCY_CONTROL.md) | 锁与死锁 |
+| [OPTIMIZER_COST_MODEL.md](docs/OPTIMIZER_COST_MODEL.md) | 优化器代价 |
+| [QUERY_EXECUTION.md](docs/QUERY_EXECUTION.md) | 执行器行为 |
+| [DDL_SEMANTICS.md](docs/DDL_SEMANTICS.md) | 事务性 DDL |
+| [COMPUTE_STORAGE_SEPARATION.md](docs/COMPUTE_STORAGE_SEPARATION.md) | PageServer 协议 |
+| [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | 已知限制 |
+| [CAPABILITY_GAP_CHECKLIST.md](docs/CAPABILITY_GAP_CHECKLIST.md) | 文档与实现对照 |
+| [ACID_TODO.md](docs/ACID_TODO.md) | ACID 测试矩阵 |
 
 ## 架构
 
@@ -336,42 +350,43 @@ flowchart TD
     Parser --> Planner["Planner"]
     Planner --> Optimizer["Optimizer<br/>本地/远程 cost model"]
     Optimizer --> Executor["Volcano 执行器"]
-    Executor --> Txn["Transaction / MVCC"]
+    Executor --> Txn["Transaction / MVCC / SSI-lite"]
     Executor --> Catalog["Catalog / stats"]
     Executor --> Locks["Lock Manager"]
     Executor --> Buffer["BufferPool"]
     Buffer --> PageStore["PageStore 接口"]
-    PageStore --> Local["LocalPageStore<br/>DiskManager"]
-    PageStore --> Client["RemotePageStoreClient<br/>TCP batch RPC"]
-    Client --> PS["独立 PageServer"]
-    PS --> PSData["Page files<br/>metadata<br/>remote WAL images<br/>LogIndex"]
+    PageStore --> Local["LocalPageStore"]
+    PageStore --> Client["RemotePageStoreClient"]
+    Client --> PS["PageServer"]
+    PS --> PSData["页文件 · metadata · WAL images · LogIndex"]
 ```
 
 ## 目录结构
 
 ```text
 src/
-├── catalog/       # 表、索引和统计信息
+├── catalog/       # 元数据与统计
 ├── common/        # 配置、锁、资源管理
-├── concurrency/   # LockManager 和死锁检测
-├── database/      # 数据库生命周期、catalog 同步、GC、checkpoint
+├── concurrency/   # 锁管理器、死锁检测
+├── container/     # 自研容器
+├── database/      # 生命周期、GC、checkpoint
 ├── index/         # B+Tree
-├── network/       # SQL TCP Server
-├── recovery/      # WAL 和 GC 辅助
+├── network/       # TCP SQL Server
+├── recovery/      # WAL、GC
 ├── repl/          # 交互 Shell
 ├── sql/           # Parser、Planner、Optimizer、Executor
-├── storage/       # Page、DiskManager、BufferPool、PageStore、PageServer
-├── transaction/   # MVCC 事务管理
-├── main.cpp       # minidb 入口
-└── pageserver_main.cpp # minidb_pageserver 入口
+├── storage/       # 页、BufferPool、PageStore、PageServer
+├── transaction/   # MVCC
+├── main.cpp
+└── pageserver_main.cpp
 ```
 
 ## 运行要求
 
-- C++20 编译器。
-- CMake 3.20+。
-- Python 3.8+。
-- POSIX 系统，例如 Linux 或 macOS。
+- C++20 编译器（GCC / Clang）
+- CMake 3.20+
+- Python 3.8+
+- Linux 或 macOS
 
 ## License
 
