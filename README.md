@@ -1,6 +1,6 @@
 # MiniDB
 
-**English** · [中文 README](README.zh-CN.md)
+**English** · [中文 README](README.zh-CN.md) · [GitHub](https://github.com/W1412X/minidb)
 
 MiniDB is a C++20 relational database engine built from scratch for learning and experimentation. It follows a PostgreSQL-style storage model: 8 KB heap pages, MVCC tuple headers, WAL-first durability, B+ tree indexes, and a Volcano executor with a cost-based optimizer. The hot path avoids the C++ STL in favor of in-house containers (`Vector`, `HashMap`, `String`, …) so memory layout and allocation stay predictable.
 

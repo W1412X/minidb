@@ -1,6 +1,6 @@
 # MiniDB
 
-**中文** · [English README](README.md)
+**中文** · [English README](README.md) · [GitHub](https://github.com/W1412X/minidb)
 
 MiniDB 是一个用 C++20 从零实现的关系型数据库内核，面向**学习与实验**：采用 PostgreSQL 风格的 8KB 堆页、MVCC 元组头、WAL 优先刷盘、B+Tree 索引，以及 Volcano 执行器 + 代价优化器。热路径不使用 C++ STL，而是自研容器（`Vector`、`HashMap`、`String` 等），便于控制内存布局与分配行为。
 
