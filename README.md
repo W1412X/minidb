@@ -48,7 +48,9 @@ Suggested reading order: [Architecture](docs/ARCHITECTURE.md) → [Build guide](
 
 ### Data Types
 
-`BOOL`/`BOOLEAN`, `INT`/`INTEGER`, `BIGINT`, `FLOAT`/`REAL`, `DOUBLE`/`DECIMAL`/`NUMERIC`, `VARCHAR(n)`, `TEXT`, and `NULL`.
+`BOOL`/`BOOLEAN`, `INT`/`INTEGER`, `BIGINT`, `FLOAT`/`REAL`, `DOUBLE`/`DECIMAL`/`NUMERIC`, `VARCHAR(n)`, `TEXT`, `DATETIME`, `TIMESTAMP`, and `NULL`.
+
+`DATETIME` and `TIMESTAMP` are stored as UTC microseconds in a signed 64-bit integer. MiniDB does not manage time zones; input and output are interpreted as UTC and displayed as `YYYY-MM-DD HH:MM:SS[.ffffff]`.
 
 Primary key and single-column unique constraints create unique indexes automatically. Composite unique constraints are validated via the unified binary-comparable `IndexKey` representation.
 

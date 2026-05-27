@@ -30,6 +30,7 @@ set(MINIDB_UNIT_TESTS
     transaction_slots_test
     btree_property_test
     index_key_btree_test
+    datetime_parse_test
 )
 
 foreach(_test ${MINIDB_UNIT_TESTS})
@@ -45,6 +46,7 @@ add_test(NAME wal_buffer_pool_test      COMMAND $<TARGET_FILE:wal_buffer_pool_te
 add_test(NAME transaction_slots_test    COMMAND $<TARGET_FILE:transaction_slots_test>)
 add_test(NAME btree_property_test       COMMAND $<TARGET_FILE:btree_property_test> 12648434)
 add_test(NAME index_key_btree_test      COMMAND $<TARGET_FILE:index_key_btree_test>)
+add_test(NAME datetime_parse_test       COMMAND $<TARGET_FILE:datetime_parse_test>)
 
 # ---------------------------------------------------------------------------
 # SQL correctness
@@ -56,6 +58,8 @@ add_test(NAME sql_keyword_combinations
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/sql_keyword_combinations.sh $<TARGET_FILE:minidb>)
 add_test(NAME full_sql_suite
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/full_sql_suite.sh $<TARGET_FILE:minidb>)
+add_test(NAME datetime_types
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/datetime_types.sh $<TARGET_FILE:minidb>)
 add_test(NAME join_syntax_strict
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/sql/join_syntax_strict.sh $<TARGET_FILE:minidb>)
 add_test(NAME semantic_validation

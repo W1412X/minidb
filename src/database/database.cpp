@@ -17,7 +17,8 @@ static bool fault_active(const char* name);
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
-           type == TypeId::kVarchar || type == TypeId::kNull;
+           type == TypeId::kVarchar || type == TypeId::kTimestamp ||
+           type == TypeId::kDatetime || type == TypeId::kNull;
 }
 
 static IndexKey index_key_from_tuple(const IndexEntry& index, const Tuple& tuple) {

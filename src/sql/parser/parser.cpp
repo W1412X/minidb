@@ -520,6 +520,10 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
             col.type_name = "DOUBLE";
         } else if (match_keyword(TokenType::KW_TEXT)) {
             col.type_name = "TEXT";
+        } else if (match_keyword(TokenType::KW_TIMESTAMP)) {
+            col.type_name = "TIMESTAMP";
+        } else if (match_keyword(TokenType::KW_DATETIME)) {
+            col.type_name = "DATETIME";
         } else if (match_keyword(TokenType::KW_VARCHAR)) {
             col.type_name = "VARCHAR";
             if (match(TokenType::LPAREN)) {
@@ -664,6 +668,10 @@ UniquePtr<AlterTableStmt> Parser::parse_alter_table() {
             stmt->new_column.type_name = "DOUBLE";
         } else if (match_keyword(TokenType::KW_TEXT)) {
             stmt->new_column.type_name = "TEXT";
+        } else if (match_keyword(TokenType::KW_TIMESTAMP)) {
+            stmt->new_column.type_name = "TIMESTAMP";
+        } else if (match_keyword(TokenType::KW_DATETIME)) {
+            stmt->new_column.type_name = "DATETIME";
         } else if (match_keyword(TokenType::KW_VARCHAR)) {
             stmt->new_column.type_name = "VARCHAR";
             if (match(TokenType::LPAREN)) {
@@ -1160,6 +1168,8 @@ UniquePtr<Expression> Parser::parse_primary() {
         else if (match_keyword(TokenType::KW_BOOL))    target = TypeId::kBool;
         else if (match_keyword(TokenType::KW_VARCHAR))  { target = TypeId::kVarchar; if (match(TokenType::LPAREN)) { expect(TokenType::INT_LITERAL); expect(TokenType::RPAREN); } }
         else if (match_keyword(TokenType::KW_TEXT))    target = TypeId::kVarchar;
+        else if (match_keyword(TokenType::KW_TIMESTAMP)) target = TypeId::kTimestamp;
+        else if (match_keyword(TokenType::KW_DATETIME))  target = TypeId::kDatetime;
         else { set_error("expected type name after AS"); }
         expect(TokenType::RPAREN);
         auto expr = make_unique<Expression>();

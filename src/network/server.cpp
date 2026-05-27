@@ -4,6 +4,7 @@
 #include "sql/executor/executor_factory.h"
 #include "sql/executor/expression_evaluator.h"
 #include "catalog/catalog.h"
+#include "common/sql_types.h"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -606,14 +607,7 @@ String Server::execute_sql(const String& sql) {
             c.is_primary = col.is_primary;
             c.is_unique = col.is_unique;
             c.default_value = col.default_value;
-            if (col.type_name == "INT" || col.type_name == "INTEGER") c.type = TypeId::kInt32;
-            else if (col.type_name == "BIGINT") c.type = TypeId::kInt64;
-            else if (col.type_name == "FLOAT" || col.type_name == "REAL") c.type = TypeId::kFloat;
-            else if (col.type_name == "DOUBLE" || col.type_name == "DECIMAL" ||
-                     col.type_name == "NUMERIC") c.type = TypeId::kDouble;
-            else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
-            else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
-            else c.type = TypeId::kVarchar;
+            c.type = type_from_sql_name(col.type_name);
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
@@ -654,13 +648,7 @@ String Server::execute_sql(const String& sql) {
             case AlterType::kAddColumn: {
                 Column col;
                 col.name = alt->new_column.name;
-                if (alt->new_column.type_name == "INT") col.type = TypeId::kInt32;
-                else if (alt->new_column.type_name == "BIGINT") col.type = TypeId::kInt64;
-                else if (alt->new_column.type_name == "FLOAT") col.type = TypeId::kFloat;
-                else if (alt->new_column.type_name == "DOUBLE") col.type = TypeId::kDouble;
-                else if (alt->new_column.type_name == "VARCHAR" || alt->new_column.type_name == "TEXT") col.type = TypeId::kVarchar;
-                else if (alt->new_column.type_name == "BOOL") col.type = TypeId::kBool;
-                else col.type = TypeId::kVarchar;
+                col.type = type_from_sql_name(alt->new_column.type_name);
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
                 if (alt->new_column.type_name == "VARCHAR" &&
@@ -746,15 +734,7 @@ String Server::execute_sql(const String& sql) {
             const Column& c = te->schema.get_column(i);
             if (c.is_dropped) continue;
             const char* type_str = "?";
-            switch (c.type) {
-                case TypeId::kBool: type_str = "BOOL"; break;
-                case TypeId::kInt32: type_str = "INT"; break;
-                case TypeId::kInt64: type_str = "BIGINT"; break;
-                case TypeId::kFloat: type_str = "FLOAT"; break;
-                case TypeId::kDouble: type_str = "DOUBLE"; break;
-                case TypeId::kVarchar: type_str = "VARCHAR"; break;
-                default: type_str = "UNKNOWN"; break;
-            }
+            type_str = sql_name_from_type(c.type);
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n",
                      i, c.name.c_str(), type_str,
                      c.not_null ? "YES" : "NO", c.is_primary ? "YES" : "NO",
@@ -939,14 +919,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             const auto& col = stmt.create_table->columns[i];
             Column c; c.name = col.name; c.not_null = col.not_null; c.is_primary = col.is_primary; c.is_unique = col.is_unique;
             c.default_value = col.default_value;
-            if (col.type_name == "INT" || col.type_name == "INTEGER") c.type = TypeId::kInt32;
-            else if (col.type_name == "BIGINT") c.type = TypeId::kInt64;
-            else if (col.type_name == "FLOAT" || col.type_name == "REAL") c.type = TypeId::kFloat;
-            else if (col.type_name == "DOUBLE" || col.type_name == "DECIMAL" ||
-                     col.type_name == "NUMERIC") c.type = TypeId::kDouble;
-            else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
-            else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
-            else c.type = TypeId::kVarchar;
+            c.type = type_from_sql_name(col.type_name);
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
@@ -987,13 +960,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             case AlterType::kAddColumn: {
                 Column col;
                 col.name = alt->new_column.name;
-                if (alt->new_column.type_name == "INT") col.type = TypeId::kInt32;
-                else if (alt->new_column.type_name == "BIGINT") col.type = TypeId::kInt64;
-                else if (alt->new_column.type_name == "FLOAT") col.type = TypeId::kFloat;
-                else if (alt->new_column.type_name == "DOUBLE") col.type = TypeId::kDouble;
-                else if (alt->new_column.type_name == "VARCHAR" || alt->new_column.type_name == "TEXT") col.type = TypeId::kVarchar;
-                else if (alt->new_column.type_name == "BOOL") col.type = TypeId::kBool;
-                else col.type = TypeId::kVarchar;
+                col.type = type_from_sql_name(alt->new_column.type_name);
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
                 if (alt->new_column.type_name == "VARCHAR" &&
@@ -1040,7 +1007,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             const Column& c = te->schema.get_column(i);
             if (c.is_dropped) continue;
             const char* ts = "?";
-            switch (c.type) { case TypeId::kBool: ts="BOOL"; break; case TypeId::kInt32: ts="INT"; break; case TypeId::kInt64: ts="BIGINT"; break; case TypeId::kFloat: ts="FLOAT"; break; case TypeId::kDouble: ts="DOUBLE"; break; case TypeId::kVarchar: ts="VARCHAR"; break; default: ts="UNKNOWN"; break; }
+            ts = sql_name_from_type(c.type);
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n", i, c.name.c_str(), ts, c.not_null?"YES":"NO", c.is_primary?"YES":"NO", c.is_unique?"YES":"NO");
             result += buf;
         }

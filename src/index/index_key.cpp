@@ -58,6 +58,8 @@ u32 IndexKey::encoded_size() const {
             case TypeId::kBool: size += 1; break;
             case TypeId::kInt32: size += 4; break;
             case TypeId::kInt64: size += 8; break;
+            case TypeId::kTimestamp:
+            case TypeId::kDatetime: size += 8; break;
             case TypeId::kFloat: size += 4; break;
             case TypeId::kDouble: size += 8; break;
             case TypeId::kVarchar: size += 2 + values_[i].get_string().size(); break;
@@ -93,6 +95,8 @@ bool IndexKey::encode(byte* slot, u32 slot_size) const {
             case TypeId::kBool: *p++ = values_[i].get_bool() ? 1 : 0; break;
             case TypeId::kInt32: { i32 v = values_[i].get_int32(); std::memcpy(p, &v, 4); p += 4; break; }
             case TypeId::kInt64: { i64 v = values_[i].get_int64(); std::memcpy(p, &v, 8); p += 8; break; }
+            case TypeId::kTimestamp:
+            case TypeId::kDatetime: { i64 v = values_[i].get_datetime_micros(); std::memcpy(p, &v, 8); p += 8; break; }
             case TypeId::kFloat: { float v = values_[i].get_float(); std::memcpy(p, &v, 4); p += 4; break; }
             case TypeId::kDouble: { double v = values_[i].get_double(); std::memcpy(p, &v, 8); p += 8; break; }
             case TypeId::kVarchar: {
@@ -139,6 +143,14 @@ IndexKey IndexKey::decode(const byte* slot, u32 slot_size) {
             case TypeId::kInt64: {
                 if (p + 8 > end) return IndexKey();
                 i64 v; std::memcpy(&v, p, 8); p += 8; values.push_back(Value(v)); break;
+            }
+            case TypeId::kTimestamp: {
+                if (p + 8 > end) return IndexKey();
+                i64 v; std::memcpy(&v, p, 8); p += 8; values.push_back(Value::timestamp(v)); break;
+            }
+            case TypeId::kDatetime: {
+                if (p + 8 > end) return IndexKey();
+                i64 v; std::memcpy(&v, p, 8); p += 8; values.push_back(Value::datetime(v)); break;
             }
             case TypeId::kFloat: {
                 if (p + 4 > end) return IndexKey();

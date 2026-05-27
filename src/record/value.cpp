@@ -3,6 +3,7 @@
  * @brief Value implementation
  */
 #include "record/value.h"
+#include "common/datetime.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,12 @@ Value::Value(double val) : type_id_(TypeId::kDouble), double_val_(val) {}
 Value::Value(const String& val) : type_id_(TypeId::kVarchar), string_val_(val) {}
 
 Value::Value(const char* val) : type_id_(TypeId::kVarchar), string_val_(val) {}
+
+Value::Value(TypeId type, i64 micros) : type_id_(type), int64_val_(micros) {}
+
+Value Value::timestamp(i64 micros) { return Value(TypeId::kTimestamp, micros); }
+
+Value Value::datetime(i64 micros) { return Value(TypeId::kDatetime, micros); }
 
 Value::Value(const Value& other) : type_id_(TypeId::kNull), bool_val_(false) {
     copy_from(other);
@@ -69,6 +76,7 @@ i64  Value::get_int64() const { return int64_val_; }
 float Value::get_float() const { return float_val_; }
 double Value::get_double() const { return double_val_; }
 const String& Value::get_string() const { return string_val_; }
+i64  Value::get_datetime_micros() const { return int64_val_; }
 
 // ============================================================
 // Compare
@@ -85,6 +93,9 @@ int Value::compare(const Value& other) const {
         case TypeId::kBool:    return (bool_val_ < other.bool_val_) ? -1 : (bool_val_ > other.bool_val_) ? 1 : 0;
         case TypeId::kInt32:   return (int32_val_ < other.int32_val_) ? -1 : (int32_val_ > other.int32_val_) ? 1 : 0;
         case TypeId::kInt64:   return (int64_val_ < other.int64_val_) ? -1 : (int64_val_ > other.int64_val_) ? 1 : 0;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime:
+            return (int64_val_ < other.int64_val_) ? -1 : (int64_val_ > other.int64_val_) ? 1 : 0;
         case TypeId::kFloat: {
             bool lhs_nan = (float_val_ != float_val_);
             bool rhs_nan = (other.float_val_ != other.float_val_);
@@ -158,6 +169,10 @@ static float to_float_val(const Value& v) {
 
 Value Value::operator+(const Value& o) const {
     if (is_null() || o.is_null()) return Value();
+    if (type_id_ == TypeId::kTimestamp || type_id_ == TypeId::kDatetime ||
+        o.type_id_ == TypeId::kTimestamp || o.type_id_ == TypeId::kDatetime) {
+        return Value();
+    }
     if (type_id_ == TypeId::kVarchar || o.type_id_ == TypeId::kVarchar) {
         if (type_id_ != TypeId::kVarchar || o.type_id_ != TypeId::kVarchar) return Value();
         return Value(string_val_ + o.string_val_);
@@ -187,6 +202,10 @@ Value Value::operator+(const Value& o) const {
 
 Value Value::operator-(const Value& o) const {
     if (is_null() || o.is_null()) return Value();
+    if (type_id_ == TypeId::kTimestamp || type_id_ == TypeId::kDatetime ||
+        o.type_id_ == TypeId::kTimestamp || o.type_id_ == TypeId::kDatetime) {
+        return Value();
+    }
     TypeId result_type = promote(type_id_, o.type_id_);
     switch (result_type) {
         case TypeId::kInt32: {
@@ -212,6 +231,10 @@ Value Value::operator-(const Value& o) const {
 
 Value Value::operator*(const Value& o) const {
     if (is_null() || o.is_null()) return Value();
+    if (type_id_ == TypeId::kTimestamp || type_id_ == TypeId::kDatetime ||
+        o.type_id_ == TypeId::kTimestamp || o.type_id_ == TypeId::kDatetime) {
+        return Value();
+    }
     TypeId result_type = promote(type_id_, o.type_id_);
     switch (result_type) {
         case TypeId::kInt32: {
@@ -237,6 +260,10 @@ Value Value::operator*(const Value& o) const {
 
 Value Value::operator/(const Value& o) const {
     if (is_null() || o.is_null()) return Value();
+    if (type_id_ == TypeId::kTimestamp || type_id_ == TypeId::kDatetime ||
+        o.type_id_ == TypeId::kTimestamp || o.type_id_ == TypeId::kDatetime) {
+        return Value();
+    }
     TypeId result_type = promote(type_id_, o.type_id_);
     switch (result_type) {
         case TypeId::kInt32:  {
@@ -261,6 +288,10 @@ Value Value::operator/(const Value& o) const {
 
 Value Value::operator%(const Value& o) const {
     if (is_null() || o.is_null()) return Value();
+    if (type_id_ == TypeId::kTimestamp || type_id_ == TypeId::kDatetime ||
+        o.type_id_ == TypeId::kTimestamp || o.type_id_ == TypeId::kDatetime) {
+        return Value();
+    }
     if (type_id_ == TypeId::kInt32 && o.type_id_ == TypeId::kInt32) {
         if (o.int32_val_ == 0) return Value();
         return Value(int32_val_ % o.int32_val_);
@@ -289,6 +320,8 @@ byte* Value::serialize(byte* buf) const {
             buf += 4;
             break;
         case TypeId::kInt64:
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime:
             std::memcpy(buf, &int64_val_, 8);
             buf += 8;
             break;
@@ -324,6 +357,8 @@ Value Value::deserialize(const byte* buf, TypeId /*schema_type*/) {
         case TypeId::kBool:    return Value(*buf == 1);
         case TypeId::kInt32: { i32 v; std::memcpy(&v, buf, 4); return Value(v); }
         case TypeId::kInt64: { i64 v; std::memcpy(&v, buf, 8); return Value(v); }
+        case TypeId::kTimestamp: { i64 v; std::memcpy(&v, buf, 8); return Value::timestamp(v); }
+        case TypeId::kDatetime: { i64 v; std::memcpy(&v, buf, 8); return Value::datetime(v); }
         case TypeId::kFloat: { float v; std::memcpy(&v, buf, 4); return Value(v); }
         case TypeId::kDouble: { double v; std::memcpy(&v, buf, 8); return Value(v); }
         case TypeId::kVarchar: {
@@ -343,6 +378,8 @@ u32 Value::serialized_size() const {
         case TypeId::kBool:    return 2;   // type_id + bool
         case TypeId::kInt32:   return 5;   // type_id + i32
         case TypeId::kInt64:   return 9;   // type_id + i64
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime: return 9;  // type_id + i64 micros
         case TypeId::kFloat:   return 5;   // type_id + float
         case TypeId::kDouble:  return 9;   // type_id + double
         case TypeId::kVarchar: return 1 + 4 + string_val_.size();
@@ -451,6 +488,16 @@ Value Value::cast_to(TypeId target) const {
         }
         case TypeId::kVarchar:
             return Value(s);
+        case TypeId::kTimestamp: {
+            i64 micros = 0;
+            if (!datetime_parse_utc(s.c_str(), &micros)) return Value();
+            return Value::timestamp(micros);
+        }
+        case TypeId::kDatetime: {
+            i64 micros = 0;
+            if (!datetime_parse_utc(s.c_str(), &micros)) return Value();
+            return Value::datetime(micros);
+        }
         default:
             return Value();
     }
@@ -467,6 +514,8 @@ String Value::to_string() const {
         case TypeId::kBool:    return bool_val_ ? "1" : "0";
         case TypeId::kInt32:   len = snprintf(buf, sizeof(buf), "%d", int32_val_); break;
         case TypeId::kInt64:   len = snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(int64_val_)); break;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime: return datetime_format_utc(int64_val_);
         case TypeId::kFloat:   len = snprintf(buf, sizeof(buf), "%f", float_val_); break;
         case TypeId::kDouble:  len = snprintf(buf, sizeof(buf), "%f", double_val_); break;
         case TypeId::kVarchar: return string_val_;
@@ -481,6 +530,8 @@ u32 Value::type_size(TypeId type) {
         case TypeId::kBool:    return 1;
         case TypeId::kInt32:   return 4;
         case TypeId::kInt64:   return 8;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime: return 8;
         case TypeId::kFloat:   return 4;
         case TypeId::kDouble:  return 8;
         case TypeId::kVarchar: return 0;  // variable-length
@@ -499,6 +550,8 @@ void Value::copy_from(const Value& other) {
         case TypeId::kBool:    bool_val_ = other.bool_val_; break;
         case TypeId::kInt32:   int32_val_ = other.int32_val_; break;
         case TypeId::kInt64:   int64_val_ = other.int64_val_; break;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime: int64_val_ = other.int64_val_; break;
         case TypeId::kFloat:   float_val_ = other.float_val_; break;
         case TypeId::kDouble:  double_val_ = other.double_val_; break;
         case TypeId::kVarchar: string_val_ = other.string_val_; break;
@@ -513,6 +566,8 @@ void Value::move_from(Value& other) noexcept {
         case TypeId::kBool:    bool_val_ = other.bool_val_; break;
         case TypeId::kInt32:   int32_val_ = other.int32_val_; break;
         case TypeId::kInt64:   int64_val_ = other.int64_val_; break;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime: int64_val_ = other.int64_val_; break;
         case TypeId::kFloat:   float_val_ = other.float_val_; break;
         case TypeId::kDouble:  double_val_ = other.double_val_; break;
         case TypeId::kVarchar: string_val_ = static_cast<String&&>(other.string_val_); break;

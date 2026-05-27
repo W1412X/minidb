@@ -15,7 +15,19 @@ namespace minidb {
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
-           type == TypeId::kVarchar || type == TypeId::kNull;
+           type == TypeId::kVarchar || type == TypeId::kTimestamp ||
+           type == TypeId::kDatetime || type == TypeId::kNull;
+}
+
+static bool is_datetime_type(TypeId type) {
+    return type == TypeId::kTimestamp || type == TypeId::kDatetime;
+}
+
+static Value cast_value_for_column(const Value& value, TypeId target) {
+    if (value.is_null() || value.type_id() == target) return value;
+    if (!is_datetime_type(target)) return value;
+    Value casted = value.cast_to(target);
+    return casted.is_null() ? value : casted;
 }
 
 static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) {
@@ -312,7 +324,8 @@ ExecResult UpdateExecutor::next() {
             int idx = schema_.get_column_index(col_name);
             if (idx < 0) continue;
             Value new_val = ExpressionEvaluator::evaluate(*set_clauses_[i].second, old_tuple);
-            new_values[static_cast<u32>(idx)] = new_val;
+            TypeId target_type = schema_.get_column(static_cast<u32>(idx)).type;
+            new_values[static_cast<u32>(idx)] = cast_value_for_column(new_val, target_type);
         }
 
         if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, old_rid,

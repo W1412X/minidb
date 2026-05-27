@@ -15,7 +15,8 @@ namespace minidb {
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
-           type == TypeId::kVarchar || type == TypeId::kNull;
+           type == TypeId::kVarchar || type == TypeId::kTimestamp ||
+           type == TypeId::kDatetime || type == TypeId::kNull;
 }
 
 static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) {

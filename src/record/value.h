@@ -2,7 +2,7 @@
  * @file value.h
  * @brief Value type — Unified representation of all column values in the database
  *
- * Supports: BOOL, INT32, INT64, FLOAT, DOUBLE, VARCHAR, NULL
+ * Supports: BOOL, INT32, INT64, FLOAT, DOUBLE, VARCHAR, TIMESTAMP, DATETIME, NULL
  * Serialization format: type_id(1B) + data (fixed/variable)
  */
 #pragma once
@@ -20,6 +20,8 @@ enum class TypeId : u8 {
     kFloat   = 3,
     kDouble  = 4,
     kVarchar = 5,
+    kTimestamp = 6,
+    kDatetime  = 7,
     kNull    = 255,
 };
 
@@ -34,6 +36,8 @@ public:
     explicit Value(double val);
     explicit Value(const String& val);
     explicit Value(const char* val);
+    static Value timestamp(i64 micros);
+    static Value datetime(i64 micros);
 
     // Copy / move.
     Value(const Value& other);
@@ -53,6 +57,7 @@ public:
     float   get_float() const;
     double  get_double() const;
     const String& get_string() const;
+    i64     get_datetime_micros() const;
 
     // Compare
     int compare(const Value& other) const;
@@ -85,6 +90,7 @@ public:
     static u32 type_size(TypeId type);
 
 private:
+    Value(TypeId type, i64 micros);
     void copy_from(const Value& other);
     void move_from(Value& other) noexcept;
     void destroy();

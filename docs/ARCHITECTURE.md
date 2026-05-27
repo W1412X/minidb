@@ -126,10 +126,14 @@ Test database files go into `--dir <path>` (default `minidb_data/`).
 | `kFloat` | 3 | 4 B | IEEE 754 single |
 | `kDouble` | 4 | 8 B | IEEE 754 double |
 | `kVarchar` | 5 | 4 B length + data | `TEXT` and `VARCHAR(n)` both map here |
+| `kTimestamp` | 6 | 8 B | UTC microseconds since Unix epoch |
+| `kDatetime` | 7 | 8 B | UTC microseconds since Unix epoch; no time-zone management |
 | `kNull` | 255 | 1 B (type tag only) | SQL NULL |
 
 Value serialization format: `type_id (1 B) + payload`.  VARCHAR prepends a
-`u32` length before the character data.
+`u32` length before the character data. `TIMESTAMP` and `DATETIME` share the
+same 64-bit UTC-microsecond representation and display as
+`YYYY-MM-DD HH:MM:SS[.ffffff]`.
 
 ---
 
