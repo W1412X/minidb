@@ -30,7 +30,7 @@ const char* sql_name_from_type(TypeId type) {
         case TypeId::kInt64: return "BIGINT";
         case TypeId::kFloat: return "FLOAT";
         case TypeId::kDouble: return "DOUBLE";
-        case TypeId::kVarchar: return "TEXT";
+        case TypeId::kVarchar: return "VARCHAR";
         case TypeId::kTimestamp: return "TIMESTAMP";
         case TypeId::kDatetime: return "DATETIME";
         case TypeId::kNull: return "NULL";
