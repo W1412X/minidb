@@ -17,6 +17,10 @@ static bool is_numeric_like(TypeId type) {
            type == TypeId::kFloat || type == TypeId::kDouble;
 }
 
+static bool is_datetime_type(TypeId type) {
+    return type == TypeId::kTimestamp || type == TypeId::kDatetime;
+}
+
 static double numeric_as_double(const Value& value) {
     switch (value.type_id()) {
         case TypeId::kBool: return value.get_bool() ? 1.0 : 0.0;
@@ -34,10 +38,47 @@ static int sql_compare_values(const Value& left, const Value& right) {
         double r = numeric_as_double(right);
         return (l < r) ? -1 : (l > r ? 1 : 0);
     }
+    if (is_datetime_type(left.type_id()) || is_datetime_type(right.type_id())) {
+        Value l = left;
+        Value r = right;
+        if (is_datetime_type(left.type_id()) && !is_datetime_type(right.type_id())) {
+            r = right.cast_to(left.type_id());
+        } else if (!is_datetime_type(left.type_id()) && is_datetime_type(right.type_id())) {
+            l = left.cast_to(right.type_id());
+        } else if (left.type_id() != right.type_id()) {
+            r = right.cast_to(left.type_id());
+        }
+        if (l.is_null() || r.is_null()) return left.compare(right);
+        i64 lm = l.get_datetime_micros();
+        i64 rm = r.get_datetime_micros();
+        return (lm < rm) ? -1 : (lm > rm ? 1 : 0);
+    }
     return left.compare(right);
 }
 
 static Value compare_result(const Value& left, const Value& right, const String& op) {
+    if (is_datetime_type(left.type_id()) || is_datetime_type(right.type_id())) {
+        Value l = left;
+        Value r = right;
+        if (is_datetime_type(left.type_id()) && !is_datetime_type(right.type_id())) {
+            r = right.cast_to(left.type_id());
+        } else if (!is_datetime_type(left.type_id()) && is_datetime_type(right.type_id())) {
+            l = left.cast_to(right.type_id());
+        } else if (left.type_id() != right.type_id()) {
+            r = right.cast_to(left.type_id());
+        }
+        if (l.is_null() || r.is_null()) return Value();
+        i64 lm = l.get_datetime_micros();
+        i64 rm = r.get_datetime_micros();
+        int cmp = (lm < rm) ? -1 : (lm > rm ? 1 : 0);
+        if (op == "=") return Value(cmp == 0);
+        if (op == "<>" || op == "!=") return Value(cmp != 0);
+        if (op == "<") return Value(cmp < 0);
+        if (op == ">") return Value(cmp > 0);
+        if (op == "<=") return Value(cmp <= 0);
+        if (op == ">=") return Value(cmp >= 0);
+        return Value();
+    }
     int cmp = sql_compare_values(left, right);
     if (op == "=") return Value(cmp == 0);
     if (op == "<>" || op == "!=") return Value(cmp != 0);

@@ -3,7 +3,10 @@
 #include "sql/planner/planner.h"
 #include "sql/executor/executor_factory.h"
 #include "sql/executor/expression_evaluator.h"
+#include "sql/executor/trace_report.h"
+#include "common/trace.h"
 #include "catalog/catalog.h"
+#include "common/sql_types.h"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -606,14 +609,7 @@ String Server::execute_sql(const String& sql) {
             c.is_primary = col.is_primary;
             c.is_unique = col.is_unique;
             c.default_value = col.default_value;
-            if (col.type_name == "INT" || col.type_name == "INTEGER") c.type = TypeId::kInt32;
-            else if (col.type_name == "BIGINT") c.type = TypeId::kInt64;
-            else if (col.type_name == "FLOAT" || col.type_name == "REAL") c.type = TypeId::kFloat;
-            else if (col.type_name == "DOUBLE" || col.type_name == "DECIMAL" ||
-                     col.type_name == "NUMERIC") c.type = TypeId::kDouble;
-            else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
-            else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
-            else c.type = TypeId::kVarchar;
+            c.type = type_from_sql_name(col.type_name);
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
@@ -654,13 +650,7 @@ String Server::execute_sql(const String& sql) {
             case AlterType::kAddColumn: {
                 Column col;
                 col.name = alt->new_column.name;
-                if (alt->new_column.type_name == "INT") col.type = TypeId::kInt32;
-                else if (alt->new_column.type_name == "BIGINT") col.type = TypeId::kInt64;
-                else if (alt->new_column.type_name == "FLOAT") col.type = TypeId::kFloat;
-                else if (alt->new_column.type_name == "DOUBLE") col.type = TypeId::kDouble;
-                else if (alt->new_column.type_name == "VARCHAR" || alt->new_column.type_name == "TEXT") col.type = TypeId::kVarchar;
-                else if (alt->new_column.type_name == "BOOL") col.type = TypeId::kBool;
-                else col.type = TypeId::kVarchar;
+                col.type = type_from_sql_name(alt->new_column.type_name);
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
                 if (alt->new_column.type_name == "VARCHAR" &&
@@ -746,15 +736,7 @@ String Server::execute_sql(const String& sql) {
             const Column& c = te->schema.get_column(i);
             if (c.is_dropped) continue;
             const char* type_str = "?";
-            switch (c.type) {
-                case TypeId::kBool: type_str = "BOOL"; break;
-                case TypeId::kInt32: type_str = "INT"; break;
-                case TypeId::kInt64: type_str = "BIGINT"; break;
-                case TypeId::kFloat: type_str = "FLOAT"; break;
-                case TypeId::kDouble: type_str = "DOUBLE"; break;
-                case TypeId::kVarchar: type_str = "VARCHAR"; break;
-                default: type_str = "UNKNOWN"; break;
-            }
+            type_str = sql_name_from_type(c.type);
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n",
                      i, c.name.c_str(), type_str,
                      c.not_null ? "YES" : "NO", c.is_primary ? "YES" : "NO",
@@ -765,9 +747,54 @@ String Server::execute_sql(const String& sql) {
     }
 
     if (stmt.type == StmtType::kExplain && stmt.explain_stmt) {
+        auto plan_start = std::chrono::steady_clock::now();
         Planner planner(&db_.catalog(), optimizer_config_from_db(db_));
         UniquePtr<PlanNode> plan = planner.plan(*stmt.explain_stmt);
+        auto plan_end = std::chrono::steady_clock::now();
         if (!plan) return String("Error: failed to build plan.\n");
+        if (stmt.explain_trace) {
+            if (is_write_statement_type(stmt.explain_stmt->type)) {
+                return String("Trace skipped: write statements are not executed by EXPLAIN TRACE.\n");
+            }
+            assign_trace_node_ids(plan.get());
+            TraceOptions options = trace_options_from_statement(
+                stmt.explain_trace_level, stmt.explain_trace_channels,
+                stmt.explain_trace_events_path);
+            TraceContext trace(options);
+            TraceTimings timings;
+            timings.plan_us = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(plan_end - plan_start).count());
+            g_trace_context = &trace;
+            ExecutorFactory factory(db_);
+            auto create_start = std::chrono::steady_clock::now();
+            UniquePtr<Executor> exec = factory.create(plan.get());
+            auto create_end = std::chrono::steady_clock::now();
+            timings.executor_create_us = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(create_end - create_start).count());
+            const char* err = nullptr;
+            if (!exec) {
+                err = "failed to create executor";
+            } else {
+                clear_executor_error();
+                set_executor_deadline_ms(g_statement_timeout_ms != 0
+                    ? g_statement_timeout_ms
+                    : db_.config().statement_timeout_ms);
+                auto exec_start = std::chrono::steady_clock::now();
+                exec->init();
+                while (true) {
+                    ExecResult row = exec->next();
+                    if (!row.ok()) break;
+                    timings.actual_rows++;
+                }
+                auto exec_end = std::chrono::steady_clock::now();
+                set_executor_deadline_ms(0);
+                timings.execute_us = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count());
+                err = executor_error();
+            }
+            g_trace_context = nullptr;
+            return build_trace_json(sql, plan.get(), trace, timings, err) + "\n";
+        }
         snprintf(buf, sizeof(buf), "Plan: cost=%.2f..%.2f rows=%.0f\n",
                  plan->startup_cost, plan->total_cost, plan->plan_rows);
         result = String(buf);
@@ -939,14 +966,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             const auto& col = stmt.create_table->columns[i];
             Column c; c.name = col.name; c.not_null = col.not_null; c.is_primary = col.is_primary; c.is_unique = col.is_unique;
             c.default_value = col.default_value;
-            if (col.type_name == "INT" || col.type_name == "INTEGER") c.type = TypeId::kInt32;
-            else if (col.type_name == "BIGINT") c.type = TypeId::kInt64;
-            else if (col.type_name == "FLOAT" || col.type_name == "REAL") c.type = TypeId::kFloat;
-            else if (col.type_name == "DOUBLE" || col.type_name == "DECIMAL" ||
-                     col.type_name == "NUMERIC") c.type = TypeId::kDouble;
-            else if (col.type_name == "VARCHAR" || col.type_name == "TEXT") c.type = TypeId::kVarchar;
-            else if (col.type_name == "BOOL" || col.type_name == "BOOLEAN") c.type = TypeId::kBool;
-            else c.type = TypeId::kVarchar;
+            c.type = type_from_sql_name(col.type_name);
             if (col.type_name == "VARCHAR" && col.varchar_length > 0) {
                 c.varchar_length = static_cast<u32>(col.varchar_length);
             }
@@ -987,13 +1007,7 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             case AlterType::kAddColumn: {
                 Column col;
                 col.name = alt->new_column.name;
-                if (alt->new_column.type_name == "INT") col.type = TypeId::kInt32;
-                else if (alt->new_column.type_name == "BIGINT") col.type = TypeId::kInt64;
-                else if (alt->new_column.type_name == "FLOAT") col.type = TypeId::kFloat;
-                else if (alt->new_column.type_name == "DOUBLE") col.type = TypeId::kDouble;
-                else if (alt->new_column.type_name == "VARCHAR" || alt->new_column.type_name == "TEXT") col.type = TypeId::kVarchar;
-                else if (alt->new_column.type_name == "BOOL") col.type = TypeId::kBool;
-                else col.type = TypeId::kVarchar;
+                col.type = type_from_sql_name(alt->new_column.type_name);
                 col.not_null = alt->new_column.not_null;
                 col.default_value = alt->new_column.default_value;
                 if (alt->new_column.type_name == "VARCHAR" &&
@@ -1040,16 +1054,63 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
             const Column& c = te->schema.get_column(i);
             if (c.is_dropped) continue;
             const char* ts = "?";
-            switch (c.type) { case TypeId::kBool: ts="BOOL"; break; case TypeId::kInt32: ts="INT"; break; case TypeId::kInt64: ts="BIGINT"; break; case TypeId::kFloat: ts="FLOAT"; break; case TypeId::kDouble: ts="DOUBLE"; break; case TypeId::kVarchar: ts="VARCHAR"; break; default: ts="UNKNOWN"; break; }
+            ts = sql_name_from_type(c.type);
             snprintf(buf, sizeof(buf), "%-4u %-20s %-10s %-8s %-8s %-8s\n", i, c.name.c_str(), ts, c.not_null?"YES":"NO", c.is_primary?"YES":"NO", c.is_unique?"YES":"NO");
             result += buf;
         }
         send_str(result); return 0;
     }
     if (stmt.type == StmtType::kExplain && stmt.explain_stmt) {
+        auto plan_start = std::chrono::steady_clock::now();
         Planner pl(&db_.catalog(), optimizer_config_from_db(db_));
         UniquePtr<PlanNode> p = pl.plan(*stmt.explain_stmt);
+        auto plan_end = std::chrono::steady_clock::now();
         if (!p) { send_str("Error: failed to build plan.\n"); return 0; }
+        if (stmt.explain_trace) {
+            if (is_write_statement_type(stmt.explain_stmt->type)) {
+                send_str("Trace skipped: write statements are not executed by EXPLAIN TRACE.\n");
+                return 0;
+            }
+            assign_trace_node_ids(p.get());
+            TraceOptions options = trace_options_from_statement(
+                stmt.explain_trace_level, stmt.explain_trace_channels,
+                stmt.explain_trace_events_path);
+            TraceContext trace(options);
+            TraceTimings timings;
+            timings.plan_us = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(plan_end - plan_start).count());
+            g_trace_context = &trace;
+            ExecutorFactory factory(db_);
+            auto create_start = std::chrono::steady_clock::now();
+            UniquePtr<Executor> exec = factory.create(p.get());
+            auto create_end = std::chrono::steady_clock::now();
+            timings.executor_create_us = static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(create_end - create_start).count());
+            const char* err = nullptr;
+            if (!exec) {
+                err = "failed to create executor";
+            } else {
+                clear_executor_error();
+                set_executor_deadline_ms(g_statement_timeout_ms != 0
+                    ? g_statement_timeout_ms
+                    : db_.config().statement_timeout_ms);
+                auto exec_start = std::chrono::steady_clock::now();
+                exec->init();
+                while (true) {
+                    ExecResult row = exec->next();
+                    if (!row.ok()) break;
+                    timings.actual_rows++;
+                }
+                auto exec_end = std::chrono::steady_clock::now();
+                set_executor_deadline_ms(0);
+                timings.execute_us = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count());
+                err = executor_error();
+            }
+            g_trace_context = nullptr;
+            send_str(build_trace_json(sql, p.get(), trace, timings, err) + "\n");
+            return 0;
+        }
         snprintf(buf, sizeof(buf), "Plan: cost=%.2f..%.2f rows=%.0f\n", p->startup_cost, p->total_cost, p->plan_rows);
         String result = buf;
         switch (p->type) {

@@ -98,6 +98,22 @@ static bool read_value_bounded(const byte*& buf, const byte* end, Value* out) {
             buf += 8;
             return true;
         }
+        case TypeId::kTimestamp: {
+            if (buf + 8 > end) return false;
+            i64 v;
+            std::memcpy(&v, buf, 8);
+            *out = Value::timestamp(v);
+            buf += 8;
+            return true;
+        }
+        case TypeId::kDatetime: {
+            if (buf + 8 > end) return false;
+            i64 v;
+            std::memcpy(&v, buf, 8);
+            *out = Value::datetime(v);
+            buf += 8;
+            return true;
+        }
         case TypeId::kFloat: {
             if (buf + 4 > end) return false;
             float v;
@@ -147,6 +163,8 @@ static bool skip_value_bounded(const byte*& buf, const byte* end) {
             buf += 4;
             return true;
         case TypeId::kInt64:
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime:
         case TypeId::kDouble:
             if (buf + 8 > end) return false;
             buf += 8;

@@ -294,9 +294,15 @@ struct Statement {
     String vacuum_table_name;
     UniquePtr<Statement> explain_stmt;
     bool explain_analyze;
+    bool explain_trace;
+    u8 explain_trace_level;
+    u32 explain_trace_channels;
+    String explain_trace_events_path;
     double join_hint;  // >0 favors hash join, <0 favors nested loop, 0 = no hint
 
-    Statement() : type(StmtType::kSelect), explain_analyze(false), join_hint(0.0) {}
+    Statement() : type(StmtType::kSelect), explain_analyze(false),
+                  explain_trace(false), explain_trace_level(1),
+                  explain_trace_channels(0), join_hint(0.0) {}
 };
 
 inline Expression* Expression::clone() const {

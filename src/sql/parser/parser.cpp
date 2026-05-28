@@ -16,6 +16,29 @@ static String upper_ascii(const String& value) {
     return out;
 }
 
+static bool token_word_is(const Token& token, const char* word) {
+    return upper_ascii(token.value) == String(word);
+}
+
+static bool is_trace_option_start(const Token& token) {
+    String word = upper_ascii(token.value);
+    return word == "LEVEL" || word == "CHANNELS" || word == "EVENTS";
+}
+
+static u32 trace_channel_from_word(const String& word) {
+    if (word == "PIPELINE") return 1u << 0;
+    if (word == "PLAN") return 1u << 1;
+    if (word == "EXECUTOR") return 1u << 2;
+    if (word == "STORAGE") return 1u << 3;
+    if (word == "MVCC") return 1u << 4;
+    if (word == "INDEX") return 1u << 5;
+    if (word == "WAL") return 1u << 6;
+    if (word == "LOCK") return 1u << 7;
+    if (word == "MEMORY") return 1u << 8;
+    if (word == "EVENT" || word == "EVENTS") return 1u << 9;
+    return 0;
+}
+
 Parser::Parser(const String& sql) : lexer_(sql), ok_(true) {}
 
 Statement Parser::parse() {
@@ -33,6 +56,62 @@ Statement Parser::parse() {
             if (check_keyword(TokenType::KW_ANALYZE)) {
                 lexer_.consume_token();
                 stmt.explain_analyze = true;
+            }
+            if (token_word_is(peek(), "TRACE")) {
+                lexer_.consume_token();
+                stmt.explain_trace = true;
+                stmt.explain_analyze = true;
+                while (is_trace_option_start(peek())) {
+                    Token opt = peek();
+                    lexer_.consume_token();
+                    String opt_word = upper_ascii(opt.value);
+                    if (opt_word == "LEVEL") {
+                        Token lvl = peek();
+                        lexer_.consume_token();
+                        String lvl_word = upper_ascii(lvl.value);
+                        if (lvl_word == "SUMMARY") stmt.explain_trace_level = 0;
+                        else if (lvl_word == "NORMAL") stmt.explain_trace_level = 1;
+                        else if (lvl_word == "VERBOSE") stmt.explain_trace_level = 2;
+                        else if (lvl_word == "DEBUG") stmt.explain_trace_level = 3;
+                        else {
+                            set_error_at(String("TRACE LEVEL requires SUMMARY/NORMAL/VERBOSE/DEBUG"), lvl);
+                            return Statement();
+                        }
+                    } else if (opt_word == "CHANNELS") {
+                        u32 channels = 0;
+                        while (true) {
+                            Token ch = peek();
+                            lexer_.consume_token();
+                            String ch_word = upper_ascii(ch.value);
+                            if (ch_word == "ALL") {
+                                channels = 0x3ffu;
+                            } else if (ch_word == "DEFAULT") {
+                                channels = 0;
+                            } else {
+                                u32 bit = trace_channel_from_word(ch_word);
+                                if (bit == 0) {
+                                    set_error_at(String("unknown TRACE channel"), ch);
+                                    return Statement();
+                                }
+                                channels |= bit;
+                            }
+                            if (!match(TokenType::COMMA)) break;
+                        }
+                        stmt.explain_trace_channels = channels;
+                    } else if (opt_word == "EVENTS") {
+                        stmt.explain_trace_channels |= (1u << 9);
+                        if (check_keyword(TokenType::KW_TO)) {
+                            lexer_.consume_token();
+                            Token path = peek();
+                            lexer_.consume_token();
+                            if (path.type != TokenType::STRING_LITERAL && path.type != TokenType::IDENTIFIER) {
+                                set_error_at(String("TRACE EVENTS TO requires a path"), path);
+                                return Statement();
+                            }
+                            stmt.explain_trace_events_path = path.value;
+                        }
+                    }
+                }
             }
             auto inner = make_unique<Statement>();
             Token next = peek();
@@ -520,6 +599,10 @@ UniquePtr<CreateTableStmt> Parser::parse_create_table() {
             col.type_name = "DOUBLE";
         } else if (match_keyword(TokenType::KW_TEXT)) {
             col.type_name = "TEXT";
+        } else if (match_keyword(TokenType::KW_TIMESTAMP)) {
+            col.type_name = "TIMESTAMP";
+        } else if (match_keyword(TokenType::KW_DATETIME)) {
+            col.type_name = "DATETIME";
         } else if (match_keyword(TokenType::KW_VARCHAR)) {
             col.type_name = "VARCHAR";
             if (match(TokenType::LPAREN)) {
@@ -664,6 +747,10 @@ UniquePtr<AlterTableStmt> Parser::parse_alter_table() {
             stmt->new_column.type_name = "DOUBLE";
         } else if (match_keyword(TokenType::KW_TEXT)) {
             stmt->new_column.type_name = "TEXT";
+        } else if (match_keyword(TokenType::KW_TIMESTAMP)) {
+            stmt->new_column.type_name = "TIMESTAMP";
+        } else if (match_keyword(TokenType::KW_DATETIME)) {
+            stmt->new_column.type_name = "DATETIME";
         } else if (match_keyword(TokenType::KW_VARCHAR)) {
             stmt->new_column.type_name = "VARCHAR";
             if (match(TokenType::LPAREN)) {
@@ -1160,6 +1247,8 @@ UniquePtr<Expression> Parser::parse_primary() {
         else if (match_keyword(TokenType::KW_BOOL))    target = TypeId::kBool;
         else if (match_keyword(TokenType::KW_VARCHAR))  { target = TypeId::kVarchar; if (match(TokenType::LPAREN)) { expect(TokenType::INT_LITERAL); expect(TokenType::RPAREN); } }
         else if (match_keyword(TokenType::KW_TEXT))    target = TypeId::kVarchar;
+        else if (match_keyword(TokenType::KW_TIMESTAMP)) target = TypeId::kTimestamp;
+        else if (match_keyword(TokenType::KW_DATETIME))  target = TypeId::kDatetime;
         else { set_error("expected type name after AS"); }
         expect(TokenType::RPAREN);
         auto expr = make_unique<Expression>();

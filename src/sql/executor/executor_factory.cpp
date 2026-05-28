@@ -15,10 +15,13 @@
 #include "sql/executor/aggregate_executor.h"
 #include "sql/executor/union_executor.h"
 #include "sql/executor/subquery_in_executor.h"
+#include "sql/executor/trace_report.h"
+#include "common/trace.h"
 #include "sql/parser/ast.h"
 #include "sql/planner/planner.h"
 #include "transaction/transaction.h"
 #include "concurrency/lock_manager.h"
+#include <chrono>
 
 namespace minidb {
 
@@ -50,15 +53,75 @@ private:
     bool emitted_;
 };
 
+class TracedExecutor : public Executor {
+public:
+    TracedExecutor(UniquePtr<Executor> child, u32 node_id, const char* type_name)
+        : child_(static_cast<UniquePtr<Executor>&&>(child)), node_id_(node_id),
+          type_name_(type_name ? type_name : "Unknown") {}
+
+    void init() override {
+        TraceContext* trace = current_trace();
+        TraceNodeScope scope(trace, node_id_);
+        auto start = std::chrono::steady_clock::now();
+        child_->init();
+        auto end = std::chrono::steady_clock::now();
+        if (trace) {
+            TraceOperatorStats& s = trace->operator_stats(node_id_, type_name_);
+            s.init_calls++;
+            s.init_us += static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+        }
+    }
+
+    ExecResult next() override {
+        TraceContext* trace = current_trace();
+        TraceNodeScope scope(trace, node_id_);
+        auto start = std::chrono::steady_clock::now();
+        ExecResult r = child_->next();
+        auto end = std::chrono::steady_clock::now();
+        if (trace) {
+            TraceOperatorStats& s = trace->operator_stats(node_id_, type_name_);
+            s.next_calls++;
+            s.next_us += static_cast<u64>(
+                std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+            if (r.ok()) s.output_rows++;
+        }
+        return r;
+    }
+
+    const Schema& output_schema() const override { return child_->output_schema(); }
+    bool fast_count(u64* count) override { return child_->fast_count(count); }
+    bool fast_plain_aggregate(const Vector<AggregateColumn>& aggregates,
+                              Vector<Value>* row) override {
+        return child_->fast_plain_aggregate(aggregates, row);
+    }
+    bool last_record_id(RecordId* rid) const override { return child_->last_record_id(rid); }
+
+private:
+    UniquePtr<Executor> child_;
+    u32 node_id_;
+    const char* type_name_;
+};
+
+static UniquePtr<Executor> maybe_trace_executor(PlanNode* plan, UniquePtr<Executor> exec) {
+    if (!exec || !current_trace() || !plan || plan->trace_id == 0) {
+        return static_cast<UniquePtr<Executor>&&>(exec);
+    }
+    return UniquePtr<Executor>(new TracedExecutor(static_cast<UniquePtr<Executor>&&>(exec),
+                                                  plan->trace_id,
+                                                  plan_node_type_name(plan->type)));
+}
+
 UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
     if (!plan) return UniquePtr<Executor>();
+    TraceNodeScope create_scope(current_trace(), plan->trace_id);
 
     // Get current transaction ID (for locking)
     u64 txn_id = db_.txn_manager().current() ? db_.txn_manager().current()->id() : 0;
 
     switch (plan->type) {
         case PlanNodeType::kOneRow:
-            return UniquePtr<Executor>(new OneRowExecutor(plan->output_schema));
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new OneRowExecutor(plan->output_schema)));
 
         case PlanNodeType::kSeqScan: {
             auto* scan_plan = static_cast<SeqScanPlan*>(plan);
@@ -80,9 +143,9 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 !scan_plan->pushed_predicate &&
                 db_.config().parallel_workers > 1 &&
                 heap->meta().num_data_pages >= db_.config().parallel_workers * 4) {
-                return UniquePtr<Executor>(new ParallelSeqScanExecutor(
+                return maybe_trace_executor(plan, UniquePtr<Executor>(new ParallelSeqScanExecutor(
                     &db_.pool(), heap, scan_plan->output_schema,
-                    db_.config().parallel_workers));
+                    db_.config().parallel_workers)));
             }
             auto exec = UniquePtr<SeqScanExecutor>(new SeqScanExecutor(
                 &db_.pool(), heap, storage_schema, scan_plan->output_schema,
@@ -91,7 +154,7 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
                 if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
             }
-            return UniquePtr<Executor>(exec.release());
+            return maybe_trace_executor(plan, UniquePtr<Executor>(exec.release()));
         }
 
         case PlanNodeType::kIndexScan: {
@@ -108,7 +171,7 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
                 if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
             }
-            return UniquePtr<Executor>(exec.release());
+            return maybe_trace_executor(plan, UniquePtr<Executor>(exec.release()));
         }
 
         case PlanNodeType::kIndexOnlyScan: {
@@ -117,9 +180,9 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             if (!index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
-            return UniquePtr<Executor>(new IndexOnlyScanExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new IndexOnlyScanExecutor(
                 &db_.pool(), index, scan_plan->search_key, scan_plan->is_range,
-                scan_plan->range_high, scan_plan->output_schema, tm, heap));
+                scan_plan->range_high, scan_plan->output_schema, tm, heap)));
         }
 
         case PlanNodeType::kFilter: {
@@ -142,30 +205,30 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 auto sub_exec = create(sub_plan.get());
                 if (!sub_exec) return UniquePtr<Executor>();
 
-                return UniquePtr<Executor>(new SubqueryInExecutor(
+                return maybe_trace_executor(plan, UniquePtr<Executor>(new SubqueryInExecutor(
                     static_cast<UniquePtr<Executor>&&>(child),
                     static_cast<UniquePtr<Executor>&&>(sub_exec),
                     UniquePtr<Expression>(f_plan->predicate->left->clone()),
                     0, f_plan->output_schema,
-                    f_plan->predicate->op == "NOT_IN_SUBQUERY"));
+                    f_plan->predicate->op == "NOT_IN_SUBQUERY")));
             }
             auto child = create(f_plan->child.get());
             if (!child) return UniquePtr<Executor>();
             auto predicate = materialize_scalar_subqueries(f_plan->predicate.get());
             if (!predicate) return UniquePtr<Executor>();
-            return UniquePtr<Executor>(new FilterExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new FilterExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
-                static_cast<UniquePtr<Expression>&&>(predicate)));
+                static_cast<UniquePtr<Expression>&&>(predicate))));
         }
 
         case PlanNodeType::kProject: {
             auto* p_plan = static_cast<ProjectPlan*>(plan);
             auto child = create(p_plan->child.get());
             if (!child) return UniquePtr<Executor>();
-            return UniquePtr<Executor>(new ProjectExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new ProjectExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
                 p_plan->output_schema, p_plan->column_indices,
-                p_plan->expressions));
+                p_plan->expressions)));
         }
 
         case PlanNodeType::kInsert: {
@@ -178,9 +241,9 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             HeapFile* heap = db_.get_heap_file(i_plan->table_id);
             if (!heap) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
-            return UniquePtr<Executor>(new InsertExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new InsertExecutor(
                 &db_.pool(), heap, i_plan->output_schema, i_plan->values,
-                tm, i_plan->table_id, &db_.wal(), &db_.catalog(), &db_));
+                tm, i_plan->table_id, &db_.wal(), &db_.catalog(), &db_)));
         }
 
         case PlanNodeType::kDelete: {
@@ -195,10 +258,10 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto child = create(d_plan->child.get());
             if (!child) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
-            return UniquePtr<Executor>(new DeleteExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new DeleteExecutor(
                 &db_.pool(), heap,
                 static_cast<UniquePtr<Executor>&&>(child),
-                tm, d_plan->table_id, &db_.wal(), &db_));
+                tm, d_plan->table_id, &db_.wal(), &db_)));
         }
 
         case PlanNodeType::kUpdate: {
@@ -222,11 +285,11 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             }
 
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
-            return UniquePtr<Executor>(new UpdateExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new UpdateExecutor(
                 &db_.pool(), heap, u_plan->output_schema,
                 static_cast<Vector<Pair<String, UniquePtr<Expression>>>&&>(clauses),
                 static_cast<UniquePtr<Executor>&&>(child),
-                tm, u_plan->table_id, &db_.wal(), &db_.catalog(), &db_));
+                tm, u_plan->table_id, &db_.wal(), &db_.catalog(), &db_)));
         }
 
         case PlanNodeType::kJoin: {
@@ -247,12 +310,12 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                     if (j_plan->right && j_plan->right->type == PlanNodeType::kSeqScan) {
                         inner_projected = static_cast<SeqScanPlan*>(j_plan->right.get())->projected_columns;
                     }
-                    return UniquePtr<Executor>(new IndexLookupJoinExecutor(
+                    return maybe_trace_executor(plan, UniquePtr<Executor>(new IndexLookupJoinExecutor(
                         static_cast<UniquePtr<Executor>&&>(left),
                         &db_.pool(), inner_heap, inner_index,
                         inner_table->schema, j_plan->right->output_schema, inner_projected,
                         j_plan->on_condition ? UniquePtr<Expression>(j_plan->on_condition->clone()) : UniquePtr<Expression>(),
-                        j_plan->output_schema, j_plan->join_type, tm));
+                        j_plan->output_schema, j_plan->join_type, tm)));
                 }
             }
             if (j_plan->algorithm == JoinAlgorithm::kHash &&
@@ -260,28 +323,28 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 j_plan->on_condition &&
                 j_plan->on_condition->type == ExprType::kBinaryOp &&
                 j_plan->on_condition->op == "=") {
-                return UniquePtr<Executor>(new HashJoinExecutor(
+                return maybe_trace_executor(plan, UniquePtr<Executor>(new HashJoinExecutor(
                     static_cast<UniquePtr<Executor>&&>(left),
                     static_cast<UniquePtr<Executor>&&>(right),
                     UniquePtr<Expression>(j_plan->on_condition->clone()),
                     j_plan->output_schema, j_plan->join_type,
                     db_.config().work_mem_bytes, j_plan->hash_build_left,
-                    db_.config().temp_dir.c_str()));
+                    db_.config().temp_dir.c_str())));
             }
-            return UniquePtr<Executor>(new NestedLoopJoinExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new NestedLoopJoinExecutor(
                 static_cast<UniquePtr<Executor>&&>(left),
                 static_cast<UniquePtr<Executor>&&>(right),
                 j_plan->on_condition ? UniquePtr<Expression>(j_plan->on_condition->clone()) : UniquePtr<Expression>(),
-                j_plan->output_schema, j_plan->join_type));
+                j_plan->output_schema, j_plan->join_type)));
         }
 
         case PlanNodeType::kLimit: {
             auto* l_plan = static_cast<LimitPlan*>(plan);
             auto child = create(l_plan->child.get());
             if (!child) return UniquePtr<Executor>();
-            return UniquePtr<Executor>(new LimitExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new LimitExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
-                l_plan->limit, l_plan->offset));
+                l_plan->limit, l_plan->offset)));
         }
 
         case PlanNodeType::kSort: {
@@ -296,20 +359,20 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
                 sk.nulls_first = s_plan->keys[i].nulls_first;
                 keys.push_back(static_cast<SortKey&&>(sk));
             }
-            return UniquePtr<Executor>(new SortExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new SortExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
                 static_cast<Vector<SortKey>&&>(keys), s_plan->output_schema,
                 db_.config().work_mem_bytes, s_plan->top_n,
-                db_.config().temp_file_limit_bytes, db_.config().temp_dir.c_str()));
+                db_.config().temp_file_limit_bytes, db_.config().temp_dir.c_str())));
         }
 
         case PlanNodeType::kDistinct: {
             auto* dist_plan = static_cast<DistinctPlan*>(plan);
             auto child = create(dist_plan->child.get());
             if (!child) return UniquePtr<Executor>();
-            return UniquePtr<Executor>(new DistinctExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new DistinctExecutor(
                 static_cast<UniquePtr<Executor>&&>(child), dist_plan->output_schema,
-                db_.config().work_mem_bytes, db_.config().temp_dir.c_str()));
+                db_.config().work_mem_bytes, db_.config().temp_dir.c_str())));
         }
 
         case PlanNodeType::kAggregate: {
@@ -336,14 +399,14 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             if (a_plan->having)
                 having = UniquePtr<Expression>(a_plan->having->clone());
 
-            return UniquePtr<Executor>(new AggregateExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new AggregateExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
                 static_cast<Vector<AggregateColumn>&&>(aggs),
                 static_cast<Vector<UniquePtr<Expression>>&&>(gb),
                 static_cast<UniquePtr<Expression>&&>(having),
                 a_plan->output_schema,
                 db_.config().work_mem_bytes,
-                db_.config().temp_dir.c_str()));
+                db_.config().temp_dir.c_str())));
         }
 
         case PlanNodeType::kUnion: {
@@ -351,10 +414,10 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto left = create(u_plan->left.get());
             auto right = create(u_plan->right.get());
             if (!left || !right) return UniquePtr<Executor>();
-            return UniquePtr<Executor>(new UnionExecutor(
+            return maybe_trace_executor(plan, UniquePtr<Executor>(new UnionExecutor(
                 static_cast<UniquePtr<Executor>&&>(left),
                 static_cast<UniquePtr<Executor>&&>(right),
-                u_plan->all, u_plan->output_schema));
+                u_plan->all, u_plan->output_schema)));
         }
 
         default:

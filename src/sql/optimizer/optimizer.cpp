@@ -30,7 +30,28 @@ static bool expr_contains_subquery(const Expression* expr) {
 static bool btree_supports_type(TypeId type) {
     return type == TypeId::kBool || type == TypeId::kInt32 || type == TypeId::kInt64 ||
            type == TypeId::kFloat || type == TypeId::kDouble ||
-           type == TypeId::kVarchar || type == TypeId::kNull;
+           type == TypeId::kVarchar || type == TypeId::kTimestamp ||
+           type == TypeId::kDatetime || type == TypeId::kNull;
+}
+
+static bool is_datetime_type(TypeId type) {
+    return type == TypeId::kTimestamp || type == TypeId::kDatetime;
+}
+
+static bool cast_literal_for_column(const Value& value, TypeId target, Value* out) {
+    if (!out) return false;
+    if (value.is_null() || value.type_id() == target) {
+        *out = value;
+        return true;
+    }
+    if (!is_datetime_type(target)) {
+        *out = value;
+        return true;
+    }
+    Value casted = value.cast_to(target);
+    if (casted.is_null()) return false;
+    *out = casted;
+    return true;
 }
 
 static bool table_stats_fresh(const TableEntry* table) {
@@ -66,7 +87,10 @@ static bool extract_index_eq_predicate(const Expression* expr, const Schema& sch
     if (idx < 0) return false;
 
     *column_idx = static_cast<u32>(idx);
-    *key = lit_expr->literal_value;
+    if (!cast_literal_for_column(lit_expr->literal_value,
+                                 schema.get_column(*column_idx).type, key)) {
+        return false;
+    }
     return true;
 }
 
@@ -162,7 +186,10 @@ static bool extract_index_bound_predicate(const Expression* expr, const Schema& 
     }
 
     *column_idx = static_cast<u32>(idx);
-    *key = lit_expr->literal_value;
+    if (!cast_literal_for_column(lit_expr->literal_value,
+                                 schema.get_column(*column_idx).type, key)) {
+        return false;
+    }
     *is_lower = (op == ">=" || op == ">");
     *inclusive = (op == ">=" || op == "<=");
     return true;
@@ -221,6 +248,8 @@ static Value min_key_for_type(TypeId type) {
     switch (type) {
         case TypeId::kInt32: return Value(static_cast<i32>(-2147483647 - 1));
         case TypeId::kInt64: return Value(static_cast<i64>(INT64_MIN));
+        case TypeId::kTimestamp: return Value::timestamp(static_cast<i64>(INT64_MIN));
+        case TypeId::kDatetime: return Value::datetime(static_cast<i64>(INT64_MIN));
         case TypeId::kFloat: return Value(-3.402823466e+38F);
         case TypeId::kDouble: return Value(-1.7976931348623157e+308);
         case TypeId::kBool: return Value(false);
@@ -233,6 +262,8 @@ static Value max_key_for_type(TypeId type) {
     switch (type) {
         case TypeId::kInt32: return Value(static_cast<i32>(2147483647));
         case TypeId::kInt64: return Value(static_cast<i64>(INT64_MAX));
+        case TypeId::kTimestamp: return Value::timestamp(static_cast<i64>(INT64_MAX));
+        case TypeId::kDatetime: return Value::datetime(static_cast<i64>(INT64_MAX));
         case TypeId::kFloat: return Value(3.402823466e+38F);
         case TypeId::kDouble: return Value(1.7976931348623157e+308);
         case TypeId::kBool: return Value(true);

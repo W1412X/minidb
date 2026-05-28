@@ -15,6 +15,8 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("SELECT", TokenType::KW_SELECT);
     m.insert("EXPLAIN", TokenType::KW_EXPLAIN);
     m.insert("ANALYZE", TokenType::KW_ANALYZE);
+    m.insert("ALL", TokenType::KW_ALL);
+    m.insert("DEFAULT", TokenType::KW_DEFAULT);
     m.insert("INSERT", TokenType::KW_INSERT);
     m.insert("UPDATE", TokenType::KW_UPDATE);
     m.insert("DELETE", TokenType::KW_DELETE);
@@ -45,6 +47,8 @@ static HashMap<String, TokenType> make_keyword_map() {
     m.insert("BOOL", TokenType::KW_BOOL);
     m.insert("BOOLEAN", TokenType::KW_BOOL);
     m.insert("TEXT", TokenType::KW_TEXT);
+    m.insert("TIMESTAMP", TokenType::KW_TIMESTAMP);
+    m.insert("DATETIME", TokenType::KW_DATETIME);
     m.insert("TRUE", TokenType::KW_TRUE);
     m.insert("FALSE", TokenType::KW_FALSE);
     m.insert("BEGIN", TokenType::KW_BEGIN);

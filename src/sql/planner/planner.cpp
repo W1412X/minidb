@@ -16,6 +16,17 @@ static String int_to_string(int val) {
     return String(buf);
 }
 
+static bool is_datetime_type(TypeId type) {
+    return type == TypeId::kTimestamp || type == TypeId::kDatetime;
+}
+
+static Value cast_value_for_column(const Value& value, TypeId target) {
+    if (value.is_null() || value.type_id() == target) return value;
+    if (!is_datetime_type(target)) return value;
+    Value casted = value.cast_to(target);
+    return casted.is_null() ? value : casted;
+}
+
 static Schema schema_with_table_name(const Schema& schema, const String& table_name) {
     Schema out;
     for (u32 i = 0; i < schema.column_count(); i++) {
@@ -700,7 +711,8 @@ UniquePtr<PlanNode> Planner::plan_insert(const InsertStmt& stmt) {
                 Tuple dummy;
                 v = ExpressionEvaluator::evaluate(*expr, dummy);
             }
-            row[target_columns[c]] = v;
+            TypeId target_type = table->schema.get_column(target_columns[c]).type;
+            row[target_columns[c]] = cast_value_for_column(v, target_type);
         }
         plan->values.push_back(Vector<Value>(row));
     }

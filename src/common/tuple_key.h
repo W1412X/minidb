@@ -36,6 +36,12 @@ inline String encode_value_key(const Value& value) {
             std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(value.get_int64()));
             text = buf;
             break;
+        case TypeId::kTimestamp:
+        case TypeId::kDatetime:
+            std::snprintf(buf, sizeof(buf), "%lld",
+                          static_cast<long long>(value.get_datetime_micros()));
+            text = buf;
+            break;
         case TypeId::kFloat:
             std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(value.get_float()));
             text = buf;

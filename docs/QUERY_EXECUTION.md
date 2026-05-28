@@ -750,6 +750,122 @@ Plan: cost=<startup_cost>..<total_cost> rows=<estimated_rows>
 Displayed plan node types: `SeqScan`, `IndexScan`, `IndexOnlyScan`, `Filter`,
 `Project`, `Join`, `Sort`, `Aggregate`, `Insert`, `Delete`, `Update`.
 
+`EXPLAIN ANALYZE` prints a human-readable timing summary for a read-only
+statement. `EXPLAIN TRACE` is the structured form: it executes the same
+read-only statement and emits JSON (`format = "minidb.trace.v2"`) that can be
+inspected by scripts or loaded into the HTML viewer at
+`tools/trace_viewer.html`.
+
+Trace control has two independent axes:
+
+- `LEVEL` controls report depth.
+- `CHANNELS` controls which subsystem counters and events are collected.
+
+Syntax examples:
+
+```sql
+EXPLAIN TRACE SELECT * FROM t;
+EXPLAIN TRACE LEVEL SUMMARY SELECT * FROM t;
+EXPLAIN TRACE LEVEL VERBOSE CHANNELS PLAN,EXECUTOR,STORAGE,MVCC,INDEX SELECT * FROM t;
+EXPLAIN TRACE LEVEL DEBUG CHANNELS ALL EVENTS TO '/tmp/q.events.ndjson' SELECT * FROM t;
+```
+
+`CHANNELS DEFAULT` uses the compiled default channel set. `CHANNELS ALL`
+enables every channel. `EVENTS` is a shorthand for enabling the event channel;
+`EVENTS TO '<path>'` streams events as NDJSON and leaves a reference in
+`trace.events_ref`.
+
+Levels:
+
+| Level | Meaning |
+|---|---|
+| `SUMMARY` | Final summary and hotspots only. |
+| `NORMAL` | Plan, per-operator counters, and major storage/WAL/lock summary. Default. |
+| `VERBOSE` | Normal report plus MVCC and index detail channels. |
+| `DEBUG` | Verbose report plus chronological events. Events are embedded unless `EVENTS TO` writes NDJSON. |
+
+Channels:
+
+| Channel | Contents |
+|---|---|
+| `PIPELINE` | Planning, executor creation, execution timings. |
+| `PLAN` | Plan tree, estimates, optimizer notes. |
+| `EXECUTOR` | Per-executor calls, rows, timings. |
+| `STORAGE` | Buffer pool fetch/hit/miss/new/dirty/flush/evict counters. |
+| `MVCC` | Visible/invisible tuple counters and version-chain steps. |
+| `INDEX` | Index keys/RIDs, heap rechecks, index-only visibility checks. |
+| `WAL` | WAL record count and bytes. |
+| `LOCK` | Lock acquisition, wait count, wait time. |
+| `MEMORY` | Reserved for memory/work_mem/spill metrics. |
+| `EVENT` | Chronological event stream. Usually used with `LEVEL DEBUG`. |
+
+JSON reports contain:
+
+| Section | Contents |
+|---|---|
+| `trace` | Level, channels, event inclusion, optional NDJSON event path. |
+| `query` | Original SQL and the read-only flag. |
+| `pipeline` | Planner, executor construction, and executor runtime timings. |
+| `error` | Executor error text, or `null` on success. |
+| `summary` | Query-level rows, execution time, buffer activity, WAL records/bytes, and lock waits. |
+| `hotspots` | Top slow operators for quick diagnosis. |
+| `plan` | Plan tree with stable `node_id`, estimated rows/cost, optimizer notes, and actual rows. Omitted at `SUMMARY` level. |
+| `operators` | Per-executor `init`/`next` call counts, output rows, runtime, buffer, heap/MVCC, index, WAL, and lock counters. |
+| `events` | Optional bounded chronological event stream. Omitted unless debug/event output is requested. |
+
+Important fields for diagnosis:
+
+- `summary.execution_ms`, `pipeline.plan_us`, `pipeline.executor_create_us`,
+  and `pipeline.execute_us` separate planning, executor construction, and
+  runtime.
+- `plan[*].node_id` matches `operators[*].node_id` and hotspot entries, so a
+  slow executor can be mapped back to its plan node.
+- `operators[*].buffer_*` explains buffer-pool pressure per node.
+- `operators[*].heap_tuples_visible`, `heap_tuples_invisible`, and
+  `version_chain_steps` expose MVCC filtering cost.
+- `operators[*].index_keys_examined`, `index_rids_returned`, and
+  `index_heap_rechecks` expose index scan and index-only scan behavior.
+- `summary.lock_wait_us` and `operators[*].lock_wait_us` show lock-induced
+  latency.
+
+Write statements are intentionally skipped by `EXPLAIN TRACE`, matching the
+existing MiniDB `EXPLAIN ANALYZE` guard, so tracing cannot accidentally mutate
+user data.
+
+### 8.1 Trace Viewer
+
+The standalone HTML preview is intentionally dependency-free. Open
+`tools/trace_viewer.html` in a browser, then either paste a JSON report or load
+one from disk. If the report was produced with `EVENTS TO`, load the referenced
+NDJSON file in the optional events input.
+
+The viewer renders:
+
+- Overview cards for rows, execution time, buffer hit rate, WAL bytes, event
+  counts, and lock wait time.
+- A nested plan tree with estimated/actual rows and optimizer notes.
+- Hotspot bars for the slowest operators.
+- Per-operator counters for executor, storage, MVCC, index, WAL, and lock
+  behavior.
+- A sampled event timeline when embedded events or external NDJSON events are
+  available.
+
+Typical workflow:
+
+```bash
+./build/minidb --dir ./mydata <<'SQL'
+EXPLAIN TRACE LEVEL DEBUG CHANNELS ALL EVENTS TO '/tmp/q.events.ndjson'
+SELECT * FROM t WHERE id BETWEEN 1 AND 100;
+exit
+SQL
+```
+
+Then copy the JSON object printed by `EXPLAIN TRACE` into the viewer, or save
+that JSON object as `/tmp/q.trace.json` and load it from disk. Load
+`/tmp/q.events.ndjson` if the viewer asks for external events.
+
+### 8.2 Optimizer Notes
+
 The `optimizer_note` field on each plan node records the optimisation decision
 that produced it. Examples of notes:
 

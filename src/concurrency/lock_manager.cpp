@@ -12,7 +12,9 @@
  * AX            ❌    ❌    ❌    ❌
  */
 #include "concurrency/lock_manager.h"
+#include "common/trace.h"
 #include <cstring>
+#include <chrono>
 
 namespace minidb {
 
@@ -80,6 +82,8 @@ void LockManager::grant_pending(LockObject* obj) {
 }
 
 Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
+    auto trace_start = std::chrono::steady_clock::now();
+    bool trace_waited = false;
     latch_.lock();
 
     LockObject* obj = lock_table_.find(table_id);
@@ -97,6 +101,9 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
         if (obj->requests[i].txn_id == txn_id && obj->requests[i].granted) {
             if (static_cast<u8>(obj->requests[i].mode) >= static_cast<u8>(mode)) {
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    trace->record_lock("table", txn_id, table_id, false, 0, true);
+                }
                 return Status::ok_status();  // Already holding sufficient lock
             }
             // Lock upgrade: already hold a weaker mode, attempt in-place upgrade (avoids deadlock).
@@ -123,10 +130,16 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
                 }
                 obj->granted_mask = max_held;
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    trace->record_lock("table", txn_id, table_id, false, 0, true);
+                }
                 return Status::ok_status();
             }
             // Cannot upgrade: another txn holds an incompatible lock; surface conflict, not deadlock.
             latch_.unlock();
+            if (TraceContext* trace = current_trace()) {
+                trace->record_lock("table", txn_id, table_id, false, 0, false);
+            }
             return Status(ErrorCode::kLockConflict, "lock upgrade blocked by other holders");
         }
     }
@@ -156,6 +169,12 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
                 }
                 if (!found) txn_lock_list->push_back(table_id);
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    u64 wait_us = static_cast<u64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - trace_start).count());
+                    trace->record_lock("table", txn_id, table_id, trace_waited, trace_waited ? wait_us : 0, true);
+                }
                 return Status::ok_status();
             }
         }
@@ -164,6 +183,7 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
             break;
         }
 
+        trace_waited = true;
         if (!cond_.timed_wait(latch_, kLockWaitTimeoutMs)) {
             break;
         }
@@ -182,10 +202,18 @@ Status LockManager::lock_table(u64 txn_id, u32 table_id, LockMode mode) {
         }
     }
     latch_.unlock();
+    if (TraceContext* trace = current_trace()) {
+        u64 wait_us = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - trace_start).count());
+        trace->record_lock("table", txn_id, table_id, trace_waited, trace_waited ? wait_us : 0, false);
+    }
     return Status(ErrorCode::kLockConflict, "lock wait timeout or deadlock");
 }
 
 Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, LockMode mode) {
+    auto trace_start = std::chrono::steady_clock::now();
+    bool trace_waited = false;
     u64 key = record_lock_key(table_id, rid);
     latch_.lock();
     LockObject* obj = record_locks_.find(key);
@@ -201,9 +229,15 @@ Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, L
         if (obj->requests[i].txn_id == txn_id && obj->requests[i].granted) {
             if (static_cast<u8>(obj->requests[i].mode) >= static_cast<u8>(mode)) {
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    trace->record_lock("record", txn_id, table_id, false, 0, true);
+                }
                 return Status::ok_status();
             }
             latch_.unlock();
+            if (TraceContext* trace = current_trace()) {
+                trace->record_lock("record", txn_id, table_id, false, 0, false);
+            }
             return Status(ErrorCode::kLockConflict, "record lock upgrade blocked");
         }
     }
@@ -232,9 +266,17 @@ Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, L
                 }
                 if (!found) held->push_back(key);
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    u64 wait_us = static_cast<u64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - trace_start).count());
+                    trace->record_lock("record", txn_id, table_id, trace_waited,
+                                       trace_waited ? wait_us : 0, true);
+                }
                 return Status::ok_status();
             }
         }
+        trace_waited = true;
         if (!cond_.timed_wait(latch_, kLockWaitTimeoutMs)) {
             // W14: Timeout — check for deadlock and select victim
             obj = record_locks_.find(key);
@@ -262,6 +304,12 @@ Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, L
                     }
                 }
                 latch_.unlock();
+                if (TraceContext* trace = current_trace()) {
+                    u64 wait_us = static_cast<u64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - trace_start).count());
+                    trace->record_lock("record", txn_id, table_id, true, wait_us, false);
+                }
                 return Status(ErrorCode::kLockConflict, "deadlock detected, this transaction chosen as victim");
             }
 
@@ -305,6 +353,13 @@ Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, L
         }
     }
     latch_.unlock();
+    if (TraceContext* trace = current_trace()) {
+        u64 wait_us = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - trace_start).count());
+        trace->record_lock("record", txn_id, table_id, trace_waited,
+                           trace_waited ? wait_us : 0, false);
+    }
     return Status(ErrorCode::kLockConflict, "record lock wait timeout");
 }
 

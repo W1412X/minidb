@@ -3,6 +3,7 @@
  * @brief Schema implementation
  */
 #include "record/schema.h"
+#include "common/datetime.h"
 #include <cstring>
 #include <cstdlib>
 
@@ -26,6 +27,16 @@ Value Column::default_as_value() const {
         case TypeId::kBool:
             return Value(default_value == "true" || default_value == "1" ||
                          default_value == "TRUE");
+        case TypeId::kTimestamp: {
+            i64 micros = 0;
+            if (!datetime_parse_utc(default_value.c_str(), &micros)) return Value();
+            return Value::timestamp(micros);
+        }
+        case TypeId::kDatetime: {
+            i64 micros = 0;
+            if (!datetime_parse_utc(default_value.c_str(), &micros)) return Value();
+            return Value::datetime(micros);
+        }
         default:
             return Value(default_value);
     }
@@ -64,6 +75,13 @@ const char* Schema::validate_row(const Vector<Value>& row) const {
         if (col.type == TypeId::kVarchar && col.varchar_length > 0 &&
             !row[i].is_null() && row[i].get_string().size() > col.varchar_length) {
             return "value too long for declared VARCHAR(n) column";
+        }
+        if ((col.type == TypeId::kTimestamp || col.type == TypeId::kDatetime) &&
+            !row[i].is_null() &&
+            row[i].type_id() != col.type &&
+            !(col.type == TypeId::kTimestamp && row[i].type_id() == TypeId::kDatetime) &&
+            !(col.type == TypeId::kDatetime && row[i].type_id() == TypeId::kTimestamp)) {
+            return "column type mismatch";
         }
     }
     return nullptr;
