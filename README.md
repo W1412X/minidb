@@ -25,6 +25,7 @@ If you want to *read* how a database works instead of only using one, MiniDB is 
 | Indexes | Unified `IndexKey`, composite B+ tree, bulk load, covering scans with heap recheck |
 | Recovery | WAL records, group commit, checkpoints, lazy index rebuild after crash |
 | Distribution | `PageStore` abstraction, TCP PageServer, batch RPC, RO snapshot reads |
+| Observability | `EXPLAIN TRACE` JSON reports and a standalone HTML trace viewer |
 
 Suggested reading order: [Architecture](docs/ARCHITECTURE.md) → [Build guide](BUILD.md) → run `bash tests/run_all_tests.sh ./build/minidb` → dive into `src/` by subsystem READMEs.
 
@@ -43,7 +44,7 @@ Suggested reading order: [Architecture](docs/ARCHITECTURE.md) → [Build guide](
 | Constraints | `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, `DEFAULT`, column-level `CHECK` (persisted and enforced on `INSERT`/`UPDATE`) |
 | Transactions | `BEGIN`, `COMMIT`, `ROLLBACK`; `SET ISOLATION_LEVEL = SNAPSHOT` (default) or `SERIALIZABLE` (SSI-lite) |
 | Prepared statements | `PREPARE`, `EXECUTE`, `DEALLOCATE` |
-| Admin | `SHOW TABLES`, `DESCRIBE`, `EXPLAIN`, `EXPLAIN ANALYZE` for read-only statements, `ANALYZE`, `SHOW CONFIG`, `SHOW STATS` |
+| Admin | `SHOW TABLES`, `DESCRIBE`, `EXPLAIN`, `EXPLAIN ANALYZE`, `EXPLAIN TRACE`, `ANALYZE`, `SHOW CONFIG`, `SHOW STATS` |
 | Server cursor | `DECLARE CURSOR`, `FETCH`, `CLOSE` in TCP server mode |
 
 ### Data Types
@@ -122,7 +123,23 @@ Volcano iterators:
 - Rule-assisted cost-based scan/join selection; `ANALYZE` statistics (NDV, no full histograms yet).
 - Predicate/projection pushdown, hash-join build-side pick, index lookup join, range/equality/covering paths, index order for compatible `ORDER BY`.
 - Remote-storage cost model penalizing random remote index IO.
-- `EXPLAIN` (estimates + notes); `EXPLAIN ANALYZE` on read-only statements.
+- `EXPLAIN` (estimates + notes), `EXPLAIN ANALYZE`, and structured `EXPLAIN TRACE` on read-only statements.
+
+### Execution Tracing
+
+`EXPLAIN TRACE` runs a read-only statement and returns structured JSON (`format = "minidb.trace.v2"`) that is designed for both machine inspection and the HTML viewer in `tools/trace_viewer.html`.
+
+```sql
+EXPLAIN TRACE SELECT * FROM users WHERE id = 1;
+EXPLAIN TRACE LEVEL VERBOSE CHANNELS PLAN,EXECUTOR,STORAGE,INDEX SELECT COUNT(*) FROM users;
+EXPLAIN TRACE LEVEL DEBUG CHANNELS ALL EVENTS TO '/tmp/users.events.ndjson' SELECT * FROM users;
+```
+
+The trace report includes planning/executor timings, actual rows, plan-node IDs, optimizer notes, per-operator counters, buffer hit/miss/new/dirty/flush/evict counts, MVCC/index/WAL/lock metrics, hotspots, and optional chronological events. `DEBUG` can embed events directly or stream them to NDJSON via `EVENTS TO`.
+
+Open `tools/trace_viewer.html` in a browser, paste or load the JSON report, and optionally load the NDJSON event file referenced by `trace.events_ref`.
+
+![MiniDB Trace Viewer](imgs/analysis.png)
 
 ### Concurrency And Server
 
@@ -372,7 +389,7 @@ python3 tests/acid/durability/crash_recovery_harness.py ./build/minidb --seed 12
 | [WAL_RECOVERY_PROTOCOL.md](docs/WAL_RECOVERY_PROTOCOL.md) | WAL and crash recovery |
 | [CONCURRENCY_CONTROL.md](docs/CONCURRENCY_CONTROL.md) | Locks and deadlock detection |
 | [OPTIMIZER_COST_MODEL.md](docs/OPTIMIZER_COST_MODEL.md) | Planner/optimizer costs |
-| [QUERY_EXECUTION.md](docs/QUERY_EXECUTION.md) | Executor behavior |
+| [QUERY_EXECUTION.md](docs/QUERY_EXECUTION.md) | Executor behavior and `EXPLAIN TRACE` reports |
 | [DDL_SEMANTICS.md](docs/DDL_SEMANTICS.md) | Transactional DDL, `ALTER` |
 | [COMPUTE_STORAGE_SEPARATION.md](docs/COMPUTE_STORAGE_SEPARATION.md) | PageServer protocol |
 | [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | Explicit non-goals and gaps |

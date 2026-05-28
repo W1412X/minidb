@@ -7,6 +7,8 @@
 #include "sql/planner/planner.h"
 #include "sql/executor/executor_factory.h"
 #include "sql/executor/executor.h"
+#include "sql/executor/trace_report.h"
+#include "common/trace.h"
 #include "catalog/catalog.h"
 #include "common/sql_types.h"
 #include <cstdio>
@@ -628,9 +630,56 @@ void REPL::execute_sql(const String& sql) {
 
     // EXPLAIN
     if (stmt.type == StmtType::kExplain && stmt.explain_stmt) {
+        auto plan_start = std::chrono::steady_clock::now();
         Planner planner(&db_.catalog(), optimizer_config_from_db(db_));
         UniquePtr<PlanNode> plan = planner.plan(*stmt.explain_stmt);
+        auto plan_end = std::chrono::steady_clock::now();
         if (plan) {
+            if (stmt.explain_trace) {
+                if (is_write_statement_type(stmt.explain_stmt->type)) {
+                    printf("Trace skipped: write statements are not executed by EXPLAIN TRACE.\n\n");
+                    return;
+                }
+                assign_trace_node_ids(plan.get());
+                TraceOptions options = trace_options_from_statement(
+                    stmt.explain_trace_level, stmt.explain_trace_channels,
+                    stmt.explain_trace_events_path);
+                TraceContext trace(options);
+                TraceTimings timings;
+                timings.plan_us = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(plan_end - plan_start).count());
+                g_trace_context = &trace;
+                ExecutorFactory factory(db_);
+                auto create_start = std::chrono::steady_clock::now();
+                UniquePtr<Executor> exec = factory.create(plan.get());
+                auto create_end = std::chrono::steady_clock::now();
+                timings.executor_create_us = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(create_end - create_start).count());
+                const char* err = nullptr;
+                if (!exec) {
+                    err = "failed to create executor";
+                } else {
+                    clear_executor_error();
+                    set_executor_deadline_ms(g_repl_statement_timeout_ms != 0
+                        ? g_repl_statement_timeout_ms
+                        : db_.config().statement_timeout_ms);
+                    auto exec_start = std::chrono::steady_clock::now();
+                    exec->init();
+                    while (true) {
+                        ExecResult row = exec->next();
+                        if (!row.ok()) break;
+                        timings.actual_rows++;
+                    }
+                    auto exec_end = std::chrono::steady_clock::now();
+                    set_executor_deadline_ms(0);
+                    timings.execute_us = static_cast<u64>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(exec_end - exec_start).count());
+                    err = executor_error();
+                }
+                g_trace_context = nullptr;
+                printf("%s\n\n", build_trace_json(sql, plan.get(), trace, timings, err).c_str());
+                return;
+            }
             printf("Plan: cost=%.2f..%.2f rows=%.0f\n",
                    plan->startup_cost, plan->total_cost, plan->plan_rows);
             print_plan(plan.get());

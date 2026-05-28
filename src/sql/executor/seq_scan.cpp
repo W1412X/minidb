@@ -7,6 +7,7 @@
 #include "sql/executor/project.h"
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
+#include "common/trace.h"
 #include "record/tuple.h"
 #include "transaction/transaction.h"
 #include <cstring>
@@ -134,7 +135,11 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
             page->data() + target_lp->offset, storage_schema_, output_schema_,
             projected_columns_, target_lp->length);
         if (!txn_mgr_ || !txn_mgr_->current()) {
-            if (tuple.xmax() != kInvalidTxnId) return follow_latest_committed(page, target);
+            if (tuple.xmax() != kInvalidTxnId) {
+                if (TraceContext* trace = current_trace()) trace->record_heap_tuple(false);
+                return follow_latest_committed(page, target);
+            }
+            if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
             return ExecResult::ok(static_cast<Tuple&&>(tuple));
         }
         if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
@@ -142,8 +147,10 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
                 txn_mgr_->current()->record_read(heap_->table_id(),
                                                  RecordId(current_page_id_, target));
             }
+            if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
             return ExecResult::ok(static_cast<Tuple&&>(tuple));
         }
+        if (TraceContext* trace = current_trace()) trace->record_heap_tuple(false);
         return follow_version_chain(page, target);
     }
     if (!lp->is_valid()) return ExecResult::empty();
@@ -157,9 +164,11 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
     // No transaction manager → use autocommit visibility, hide deleted/expired versions.
     if (!txn_mgr_ || !txn_mgr_->current()) {
         if (tuple.xmax() != kInvalidTxnId) {
+            if (TraceContext* trace = current_trace()) trace->record_heap_tuple(false);
             return follow_latest_committed(page, slot);
         }
         last_rid_ = RecordId(current_page_id_, slot);
+        if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
     }
 
@@ -171,10 +180,12 @@ ExecResult SeqScanExecutor::try_tuple(Page* page, u16 slot) {
         if (track_reads_) {
             txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
         }
+        if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
         return ExecResult::ok(static_cast<Tuple&&>(tuple));
     }
 
     // Invisible → trace version chain
+    if (TraceContext* trace = current_trace()) trace->record_heap_tuple(false);
     return follow_version_chain(page, slot);
 }
 
@@ -189,6 +200,7 @@ ExecResult SeqScanExecutor::follow_version_chain(Page* page, u16 slot) {
     static constexpr u32 kMaxChainDepth = 64;  // Prevent infinite loop
 
     while (tuple.has_next_version() && depth < kMaxChainDepth) {
+        if (TraceContext* trace = current_trace()) trace->record_version_chain_step();
         PageId ver_page = tuple.next_version_page();
         SlotIdx ver_slot = tuple.next_version_slot();
 
@@ -206,6 +218,7 @@ ExecResult SeqScanExecutor::follow_version_chain(Page* page, u16 slot) {
             prev_page->data() + prev_lp->offset, storage_schema_, prev_lp->length);
 
         if (txn_mgr_->is_visible(tuple.xmin(), tuple.xmax(), *txn_mgr_->current())) {
+            if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
             mark_skip_rid(ver_page, ver_slot);
             last_rid_ = RecordId(ver_page, ver_slot);
             txn_mgr_->current()->record_read(heap_->table_id(), last_rid_);
@@ -231,6 +244,7 @@ ExecResult SeqScanExecutor::follow_latest_committed(Page* page, u16 slot) {
     u32 depth = 0;
     static constexpr u32 kMaxChainDepth = 64;
     while (tuple.has_next_version() && depth < kMaxChainDepth) {
+        if (TraceContext* trace = current_trace()) trace->record_version_chain_step();
         PageId ver_page = tuple.next_version_page();
         SlotIdx ver_slot = tuple.next_version_slot();
         if (ver_page == kNullPageId || ver_slot == kNullSlot ||
@@ -250,6 +264,7 @@ ExecResult SeqScanExecutor::follow_latest_committed(Page* page, u16 slot) {
         tuple = Tuple::deserialize_from_page(
             version_page->data() + version_lp->offset, storage_schema_, version_lp->length);
         if (tuple.xmax() == kInvalidTxnId) {
+            if (TraceContext* trace = current_trace()) trace->record_heap_tuple(true);
             mark_skip_rid(ver_page, ver_slot);
             last_rid_ = RecordId(ver_page, ver_slot);
             Tuple projected = Tuple::deserialize_projected_from_page(
@@ -341,7 +356,10 @@ ExecResult SeqScanExecutor::next() {
                         return ExecResult::empty();
                     }
                 }
-                if (!pass) continue;
+                if (!pass) {
+                    if (TraceContext* trace = current_trace()) trace->record_heap_filter();
+                    continue;
+                }
             }
             // Page stays pinned — caller will come back for more tuples.
             return tr;

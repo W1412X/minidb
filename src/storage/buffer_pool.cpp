@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "recovery/wal.h"
 #include "container/utility.h"
+#include "common/trace.h"
 
 namespace minidb {
 
@@ -65,6 +66,9 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                 } else {
                     f.pin_count.fetch_add(1u, std::memory_order_acquire);
                     record_hit();
+                    if (TraceContext* trace = current_trace()) {
+                        trace->record_buffer_fetch(page_id, true, sequential_hint);
+                    }
                     // LRU update under read lock is not safe — defer to unpin or accept approximation
                     return &f.page;
                 }
@@ -90,6 +94,9 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                     f.pin_count.fetch_add(1u, std::memory_order_acquire);
                     move_to_lru_head(partition, *frame_idx);
                     record_hit();
+                    if (TraceContext* trace = current_trace()) {
+                        trace->record_buffer_fetch(page_id, true, sequential_hint);
+                    }
                     return &f.page;
                 }
             } else {
@@ -108,6 +115,12 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
                     if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
                     victim_frame.page_id = page_id;
                     insert_page_mapping(partition, page_id, victim);
+                    if (evict_page_id != kNullPageId) {
+                        if (TraceContext* trace = current_trace()) {
+                            trace->record_buffer_eviction(evict_page_id, page_id,
+                                                          victim_frame.is_dirty.load(std::memory_order_relaxed));
+                        }
+                    }
                 }
             }
         }
@@ -167,6 +180,9 @@ Result<Page*> BufferPool::fetch_page(PageId page_id, bool is_sequential) {
             }
         }
         notify_buffer_available();
+        if (TraceContext* trace = current_trace()) {
+            trace->record_buffer_fetch(page_id, false, sequential_hint);
+        }
         return &victim_frame.page;
     }
 }
@@ -214,6 +230,12 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
                     if (evict_page_id != kNullPageId) erase_page_mapping(partition, evict_page_id);
                     victim_frame.page_id = page_id;
                     insert_page_mapping(partition, page_id, victim);
+                    if (evict_page_id != kNullPageId) {
+                        if (TraceContext* trace = current_trace()) {
+                            trace->record_buffer_eviction(evict_page_id, page_id,
+                                                          victim_frame.is_dirty.load(std::memory_order_relaxed));
+                        }
+                    }
                 }
             }
         }
@@ -258,6 +280,9 @@ Result<Page*> BufferPool::new_page(PageId page_id, PageType type) {
             partition.lru_list.move_node_to_front(victim_frame.lru_node);
         }
         notify_buffer_available();
+        if (TraceContext* trace = current_trace()) {
+            trace->record_buffer_new_page(page_id);
+        }
         return &frames_[victim].page;
     }
 }
@@ -300,6 +325,9 @@ void BufferPool::mark_dirty(PageId page_id) {
     if (!frame_idx) return;
 
     frames_[*frame_idx].is_dirty.store(true, std::memory_order_release);
+    if (TraceContext* trace = current_trace()) {
+        trace->record_buffer_dirty(page_id);
+    }
 }
 
 void BufferPool::set_page_lsn(PageId page_id, u64 lsn) {
@@ -319,6 +347,9 @@ void BufferPool::set_page_lsn(PageId page_id, u64 lsn) {
         frames_[*frame_idx].page.header()->lsn = lsn;
     }
     frames_[*frame_idx].is_dirty.store(true, std::memory_order_release);
+    if (TraceContext* trace = current_trace()) {
+        trace->record_buffer_dirty(page_id);
+    }
 }
 
 // ============================================================
@@ -337,7 +368,12 @@ void BufferPool::flush_page(PageId page_id) {
         if (!flush_frame_wal_first(f)) return;
         Result<void> write_result = page_store_->write_page(f.page_id, f.page.data(),
                                                             f.page.header()->lsn);
-        if (write_result.ok()) f.is_dirty = false;
+        if (write_result.ok()) {
+            f.is_dirty = false;
+            if (TraceContext* trace = current_trace()) {
+                trace->record_buffer_flush(page_id);
+            }
+        }
     }
 }
 
@@ -359,7 +395,12 @@ void BufferPool::flush_all() {
                 if (batch.size() >= flush_batch_size_) {
                     Vector<PageIOResult> results = page_store_->write_pages(batch);
                     for (u32 r = 0; r < results.size() && r < batch_frames.size(); r++) {
-                        if (results[r].ok()) frames_[batch_frames[r]].is_dirty = false;
+                        if (results[r].ok()) {
+                            frames_[batch_frames[r]].is_dirty = false;
+                            if (TraceContext* trace = current_trace()) {
+                                trace->record_buffer_flush(frames_[batch_frames[r]].page_id);
+                            }
+                        }
                     }
                     batch.clear();
                     batch_frames.clear();
@@ -369,7 +410,12 @@ void BufferPool::flush_all() {
         if (!batch.empty()) {
             Vector<PageIOResult> results = page_store_->write_pages(batch);
             for (u32 r = 0; r < results.size() && r < batch_frames.size(); r++) {
-                if (results[r].ok()) frames_[batch_frames[r]].is_dirty = false;
+                if (results[r].ok()) {
+                    frames_[batch_frames[r]].is_dirty = false;
+                    if (TraceContext* trace = current_trace()) {
+                        trace->record_buffer_flush(frames_[batch_frames[r]].page_id);
+                    }
+                }
             }
             batch.clear();
             batch_frames.clear();

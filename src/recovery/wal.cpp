@@ -5,6 +5,7 @@
 #include "catalog/catalog.h"
 #include "container/vector.h"
 #include "container/hash_map.h"
+#include "common/trace.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -15,6 +16,25 @@
 #include <vector>
 
 namespace minidb {
+
+static const char* wal_type_name(WalType type) {
+    switch (type) {
+        case WalType::kTxnBegin: return "TxnBegin";
+        case WalType::kTxnCommit: return "TxnCommit";
+        case WalType::kTxnAbort: return "TxnAbort";
+        case WalType::kInsert: return "Insert";
+        case WalType::kDelete: return "Delete";
+        case WalType::kUpdate: return "Update";
+        case WalType::kIndexInsert: return "IndexInsert";
+        case WalType::kIndexDelete: return "IndexDelete";
+        case WalType::kPageAlloc: return "PageAlloc";
+        case WalType::kCheckpoint: return "Checkpoint";
+        case WalType::kDdl: return "Ddl";
+        case WalType::kSavepointUndoInsert: return "SavepointUndoInsert";
+        case WalType::kSavepointUndoDelete: return "SavepointUndoDelete";
+    }
+    return "Unknown";
+}
 
 // Standard reflected CRC32 (IEEE 802.3 polynomial 0xEDB88320). The lookup
 // table is initialised once on first use. All WAL writes happen under the
@@ -129,6 +149,10 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     bytes_since_checkpoint_ += sizeof(hdr) + data_len;
     next_lsn_++;
     last_written_lsn_ = hdr.lsn;
+    if (TraceContext* trace = current_trace()) {
+        trace->record_wal(wal_type_name(type), hdr.lsn, txn_id,
+                          static_cast<u32>(sizeof(hdr) + data_len));
+    }
 
     struct stat st;
     if (fstat(fd_, &st) == 0 &&
@@ -369,6 +393,10 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     next_lsn_++;
     last_written_lsn_ = hdr.lsn;
     u64 lsn = hdr.lsn;
+    if (TraceContext* trace = current_trace()) {
+        trace->record_wal(wal_type_name(WalType::kCheckpoint), hdr.lsn, 0,
+                          static_cast<u32>(sizeof(hdr)));
+    }
 
     // Phase 2: fsync the WAL up to and including the kCheckpoint record.
     if (!flush_buffer()) return 0;

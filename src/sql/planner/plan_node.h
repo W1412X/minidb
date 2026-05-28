@@ -31,6 +31,7 @@ enum class AggFunc { kCount, kSum, kAvg, kMin, kMax };
 
 struct PlanNode {
     PlanNodeType type;
+    u32 trace_id = 0;
     Schema output_schema;
     double startup_cost = 0.0;
     double total_cost = 0.0;

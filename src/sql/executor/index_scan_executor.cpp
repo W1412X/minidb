@@ -2,6 +2,7 @@
 #include "sql/executor/expression_evaluator.h"
 #include "sql/parser/ast.h"
 #include "transaction/transaction.h"
+#include "common/trace.h"
 #include <cstring>
 
 namespace minidb {
@@ -82,6 +83,7 @@ static VersionResult follow_version_chain(BufferPool* pool, TransactionManager* 
 
     // Traverse version chain old → new
     while (result.tuple.has_next_version() && depth < kMaxChainDepth) {
+        if (TraceContext* trace = current_trace()) trace->record_version_chain_step();
         PageId ver_page = result.tuple.next_version_page();
         SlotIdx ver_slot = result.tuple.next_version_slot();
 
@@ -191,6 +193,9 @@ ExecResult IndexScanExecutor::next() {
             batch_count_ = index_->range_scan_batch(
                 search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
                 skip, batch_keys_, batch_rids_, kBatchSize);
+            if (TraceContext* trace = current_trace()) {
+                trace->record_index_batch(batch_count_);
+            }
             batch_pos_ = 0;
             if (batch_count_ == 0) {
                 batch_exhausted_ = true;
@@ -238,6 +243,7 @@ ExecResult IndexScanExecutor::next() {
             VersionResult vr = follow_version_chain(pool_, txn_mgr_, page, visible_slot,
                                                      output_schema_);
             if (vr.tuple.column_count() > 0) {
+                if (TraceContext* trace = current_trace()) trace->record_index_recheck(true);
                 // Apply pushed-down residual predicate inline. Rejected rows
                 // never cross the operator boundary, saving a result move.
                 if (pushed_predicate_) {
@@ -256,7 +262,10 @@ ExecResult IndexScanExecutor::next() {
                             return ExecResult::empty();
                         }
                     }
-                    if (!pass) continue;
+                    if (!pass) {
+                        if (TraceContext* trace = current_trace()) trace->record_heap_filter();
+                        continue;
+                    }
                 }
                 last_rid_ = vr.rid;
                 if (track_reads) {
@@ -264,6 +273,7 @@ ExecResult IndexScanExecutor::next() {
                 }
                 return ExecResult::ok(static_cast<Tuple&&>(vr.tuple));
             }
+            if (TraceContext* trace = current_trace()) trace->record_index_recheck(false);
             // Not visible — keep the page pinned for the next iteration; the
             // next index entry might still be on this page.
         }
@@ -406,6 +416,9 @@ ExecResult IndexOnlyScanExecutor::next() {
             batch_count_ = index_->range_scan_batch(
                 search_key_, high, &scan_leaf_id_, &scan_slot_idx_,
                 skip, batch_keys_, batch_rids_, kBatchSize);
+            if (TraceContext* trace = current_trace()) {
+                trace->record_index_batch(batch_count_);
+            }
             batch_pos_ = 0;
             if (batch_count_ == 0) {
                 batch_exhausted_ = true;
@@ -441,7 +454,12 @@ ExecResult IndexOnlyScanExecutor::next() {
                     visible = visible_header(pool_, txn_mgr_, page, visible_slot);
                 }
                 pool_->unpin_page(rid.page_id);
+                if (TraceContext* trace = current_trace()) {
+                    trace->record_index_recheck(visible);
+                }
                 if (!visible) continue;
+            } else if (TraceContext* trace = current_trace()) {
+                trace->record_index_recheck(true);
             }
         }
         Vector<Value> values;
