@@ -110,6 +110,195 @@ bool BPlusTree::write_key_to_slot(byte* slot, const IndexKey& key) {
     return key.encode(slot, kIndexKeyDataSize);
 }
 
+static int signum(int value) {
+    return (value > 0) ? 1 : (value < 0) ? -1 : 0;
+}
+
+static int compare_bool(bool lhs, bool rhs) {
+    return lhs == rhs ? 0 : (lhs ? 1 : -1);
+}
+
+static int compare_i32(i32 lhs, i32 rhs) {
+    return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
+}
+
+static int compare_i64(i64 lhs, i64 rhs) {
+    return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
+}
+
+static int compare_float(float lhs, float rhs) {
+    bool lhs_nan = lhs != lhs;
+    bool rhs_nan = rhs != rhs;
+    if (lhs_nan || rhs_nan) return lhs_nan ? (rhs_nan ? 0 : 1) : -1;
+    return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
+}
+
+static int compare_double(double lhs, double rhs) {
+    bool lhs_nan = lhs != lhs;
+    bool rhs_nan = rhs != rhs;
+    if (lhs_nan || rhs_nan) return lhs_nan ? (rhs_nan ? 0 : 1) : -1;
+    return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
+}
+
+bool BPlusTree::compare_slot_key(const byte* slot, u32 slot_size,
+                                 const IndexKey& key, int* cmp) {
+    if (!slot || !cmp || slot_size < 6) return false;
+    const byte* p = slot;
+    u16 magic = 0;
+    u16 slot_count = 0;
+    u16 payload = 0;
+    std::memcpy(&magic, p, 2); p += 2;
+    std::memcpy(&slot_count, p, 2); p += 2;
+    std::memcpy(&payload, p, 2); p += 2;
+    if (magic != 0x494b || static_cast<u32>(payload) + 6 > slot_size) return false;
+    const byte* end = slot + 6 + payload;
+
+    u32 n = slot_count < key.column_count() ? slot_count : key.column_count();
+    for (u32 i = 0; i < n; i++) {
+        if (p >= end) return false;
+        TypeId slot_type = static_cast<TypeId>(*p++);
+        const Value& rhs = key.value(i);
+        TypeId rhs_type = rhs.type_id();
+        if (slot_type != rhs_type) {
+            *cmp = signum(static_cast<int>(slot_type) - static_cast<int>(rhs_type));
+            return true;
+        }
+        switch (slot_type) {
+            case TypeId::kNull:
+                break;
+            case TypeId::kBool: {
+                if (p + 1 > end) return false;
+                bool lhs = *p++ == 1;
+                int c = compare_bool(lhs, rhs.get_bool());
+                if (c != 0) { *cmp = c; return true; }
+                break;
+            }
+            case TypeId::kInt32: {
+                if (p + 4 > end) return false;
+                i32 lhs = 0;
+                std::memcpy(&lhs, p, 4);
+                p += 4;
+                int c = compare_i32(lhs, rhs.get_int32());
+                if (c != 0) { *cmp = c; return true; }
+                break;
+            }
+            case TypeId::kInt64:
+            case TypeId::kTimestamp:
+            case TypeId::kDatetime: {
+                if (p + 8 > end) return false;
+                i64 lhs = 0;
+                std::memcpy(&lhs, p, 8);
+                p += 8;
+                i64 rhs_value = slot_type == TypeId::kInt64
+                    ? rhs.get_int64()
+                    : rhs.get_datetime_micros();
+                int c = compare_i64(lhs, rhs_value);
+                if (c != 0) { *cmp = c; return true; }
+                break;
+            }
+            case TypeId::kFloat: {
+                if (p + 4 > end) return false;
+                float lhs = 0;
+                std::memcpy(&lhs, p, 4);
+                p += 4;
+                int c = compare_float(lhs, rhs.get_float());
+                if (c != 0) { *cmp = c; return true; }
+                break;
+            }
+            case TypeId::kDouble: {
+                if (p + 8 > end) return false;
+                double lhs = 0;
+                std::memcpy(&lhs, p, 8);
+                p += 8;
+                int c = compare_double(lhs, rhs.get_double());
+                if (c != 0) { *cmp = c; return true; }
+                break;
+            }
+            case TypeId::kVarchar:
+            default:
+                return false;
+        }
+    }
+    if (slot_count == key.column_count()) *cmp = 0;
+    else *cmp = slot_count < key.column_count() ? -1 : 1;
+    return true;
+}
+
+bool BPlusTree::slot_starts_with(const byte* slot, u32 slot_size,
+                                 const IndexKey& prefix, bool* matches) {
+    if (!slot || !matches || slot_size < 6) return false;
+    *matches = false;
+    const byte* p = slot;
+    u16 magic = 0;
+    u16 slot_count = 0;
+    u16 payload = 0;
+    std::memcpy(&magic, p, 2); p += 2;
+    std::memcpy(&slot_count, p, 2); p += 2;
+    std::memcpy(&payload, p, 2); p += 2;
+    if (magic != 0x494b || static_cast<u32>(payload) + 6 > slot_size) return false;
+    if (prefix.column_count() > slot_count) return true;
+    const byte* end = slot + 6 + payload;
+
+    for (u32 i = 0; i < prefix.column_count(); i++) {
+        if (p >= end) return false;
+        TypeId slot_type = static_cast<TypeId>(*p++);
+        const Value& rhs = prefix.value(i);
+        if (slot_type != rhs.type_id()) return true;
+        int c = 0;
+        switch (slot_type) {
+            case TypeId::kNull:
+                break;
+            case TypeId::kBool:
+                if (p + 1 > end) return false;
+                c = compare_bool(*p++ == 1, rhs.get_bool());
+                break;
+            case TypeId::kInt32: {
+                if (p + 4 > end) return false;
+                i32 lhs = 0;
+                std::memcpy(&lhs, p, 4);
+                p += 4;
+                c = compare_i32(lhs, rhs.get_int32());
+                break;
+            }
+            case TypeId::kInt64:
+            case TypeId::kTimestamp:
+            case TypeId::kDatetime: {
+                if (p + 8 > end) return false;
+                i64 lhs = 0;
+                std::memcpy(&lhs, p, 8);
+                p += 8;
+                i64 rhs_value = slot_type == TypeId::kInt64
+                    ? rhs.get_int64()
+                    : rhs.get_datetime_micros();
+                c = compare_i64(lhs, rhs_value);
+                break;
+            }
+            case TypeId::kFloat: {
+                if (p + 4 > end) return false;
+                float lhs = 0;
+                std::memcpy(&lhs, p, 4);
+                p += 4;
+                c = compare_float(lhs, rhs.get_float());
+                break;
+            }
+            case TypeId::kDouble: {
+                if (p + 8 > end) return false;
+                double lhs = 0;
+                std::memcpy(&lhs, p, 8);
+                p += 8;
+                c = compare_double(lhs, rhs.get_double());
+                break;
+            }
+            case TypeId::kVarchar:
+            default:
+                return false;
+        }
+        if (c != 0) return true;
+    }
+    *matches = true;
+    return true;
+}
+
 // ============================================================
 // insert
 // ============================================================
@@ -147,15 +336,23 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
                 if (n == 0) {
                     usable = false;
                 } else {
-                    IndexKey last_key = leaf_key(page, n - 1);
-                    if (key < last_key) usable = false;
+                    int cmp = 0;
+                    const byte* slot = leaf_key_slot(page, n - 1);
+                    if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                        cmp = leaf_key(page, n - 1).compare(key);
+                    }
+                    if (cmp > 0) usable = false;
                 }
                 PageId next_leaf = leaf_next(page);
                 if (next_leaf != kNullPageId && n > 0) {
                     auto next_res = pool_->fetch_page(next_leaf);
                     if (next_res.ok()) {
-                        IndexKey first_next = leaf_key(next_res.value(), 0);
-                        if (key >= first_next) usable = false;
+                        int cmp = 0;
+                        const byte* slot = leaf_key_slot(next_res.value(), 0);
+                        if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                            cmp = leaf_key(next_res.value(), 0).compare(key);
+                        }
+                        if (cmp <= 0) usable = false;
                         pool_->unpin_page(next_leaf);
                     }
                 }
@@ -348,8 +545,12 @@ bool BPlusTree::remove(const IndexKey& key, const RecordId& rid) {
         u16 lo = 0, hi = n;
         while (lo < hi) {
             u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
-            IndexKey mid_key = internal_key(page, mid);
-            if (key <= mid_key) {
+            int cmp = 0;
+            const byte* slot = internal_key_slot(page, mid);
+            if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                cmp = internal_key(page, mid).compare(key);
+            }
+            if (cmp >= 0) {
                 hi = mid;
             } else {
                 lo = static_cast<u16>(mid + 1);
@@ -370,12 +571,16 @@ bool BPlusTree::remove(const IndexKey& key, const RecordId& rid) {
         bool stop_after_this = false;
 
         for (u16 i = 0; i < n; i++) {
-            IndexKey current_key = leaf_key(leaf, i);
-            if (current_key > key) {
+            int cmp = 0;
+            const byte* slot = leaf_key_slot(leaf, i);
+            if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                cmp = leaf_key(leaf, i).compare(key);
+            }
+            if (cmp > 0) {
                 stop_after_this = true;
                 break;
             }
-            if (current_key == key) {
+            if (cmp == 0) {
                 RecordId current_rid = leaf_rid(leaf, i);
                 bool rid_matches = (rid.page_id == kNullPageId) || (current_rid == rid);
                 if (rid_matches) {
@@ -988,16 +1193,23 @@ Vector<RecordId> BPlusTree::search(const IndexKey& key) {
         Page* page = result.value();
         u16 n = leaf_num_keys(page);
         for (u16 i = 0; i < n; i++) {
-            IndexKey k = leaf_key(page, i);
-            if (key.column_count() < k.column_count()) {
+            const byte* slot = leaf_key_slot(page, i);
+            u16 slot_count = 0;
+            std::memcpy(&slot_count, slot + 2, 2);
+            if (key.column_count() < slot_count) {
+                IndexKey k = leaf_key(page, i);
                 if (k.starts_with(key)) results.push_back(leaf_rid(page, i));
                 else if (k > key) {
                     pool_->unpin_page(leaf_id);
                     return results;
                 }
             } else {
-                if (k == key) results.push_back(leaf_rid(page, i));
-                else if (k > key) {
+                int cmp = 0;
+                if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                    cmp = leaf_key(page, i).compare(key);
+                }
+                if (cmp == 0) results.push_back(leaf_rid(page, i));
+                else if (cmp > 0) {
                     pool_->unpin_page(leaf_id);
                     return results;
                 }
@@ -1029,11 +1241,19 @@ Vector<RecordId> BPlusTree::range_search(const IndexKey& low, const IndexKey& hi
         Page* page = result.value();
         u16 n = leaf_num_keys(page);
         for (u16 i = 0; i < n; i++) {
-            IndexKey k = leaf_key(page, i);
-            if (k >= low && k <= high) {
+            const byte* slot = leaf_key_slot(page, i);
+            int cmp_low = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                cmp_low = leaf_key(page, i).compare(low);
+            }
+            int cmp_high = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, high, &cmp_high)) {
+                cmp_high = leaf_key(page, i).compare(high);
+            }
+            if (cmp_low >= 0 && cmp_high <= 0) {
                 results.push_back(leaf_rid(page, i));
             }
-            if (k > high) {
+            if (cmp_high > 0) {
                 pool_->unpin_page(leaf_id);
                 return results;
             }
@@ -1069,23 +1289,48 @@ u64 BPlusTree::range_count(const IndexKey& low, const IndexKey& high,
         Page* page = result.value();
         u16 n = leaf_num_keys(page);
         for (u16 i = 0; i < n; i++) {
-            IndexKey k = leaf_key(page, i);
-            if (prefix_mode && low.column_count() < k.column_count()) {
-                if (k.starts_with(low)) {
+            const byte* slot = leaf_key_slot(page, i);
+            u16 slot_count = 0;
+            std::memcpy(&slot_count, slot + 2, 2);
+            if (prefix_mode && low.column_count() < slot_count) {
+                bool prefix_matches = false;
+                bool have_prefix = slot_starts_with(slot, kIndexKeyDataSize,
+                                                     low, &prefix_matches);
+                if (!have_prefix) {
+                    IndexKey k = leaf_key(page, i);
+                    prefix_matches = k.starts_with(low);
+                    if (!prefix_matches && k > low) {
+                        pool_->unpin_page(leaf_id);
+                        return count;
+                    }
+                }
+                if (prefix_matches) {
                     count++;
                     continue;
                 }
-                if (k > low) {
+                int cmp_low = 0;
+                if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                    cmp_low = leaf_key(page, i).compare(low);
+                }
+                if (cmp_low > 0) {
                     pool_->unpin_page(leaf_id);
                     return count;
                 }
                 continue;
             }
-            if (k > high) {
+            int cmp_high = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, high, &cmp_high)) {
+                cmp_high = leaf_key(page, i).compare(high);
+            }
+            if (cmp_high > 0) {
                 pool_->unpin_page(leaf_id);
                 return count;
             }
-            if (k >= low) count++;
+            int cmp_low = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                cmp_low = leaf_key(page, i).compare(low);
+            }
+            if (cmp_low >= 0) count++;
         }
 
         PageId next = leaf_next(page);
@@ -1133,12 +1378,30 @@ u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
 
         while (*slot_idx < n && written < capacity) {
             u16 idx = *slot_idx;
-            IndexKey k = leaf_key(page, idx);
-            if (prefix_mode && low.column_count() < k.column_count()) {
+            const byte* slot = leaf_key_slot(page, idx);
+            u16 slot_count = 0;
+            std::memcpy(&slot_count, slot + 2, 2);
+            if (prefix_mode && low.column_count() < slot_count) {
                 // Composite-key prefix search: keep walking until either the
                 // prefix no longer matches or the key has overshot.
-                if (!k.starts_with(low)) {
-                    if (k > low) {
+                bool prefix_matches = false;
+                bool have_prefix = slot_starts_with(slot, kIndexKeyDataSize,
+                                                     low, &prefix_matches);
+                if (!have_prefix) {
+                    IndexKey k = leaf_key(page, idx);
+                    prefix_matches = k.starts_with(low);
+                    if (!prefix_matches && k > low) {
+                        pool_->unpin_page(*leaf_id);
+                        *leaf_id = kNullPageId;
+                        return written;
+                    }
+                }
+                if (!prefix_matches) {
+                    int cmp_low = 0;
+                    if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                        cmp_low = leaf_key(page, idx).compare(low);
+                    }
+                    if (cmp_low > 0) {
                         pool_->unpin_page(*leaf_id);
                         *leaf_id = kNullPageId;
                         return written;
@@ -1147,12 +1410,20 @@ u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
                     continue;
                 }
             } else {
-                if (k > high) {
+                int cmp_high = 0;
+                if (!compare_slot_key(slot, kIndexKeyDataSize, high, &cmp_high)) {
+                    cmp_high = leaf_key(page, idx).compare(high);
+                }
+                if (cmp_high > 0) {
                     pool_->unpin_page(*leaf_id);
                     *leaf_id = kNullPageId;
                     return written;
                 }
-                if (k < low) {
+                int cmp_low = 0;
+                if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                    cmp_low = leaf_key(page, idx).compare(low);
+                }
+                if (cmp_low < 0) {
                     *slot_idx = static_cast<u16>(*slot_idx + 1);
                     continue;
                 }
@@ -1162,7 +1433,7 @@ u32 BPlusTree::range_scan_batch(const IndexKey& low, const IndexKey& high,
                 *slot_idx = static_cast<u16>(*slot_idx + 1);
                 continue;
             }
-            out_keys[written] = static_cast<IndexKey&&>(k);
+            out_keys[written] = leaf_key(page, idx);
             out_rids[written] = candidate;
             written++;
             *slot_idx = static_cast<u16>(*slot_idx + 1);
@@ -1210,11 +1481,29 @@ bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
 
         while (*slot_idx < n) {
             u16 idx = *slot_idx;
-            IndexKey k = leaf_key(page, idx);
-            bool prefix_mode = (low == high && low.column_count() < k.column_count());
+            const byte* slot = leaf_key_slot(page, idx);
+            u16 slot_count = 0;
+            std::memcpy(&slot_count, slot + 2, 2);
+            bool prefix_mode = (low == high && low.column_count() < slot_count);
             if (prefix_mode) {
-                if (!k.starts_with(low)) {
-                    if (k > low) {
+                bool prefix_matches = false;
+                bool have_prefix = slot_starts_with(slot, kIndexKeyDataSize,
+                                                     low, &prefix_matches);
+                if (!have_prefix) {
+                    IndexKey k = leaf_key(page, idx);
+                    prefix_matches = k.starts_with(low);
+                    if (!prefix_matches && k > low) {
+                        pool_->unpin_page(*leaf_id);
+                        *leaf_id = kNullPageId;
+                        return false;
+                    }
+                }
+                if (!prefix_matches) {
+                    int cmp_low = 0;
+                    if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                        cmp_low = leaf_key(page, idx).compare(low);
+                    }
+                    if (cmp_low > 0) {
                         pool_->unpin_page(*leaf_id);
                         *leaf_id = kNullPageId;
                         return false;
@@ -1227,23 +1516,31 @@ bool BPlusTree::scan_next_entry(const IndexKey& low, const IndexKey& high,
                     *slot_idx = static_cast<u16>(*slot_idx + 1);
                     continue;
                 }
-                if (key) *key = k;
+                if (key) *key = leaf_key(page, idx);
                 *rid = candidate;
                 pool_->unpin_page(*leaf_id);
                 return true;
             }
-            if (k > high) {
+            int cmp_high = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, high, &cmp_high)) {
+                cmp_high = leaf_key(page, idx).compare(high);
+            }
+            if (cmp_high > 0) {
                 pool_->unpin_page(*leaf_id);
                 *leaf_id = kNullPageId;
                 return false;
             }
-            if (k >= low) {
+            int cmp_low = 0;
+            if (!compare_slot_key(slot, kIndexKeyDataSize, low, &cmp_low)) {
+                cmp_low = leaf_key(page, idx).compare(low);
+            }
+            if (cmp_low >= 0) {
                 RecordId candidate = leaf_rid(page, idx);
                 if (skip_rid && candidate == *skip_rid) {
                     *slot_idx = static_cast<u16>(*slot_idx + 1);
                     continue;
                 }
-                if (key) *key = k;
+                if (key) *key = leaf_key(page, idx);
                 *rid = candidate;
                 pool_->unpin_page(*leaf_id);
                 return true;
@@ -1390,8 +1687,12 @@ PageId BPlusTree::find_leaf_lower_bound(const IndexKey& key) const {
         u16 lo = 0, hi = n;
         while (lo < hi) {
             u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
-            IndexKey mid_key = internal_key(page, mid);
-            if (key <= mid_key) {
+            int cmp = 0;
+            const byte* slot = internal_key_slot(page, mid);
+            if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                cmp = internal_key(page, mid).compare(key);
+            }
+            if (cmp >= 0) {
                 hi = mid;
             } else {
                 lo = static_cast<u16>(mid + 1);
@@ -1456,14 +1757,18 @@ PageId BPlusTree::find_leaf_with_parent(const IndexKey& key, PageId* parent_id) 
         // belongs to the right side for insertion/point lookup. Non-unique
         // range scans that need the first duplicate leaf use a separate
         // leftmost-leaf scan path.
-        // Each comparison still allocates an IndexKey, but log2(n) is far
-        // better than n for the fan-out we now achieve after the 512→128
-        // key-size reduction (≈57 keys per internal node).
+        // The encoded-slot fast path avoids constructing an IndexKey for
+        // fixed-width separators; VARCHAR/composite edge cases fall back to
+        // full decode to preserve ordering semantics.
         u16 lo = 0, hi = n;
         while (lo < hi) {
             u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
-            IndexKey mid_key = internal_key(page, mid);
-            if (key < mid_key) {
+            int cmp = 0;
+            const byte* slot = internal_key_slot(page, mid);
+            if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                cmp = internal_key(page, mid).compare(key);
+            }
+            if (cmp > 0) {
                 hi = mid;
             } else {
                 lo = static_cast<u16>(mid + 1);
@@ -1499,18 +1804,26 @@ bool BPlusTree::insert_into_leaf(PageId leaf_id, const IndexKey& key, const Reco
     // per insert when the workload is sequential (common for serial PKs).
     u16 pos = n;
     if (n > 0) {
-        IndexKey last_key = leaf_key(page, n - 1);
-        if (key >= last_key) {
+        int last_cmp = 0;
+        const byte* last_slot = leaf_key_slot(page, n - 1);
+        if (!compare_slot_key(last_slot, kIndexKeyDataSize, key, &last_cmp)) {
+            last_cmp = leaf_key(page, n - 1).compare(key);
+        }
+        if (last_cmp <= 0) {
             pos = n;  // append; no scan
         } else {
             // Binary search the leaf for the correct insertion position.
-            // n is small (≤57) but at one heap allocation per decode this is
-            // still O(log n) decodes instead of O(n).
+            // The slot-level comparison avoids full decode for fixed-width
+            // keys, with the old decode path as a conservative fallback.
             u16 lo = 0, hi = n;
             while (lo < hi) {
                 u16 mid = static_cast<u16>(lo + (hi - lo) / 2);
-                IndexKey mid_key = leaf_key(page, mid);
-                if (key < mid_key) {
+                int cmp = 0;
+                const byte* slot = leaf_key_slot(page, mid);
+                if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+                    cmp = leaf_key(page, mid).compare(key);
+                }
+                if (cmp > 0) {
                     hi = mid;
                 } else {
                     lo = static_cast<u16>(mid + 1);
@@ -1681,7 +1994,12 @@ bool BPlusTree::insert_into_parent(PageId parent_id, const IndexKey& key,
 
     u16 pos = n;
     for (u16 i = 0; i < n; i++) {
-        if (key < internal_key(parent, i)) {
+        int cmp = 0;
+        const byte* slot = internal_key_slot(parent, i);
+        if (!compare_slot_key(slot, kIndexKeyDataSize, key, &cmp)) {
+            cmp = internal_key(parent, i).compare(key);
+        }
+        if (cmp > 0) {
             pos = i;
             break;
         }
@@ -1777,6 +2095,11 @@ IndexKey BPlusTree::leaf_key(const Page* page, u16 idx) const {
     return read_key_from_slot(page->data() + offset);
 }
 
+const byte* BPlusTree::leaf_key_slot(const Page* page, u16 idx) const {
+    u32 offset = kIndexKeyStart + idx * kIndexLeafSlotSize;
+    return page->data() + offset;
+}
+
 RecordId BPlusTree::leaf_rid(const Page* page, u16 idx) const {
     u32 offset = kIndexKeyStart + idx * kIndexLeafSlotSize + kIndexKeyDataSize;
     RecordId rid;
@@ -1823,6 +2146,11 @@ u16 BPlusTree::internal_num_keys(const Page* page) const {
 IndexKey BPlusTree::internal_key(const Page* page, u16 idx) const {
     u32 offset = kIndexKeyStart + idx * kIndexInternalSlotSize;
     return read_key_from_slot(page->data() + offset);
+}
+
+const byte* BPlusTree::internal_key_slot(const Page* page, u16 idx) const {
+    u32 offset = kIndexKeyStart + idx * kIndexInternalSlotSize;
+    return page->data() + offset;
 }
 
 PageId BPlusTree::internal_child(const Page* page, u16 idx) const {
