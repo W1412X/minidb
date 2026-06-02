@@ -147,9 +147,14 @@ private:
 
     static IndexKey read_key_from_slot(const byte* slot);
     static bool write_key_to_slot(byte* slot, const IndexKey& key);
+    static bool compare_slot_key(const byte* slot, u32 slot_size,
+                                 const IndexKey& key, int* cmp);
+    static bool slot_starts_with(const byte* slot, u32 slot_size,
+                                 const IndexKey& prefix, bool* matches);
 
     u16 leaf_num_keys(const Page* page) const;
     IndexKey leaf_key(const Page* page, u16 idx) const;
+    const byte* leaf_key_slot(const Page* page, u16 idx) const;
     RecordId leaf_rid(const Page* page, u16 idx) const;
     PageId leaf_next(const Page* page) const;
     void leaf_set_keys(Page* page, u16 num_keys);
@@ -159,6 +164,7 @@ private:
 
     u16 internal_num_keys(const Page* page) const;
     IndexKey internal_key(const Page* page, u16 idx) const;
+    const byte* internal_key_slot(const Page* page, u16 idx) const;
     PageId internal_child(const Page* page, u16 idx) const;
     void internal_set_num_keys(Page* page, u16 n);
     bool internal_set_key(Page* page, u16 idx, const IndexKey& key);
