@@ -22,8 +22,6 @@ jobs:
         include:
           - os: ubuntu-latest
             os_label: linux-x86_64
-          - os: macos-13
-            os_label: macos-x86_64
           - os: macos-latest
             os_label: macos-arm64
 
