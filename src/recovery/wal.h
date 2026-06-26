@@ -6,6 +6,7 @@
 
 #include "common/defs.h"
 #include "common/mutex.h"
+#include "common/atomic.h"
 #include "container/string.h"
 #include "index/btree.h"
 #include "record/value.h"
@@ -121,12 +122,12 @@ public:
     // an LSN smaller than existing page LSNs, which would then trigger a
     // flush_until() recursion under the D2 checkpoint barrier and deadlock.
     void ensure_next_lsn_at_least(u64 lsn);
-    u64 durable_lsn() const { return durable_lsn_; }
-    u64 next_lsn() const { return next_lsn_; }
-    u64 bytes_since_checkpoint() const { return bytes_since_checkpoint_; }
-    u64 group_commit_batches() const { return group_commit_batches_; }
-    u64 buffer_flushes() const { return buffer_flushes_; }
-    u64 buffered_bytes() const { return buffered_bytes_; }
+    u64 durable_lsn() const { return durable_lsn_.load(); }
+    u64 next_lsn() const { return next_lsn_.load(); }
+    u64 bytes_since_checkpoint() const { return bytes_since_checkpoint_.load(); }
+    u64 group_commit_batches() const { return group_commit_batches_.load(); }
+    u64 buffer_flushes() const { return buffer_flushes_.load(); }
+    u64 buffered_bytes() const { return buffered_bytes_.load(); }
 
 private:
     u64 write_record(WalType type, u64 txn_id, const byte* data, u32 data_len);
@@ -139,22 +140,27 @@ private:
 
     String wal_dir_;
     int fd_;
-    u64 next_lsn_;
-    u64 durable_lsn_;
+    // These counters are read locklessly from other threads (the background
+    // maintenance loop checks bytes_since_checkpoint_; the buffer pool reads
+    // durable_lsn_ on the eviction/flush hot path; stats_summary reads all of
+    // them). All mutations happen under latch_, so the atomics only guarantee
+    // torn-free cross-thread reads — no extra serialization is implied.
+    Atomic<u64> next_lsn_;
+    Atomic<u64> durable_lsn_;
     u64 last_written_lsn_;
     u64 segment_size_bytes_;
     bool fsync_enabled_;
     bool group_commit_enabled_;
     u64 group_commit_delay_ms_;
     u32 pending_commit_waiters_;
-    u64 group_commit_batches_;
+    Atomic<u64> group_commit_batches_;
     // Monotonic counter incremented at the end of every group-commit batch.
     // Followers compare against the value they captured on entry so they
     // notice a closed batch even if their LSN never became durable.
     u64 commit_batch_id_;
-    u64 buffer_flushes_;
-    u64 buffered_bytes_;
-    u64 bytes_since_checkpoint_;
+    Atomic<u64> buffer_flushes_;
+    Atomic<u64> buffered_bytes_;
+    Atomic<u64> bytes_since_checkpoint_;
     Mutex latch_;
     CondVar commit_cond_;
 

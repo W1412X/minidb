@@ -1,0 +1,16 @@
+3:page_store_remote_test
+10:sql_regression
+11:sql_keyword_combinations
+13:datetime_types
+15:semantic_validation
+16:join_optimizer
+17:filter_pushdown
+22:alter_table_semantics
+23:hot_index_semantics
+24:persistence_and_composite
+26:index_unique_matrix
+41:post_recovery_verify
+46:wal_replay_slot_reuse
+52:crash_recovery_harness
+55:performance_paths
+58:bulk_update_delete_perf
