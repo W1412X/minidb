@@ -135,7 +135,11 @@ static bool read_value_bounded(const byte*& buf, const byte* end, Value* out) {
             u32 len;
             std::memcpy(&len, buf, 4);
             buf += 4;
-            if (buf + len > end) return false;
+            // Compare against the remaining byte count, NOT `buf + len > end`:
+            // `len` is attacker/corruption-controlled, so `buf + len` can
+            // overflow the pointer (UB) and wrap below `end`, bypassing the
+            // guard and reading gigabytes out of bounds.
+            if (len > static_cast<u32>(end - buf)) return false;
             *out = Value(String(reinterpret_cast<const char*>(buf), len));
             buf += len;
             return true;
@@ -174,7 +178,8 @@ static bool skip_value_bounded(const byte*& buf, const byte* end) {
             u32 len;
             std::memcpy(&len, buf, 4);
             buf += 4;
-            if (buf + len > end) return false;
+            // See read_value_bounded: avoid pointer-overflow bypass of the bound.
+            if (len > static_cast<u32>(end - buf)) return false;
             buf += len;
             return true;
         }
