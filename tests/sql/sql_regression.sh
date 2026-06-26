@@ -372,3 +372,13 @@ coerce_out="$(
         'SELECT d, f FROM coercet WHERE id = 1;'
 )"
 require_contains '5.000000 | 5.000000' "$coerce_out"
+
+# UPDATE must coerce a SET value to the column's declared numeric type too.
+ucoerce_out="$(
+    run_sql \
+        'CREATE TABLE ucoercet (id INT PRIMARY KEY, d DOUBLE);' \
+        'INSERT INTO ucoercet VALUES (1, 1.5);' \
+        'UPDATE ucoercet SET d = 7 WHERE id = 1;' \
+        'SELECT d FROM ucoercet WHERE id = 1;'
+)"
+require_contains '7.000000' "$ucoerce_out"

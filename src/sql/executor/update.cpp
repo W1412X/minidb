@@ -23,11 +23,25 @@ static bool is_datetime_type(TypeId type) {
     return type == TypeId::kTimestamp || type == TypeId::kDatetime;
 }
 
+static bool is_numeric_type(TypeId t) {
+    return t == TypeId::kBool || t == TypeId::kInt32 || t == TypeId::kInt64 ||
+           t == TypeId::kFloat || t == TypeId::kDouble;
+}
+
 static Value cast_value_for_column(const Value& value, TypeId target) {
     if (value.is_null() || value.type_id() == target) return value;
-    if (!is_datetime_type(target)) return value;
-    Value casted = value.cast_to(target);
-    return casted.is_null() ? value : casted;
+    if (is_datetime_type(target)) {
+        Value casted = value.cast_to(target);
+        return casted.is_null() ? value : casted;
+    }
+    // Coerce numeric values to the column's declared numeric type so UPDATE
+    // stores a value whose type tag matches the schema (mirrors the INSERT
+    // path): UPDATE ... SET d = 7 on a DOUBLE column stores 7.0, not int32 7.
+    if (is_numeric_type(target) && is_numeric_type(value.type_id())) {
+        Value casted = value.cast_to(target);
+        return casted.is_null() ? value : casted;
+    }
+    return value;
 }
 
 static bool same_key_columns(const Vector<u32>& left, const Vector<u32>& right) {
