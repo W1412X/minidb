@@ -416,3 +416,31 @@ require_contains 'id
 require_contains 'a | agg_0
 20 | 3
 10 | 2' "$pos_out"
+
+# After UPDATE of an indexed column, the old index entry survives until GC.
+# Index scans (regular, index-only, COUNT, range) must NOT return rows via the
+# stale entry: querying the old value yields nothing, the new value is found
+# once, a full index order has no phantom old key, and no duplicates appear.
+stale_out="$(
+    run_sql \
+        'CREATE TABLE staleidx (id INT PRIMARY KEY, a INT);' \
+        'INSERT INTO staleidx VALUES (1,10),(2,20),(3,30);' \
+        'CREATE INDEX sidx_a ON staleidx(a);' \
+        'UPDATE staleidx SET a = 25 WHERE id = 2;' \
+        'SELECT a FROM staleidx WHERE a = 20;' \
+        'SELECT id FROM staleidx WHERE a = 20;' \
+        'SELECT COUNT(*) FROM staleidx WHERE a = 20;' \
+        'SELECT id FROM staleidx WHERE a = 25;' \
+        'SELECT id FROM staleidx WHERE a >= 10 AND a <= 30 ORDER BY a, id;' \
+        'SELECT a FROM staleidx ORDER BY a;'
+)"
+require_contains 'agg_0
+0' "$stale_out"
+require_not_contains 'a
+20' "$stale_out"
+require_contains 'id
+2' "$stale_out"
+require_contains 'a
+10
+25
+30' "$stale_out"
