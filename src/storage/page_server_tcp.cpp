@@ -191,6 +191,20 @@ void PageServerTcpService::handle_client(int fd) {
         resp.durable_lsn = server_->durable_lsn();
         resp.value = 0;
 
+        // Reject absurd sizes read off the wire before using them to size
+        // allocations. hdr.count and hdr.name_len are attacker-controlled u32s;
+        // without a bound a single request can force a multi-terabyte resize()
+        // (OOM / DoS), and name_len == UINT32_MAX would overflow name_len + 1
+        // to 0, yielding an undersized buffer. The caps are far above any
+        // legitimate batch or filename length.
+        static constexpr u32 kMaxRpcBatchPages = 1u << 16;   // 64K pages (512 MB)
+        static constexpr u32 kMaxRpcNameLen = 4096;
+        if (hdr.count > kMaxRpcBatchPages || hdr.name_len > kMaxRpcNameLen) {
+            resp.status = static_cast<u16>(PageRpcStatus::kError);
+            write_full(fd, &resp, sizeof(resp));
+            return;
+        }
+
         if (hdr.op == static_cast<u16>(PageRpcOp::kReadBatch)) {
             Vector<PageRpcPageRef> refs;
             refs.resize(hdr.count);
