@@ -540,10 +540,25 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
 }
 
 bool TransactionManager::is_txn_committed(u64 txn_id) const {
-    LockGuard guard(latch_);
-    for (u32 i = 0; i < txn_slots_.size(); i++) {
-        if (txn_slots_[i].txn_id == txn_id) {
-            return txn_slots_[i].state == TxnState::kCommitted;
+    {
+        LockGuard guard(latch_);
+        for (u32 i = 0; i < txn_slots_.size(); i++) {
+            if (txn_slots_[i].txn_id == txn_id) {
+                return txn_slots_[i].state == TxnState::kCommitted;
+            }
+        }
+    }
+    // The slot was recycled by a later transaction. Consult the persistent
+    // status log, which is exactly what records final states so this question
+    // stays answerable after recycling. Without this, GC's is_garbage() sees
+    // a committed deleter/inserter as "not committed" once ~256 transactions
+    // have churned the slots, and never reclaims those dead versions — an
+    // unbounded space leak. (status_log_ is a leaf lock; commit records into
+    // it after releasing latch_, so there is no lock-ordering cycle.)
+    if (status_log_) {
+        TxnFinalState s;
+        if (status_log_->status(txn_id, &s)) {
+            return s == TxnFinalState::kCommitted;
         }
     }
     return false;
