@@ -418,5 +418,11 @@
   "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/datetime_parse_test.dir/unit/datetime_parse_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/datetime_parse_test.cpp",
   "file": "/Users/lixiang/wx-files/minidb/tests/unit/datetime_parse_test.cpp",
   "output": "tests/CMakeFiles/datetime_parse_test.dir/unit/datetime_parse_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/container_test.dir/unit/container_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/container_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/container_test.cpp",
+  "output": "tests/CMakeFiles/container_test.dir/unit/container_test.cpp.o"
 }
 ]
