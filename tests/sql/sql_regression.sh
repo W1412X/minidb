@@ -518,3 +518,27 @@ require_contains 'deleted_rows
 1' "$inmut_out"
 require_contains '2 | 99' "$inmut_out"
 require_not_contains '1 | 10' "$inmut_out"
+
+# UPDATE SET col = (scalar subquery) must evaluate the subquery, not store NULL.
+setsq_out="$(
+    run_sql \
+        'CREATE TABLE setsq (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO setsq VALUES (1,10),(2,20),(3,30);' \
+        'UPDATE setsq SET v = (SELECT MAX(v) FROM setsq) WHERE id = 1;' \
+        'SELECT v FROM setsq WHERE id = 1;'
+)"
+require_contains 'v
+30' "$setsq_out"
+
+# A NULL left value yields UNKNOWN for both IN and NOT IN (row never qualifies).
+notinnull_out="$(
+    run_sql \
+        'CREATE TABLE nin (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO nin VALUES (1,10),(2,NULL),(3,30);' \
+        'SELECT id FROM nin WHERE v NOT IN (SELECT v FROM nin WHERE id=1) ORDER BY id;'
+)"
+require_contains 'id
+3' "$notinnull_out"
+require_not_contains 'id
+2
+3' "$notinnull_out"
