@@ -677,6 +677,16 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&sp, data.data(), sizeof(sp));
                 HeapFile* heap = db->get_heap_file(sp.table_id);
                 if (heap) {
+                    // Idempotency guard, matching the kDelete/kUpdate redo
+                    // paths: if the page is already durable at or past this
+                    // record's LSN, the undo (and everything after it) is
+                    // already reflected on disk. Replaying it would lower the
+                    // page LSN and, if the slot was later pruned and reused by
+                    // a committed insert, clobber that committed tuple.
+                    LSN page_lsn = 0;
+                    if (page_lsn_at(sp.page_id, &page_lsn) && page_lsn >= hdr.lsn) {
+                        continue;
+                    }
                     if (hdr.type == WalType::kSavepointUndoInsert) {
                         heap->rollback_insert(sp.page_id, sp.slot_idx, hdr.lsn);
                     } else {
