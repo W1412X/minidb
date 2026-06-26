@@ -43,6 +43,50 @@ static Value cast_value_for_column(const Value& value, TypeId target) {
     return value;
 }
 
+// Extract a 1-based positional ORDER BY index ("ORDER BY 2") from an integer
+// literal term, or -1 if the term is not a positive integer literal. SQL treats
+// such terms as references to the Nth select-list item; previously the literal
+// was sorted on as a constant and silently ignored.
+static i64 positional_order_index(const Expression* order_expr) {
+    if (!order_expr || order_expr->type != ExprType::kLiteral) return -1;
+    const Value& v = order_expr->literal_value;
+    if (v.type_id() == TypeId::kInt32) return v.get_int32();
+    if (v.type_id() == TypeId::kInt64) return v.get_int64();
+    return -1;
+}
+
+// Resolve a positional ORDER BY term against the select list (used where the
+// sort runs before projection, so the key is an expression over base columns).
+static UniquePtr<Expression> resolve_order_key_via_select_list(
+        const Expression* order_expr,
+        const Vector<UniquePtr<Expression>>& select_list) {
+    i64 pos = positional_order_index(order_expr);
+    if (pos >= 1 && static_cast<u32>(pos) <= select_list.size()) {
+        const Expression* target = select_list[static_cast<u32>(pos) - 1].get();
+        if (target && target->type != ExprType::kStar) {
+            return UniquePtr<Expression>(target->clone());
+        }
+    }
+    return UniquePtr<Expression>(order_expr ? order_expr->clone() : nullptr);
+}
+
+// Resolve a positional ORDER BY term against an output schema (used where the
+// sort runs after projection/aggregation/union, so the Nth output column is
+// referenced directly by name).
+static UniquePtr<Expression> resolve_order_key_via_schema(
+        const Expression* order_expr, const Schema& output_schema) {
+    i64 pos = positional_order_index(order_expr);
+    if (pos >= 1 && static_cast<u32>(pos) <= output_schema.column_count()) {
+        const Column& col = output_schema.get_column(static_cast<u32>(pos) - 1);
+        auto ref = make_unique<Expression>();
+        ref->type = ExprType::kColumnRef;
+        ref->column_name = col.name;
+        ref->table_name = col.table_name;
+        return UniquePtr<Expression>(ref.release());
+    }
+    return UniquePtr<Expression>(order_expr ? order_expr->clone() : nullptr);
+}
+
 static Schema schema_with_table_name(const Schema& schema, const String& table_name) {
     Schema out;
     for (u32 i = 0; i < schema.column_count(); i++) {
@@ -251,7 +295,8 @@ UniquePtr<PlanNode> Planner::plan_select(const SelectStmt& stmt) {
                 return UniquePtr<PlanNode>();
             }
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.expression = resolve_order_key_via_schema(
+                stmt.order_by[i].expression.get(), union_schema);
             sk.ascending = stmt.order_by[i].ascending;
             sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
@@ -544,7 +589,8 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         sort->child = UniquePtr<PlanNode>(current.release());
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.expression = resolve_order_key_via_select_list(
+                stmt.order_by[i].expression.get(), stmt.select_list);
             sk.ascending = stmt.order_by[i].ascending;
             sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));
@@ -643,9 +689,13 @@ UniquePtr<PlanNode> Planner::plan_select_core(const SelectStmt& stmt, bool inclu
         auto sort = make_unique<SortPlan>();
         if (stmt.limit >= 0) sort->top_n = stmt.limit + (stmt.offset > 0 ? stmt.offset : 0);
         sort->child = UniquePtr<PlanNode>(current.release());
+        // This sort runs after projection/aggregation, so a positional term
+        // refers to a column of the child's (output) schema.
+        const Schema& sort_input_schema = sort->child->output_schema;
         for (u32 i = 0; i < stmt.order_by.size(); i++) {
             SortKey sk;
-            sk.expression = UniquePtr<Expression>(stmt.order_by[i].expression->clone());
+            sk.expression = resolve_order_key_via_schema(
+                stmt.order_by[i].expression.get(), sort_input_schema);
             sk.ascending = stmt.order_by[i].ascending;
             sk.nulls_first = stmt.order_by[i].nulls_first;
             sort->keys.push_back(static_cast<SortKey&&>(sk));

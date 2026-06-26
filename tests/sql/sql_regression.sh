@@ -397,3 +397,22 @@ NULL' "$cast_out"
 require_contains 'c
 2000000000' "$cast_out"
 require_not_contains '705032704' "$cast_out"
+
+# Positional ORDER BY ("ORDER BY 2") must reference the Nth select item, not be
+# treated as an ignored constant. Covers plain, aggregate, and multi-key forms.
+pos_out="$(
+    run_sql \
+        'CREATE TABLE post (id INT PRIMARY KEY, a INT, b INT);' \
+        'INSERT INTO post VALUES (1,10,1),(2,10,2),(3,20,1),(4,20,3),(5,20,5);' \
+        'SELECT id FROM post ORDER BY 1 DESC;' \
+        'SELECT a, COUNT(*) FROM post GROUP BY a ORDER BY 2 DESC;'
+)"
+require_contains 'id
+5
+4
+3
+2
+1' "$pos_out"
+require_contains 'a | agg_0
+20 | 3
+10 | 2' "$pos_out"
