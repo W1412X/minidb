@@ -387,6 +387,7 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
         wal_offset = append_wal_image_locked(page_id, page_data, lsn);
         save_metadata_locked();
     }
+    bool is_newest = true;
     {
         PageServerShard& shard = shard_for(page_id);
         LockGuard guard(shard.latch);
@@ -403,11 +404,21 @@ bool PageServer::write_page(PageId page_id, const byte* page_data, LSN page_lsn)
                 }
             }
         }
+        // The materialized primary/replica copy must hold the NEWEST image:
+        // out-of-order writes are recorded in the version log for time-travel
+        // reads, but writing an older image onto the primary would make the
+        // plain (read_lsn==0) read path return stale data. Decide newest-wins
+        // under the shard latch, consistent with remember_version_locked's
+        // latest_lsn tracking.
+        const PageMetadata* existing = shard.page_metadata.find(page_id);
+        is_newest = (existing == nullptr) || lsn >= existing->latest_lsn;
         remember_version_locked(shard, page_id, page_data, lsn, wal_offset);
     }
-    primary_.write_page(page_id, page_data);
-    for (u32 i = 0; i < replicas_.size(); i++) {
-        replicas_[i]->write_page(page_id, page_data);
+    if (is_newest) {
+        primary_.write_page(page_id, page_data);
+        for (u32 i = 0; i < replicas_.size(); i++) {
+            replicas_[i]->write_page(page_id, page_data);
+        }
     }
     write_ops_.fetch_add(1, std::memory_order_relaxed);
     return true;
