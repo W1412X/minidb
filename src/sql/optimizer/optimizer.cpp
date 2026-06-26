@@ -1223,26 +1223,25 @@ double Optimizer::estimate_selectivity(const Expression* predicate, u32 table_id
         return left + right - (left * right);
     }
 
-    // IS NULL
-    if (predicate->type == ExprType::kUnaryOp && predicate->op == "IS NULL") {
+    // IS NULL / IS NOT NULL. The AST stores these unary ops as "IS_NULL" /
+    // "IS_NOT_NULL" (see parser); matching "IS NULL" with a space meant these
+    // branches never fired, so null predicates fell through to the generic
+    // default selectivity and could mis-cost plans.
+    if (predicate->type == ExprType::kUnaryOp &&
+        (predicate->op == "IS_NULL" || predicate->op == "IS_NOT_NULL")) {
+        double null_sel = 0.1;  // default NULL fraction when stats are absent
         if (predicate->child && predicate->child->type == ExprType::kColumnRef) {
             TableEntry* table = catalog_ ? catalog_->get_table(table_id) : nullptr;
-            if (table_stats_fresh(table)) {
+            if (table_stats_fresh(table) && table->num_tuples > 0) {
                 int col_idx = table->schema.get_column_index(predicate->child->column_name);
                 if (col_idx >= 0 && static_cast<u32>(col_idx) < table->col_stats.size()) {
                     const ColumnStats& stats = table->col_stats[col_idx];
-                    if (table->num_tuples > 0) {
-                        return static_cast<double>(stats.null_count) / static_cast<double>(table->num_tuples);
-                    }
+                    null_sel = static_cast<double>(stats.null_count) /
+                               static_cast<double>(table->num_tuples);
                 }
             }
         }
-        return 0.1; // default NULL selectivity
-    }
-
-    // IS NOT NULL
-    if (predicate->type == ExprType::kUnaryOp && predicate->op == "IS NOT NULL") {
-        return 1.0 - estimate_selectivity(predicate->child.get(), table_id);
+        return predicate->op == "IS_NULL" ? null_sel : (1.0 - null_sel);
     }
 
     // Binary comparison with column reference
