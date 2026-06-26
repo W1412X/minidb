@@ -489,12 +489,17 @@ bool LockManager::detect_deadlock(u64 txn_id) {
         u64 current = stack.back();
         stack.pop_back();
 
-        if (seen.contains(current)) return true;
+        // A node can be pushed more than once via different wait-for paths
+        // (a re-convergent DAG), so reaching an already-visited node is NOT a
+        // cycle — treating it as one falsely aborts innocent transactions.
+        // A deadlock involving txn_id is detected precisely when a wait-for
+        // edge leads back to txn_id itself, checked below.
+        if (seen.contains(current)) continue;
         seen[current] = true;
 
         Vector<u64> holders = find_holder_for(current);
         for (u32 i = 0; i < holders.size(); i++) {
-            if (holders[i] == txn_id) return true;  // Cycle found
+            if (holders[i] == txn_id) return true;  // Cycle back to the start
             if (!seen.contains(holders[i])) {
                 stack.push_back(holders[i]);
             }
