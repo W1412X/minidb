@@ -361,3 +361,14 @@ require_contains 'id
 3' "$xtype_out"
 require_contains 'agg_0
 1' "$xtype_out"
+
+# INSERT must coerce a numeric value to the column's declared type, so the
+# stored type matches the schema regardless of the literal's spelling. An
+# integer literal inserted into a DOUBLE column must read back as a double.
+coerce_out="$(
+    run_sql \
+        'CREATE TABLE coercet (id INT PRIMARY KEY, d DOUBLE, f FLOAT);' \
+        'INSERT INTO coercet VALUES (1, 5, 5);' \
+        'SELECT d, f FROM coercet WHERE id = 1;'
+)"
+require_contains '5.000000 | 5.000000' "$coerce_out"

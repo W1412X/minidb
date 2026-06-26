@@ -20,11 +20,27 @@ static bool is_datetime_type(TypeId type) {
     return type == TypeId::kTimestamp || type == TypeId::kDatetime;
 }
 
+static bool is_numeric_type(TypeId t) {
+    return t == TypeId::kBool || t == TypeId::kInt32 || t == TypeId::kInt64 ||
+           t == TypeId::kFloat || t == TypeId::kDouble;
+}
+
 static Value cast_value_for_column(const Value& value, TypeId target) {
     if (value.is_null() || value.type_id() == target) return value;
-    if (!is_datetime_type(target)) return value;
-    Value casted = value.cast_to(target);
-    return casted.is_null() ? value : casted;
+    if (is_datetime_type(target)) {
+        Value casted = value.cast_to(target);
+        return casted.is_null() ? value : casted;
+    }
+    // Coerce a numeric value to the column's declared numeric type so the
+    // stored value's type tag matches the schema. Without this, INSERT 5 into
+    // a DOUBLE column stored int32 5 (displaying "5" instead of "5.000000"
+    // and serializing 5 bytes instead of 9), making the column's storage type
+    // depend on the literal's spelling rather than the schema.
+    if (is_numeric_type(target) && is_numeric_type(value.type_id())) {
+        Value casted = value.cast_to(target);
+        return casted.is_null() ? value : casted;
+    }
+    return value;
 }
 
 static Schema schema_with_table_name(const Schema& schema, const String& table_name) {
