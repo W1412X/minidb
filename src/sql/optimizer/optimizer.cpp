@@ -505,14 +505,21 @@ static void apply_scan_projection(PlanNode* plan, const Vector<u32>& cols) {
     if (!plan || cols.empty()) return;
     if (plan->type == PlanNodeType::kSeqScan) {
         auto* scan = static_cast<SeqScanPlan*>(plan);
+        // A pushed-down WHERE predicate is evaluated against the columns this
+        // scan emits. If the late-materialization projection drops a column the
+        // predicate references, the predicate can no longer resolve it and
+        // silently filters every row out (e.g. COUNT(*) over a join with a
+        // single-table WHERE returns 0). Keep the predicate's columns.
+        Vector<u32> needed = cols;
+        collect_expr_columns(scan->pushed_predicate.get(), scan->output_schema, &needed);
         Schema projected;
-        for (u32 i = 0; i < cols.size(); i++) {
-            if (cols[i] < scan->output_schema.column_count()) {
-                projected.add_column(scan->output_schema.get_column(cols[i]));
+        for (u32 i = 0; i < needed.size(); i++) {
+            if (needed[i] < scan->output_schema.column_count()) {
+                projected.add_column(scan->output_schema.get_column(needed[i]));
             }
         }
         if (projected.column_count() > 0) {
-            scan->projected_columns = cols;
+            scan->projected_columns = needed;
             scan->output_schema = projected;
             scan->optimizer_note = "late materialized join projection";
         }

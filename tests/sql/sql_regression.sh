@@ -313,3 +313,20 @@ require_contains 'agg_0
 8000000000' "$sum_out"
 require_contains '1 | 4000000000' "$sum_out"
 require_not_contains 'NULL' "$sum_out"
+
+# COUNT(*) over a join with a single-table WHERE: the predicate is pushed into
+# the scan, and the count-only late-materialization projection must not drop the
+# column the pushed predicate references (else every row is filtered out → 0).
+cntpred_out="$(
+    run_sql \
+        'CREATE TABLE cpa (id INT, x INT);' \
+        'CREATE TABLE cpb (id INT);' \
+        'INSERT INTO cpa VALUES (1,50),(2,150),(3,200),(4,80);' \
+        'INSERT INTO cpb VALUES (1),(2),(3),(4);' \
+        'SELECT COUNT(*) FROM cpa JOIN cpb ON cpa.id = cpb.id WHERE cpa.x > 100;' \
+        'SELECT COUNT(*) FROM cpa JOIN cpb ON cpa.id = cpb.id;'
+)"
+require_contains 'agg_0
+2' "$cntpred_out"
+require_contains 'agg_0
+4' "$cntpred_out"
