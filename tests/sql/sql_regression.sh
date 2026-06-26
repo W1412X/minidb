@@ -488,3 +488,17 @@ require_contains 'id
 require_not_contains 'failed to create index' "$nullidx2_out"
 require_contains 'agg_0
 5' "$nullidx2_out"
+
+# A scalar subquery in the SELECT list must be evaluated (uncorrelated: run once
+# and substituted), not silently yield NULL.
+scalarsel_out="$(
+    run_sql \
+        'CREATE TABLE ssq (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO ssq VALUES (1,10),(2,20),(3,30);' \
+        'SELECT id, (SELECT MAX(v) FROM ssq) AS m FROM ssq ORDER BY id;' \
+        'SELECT (SELECT COUNT(*) FROM ssq) AS c;'
+)"
+require_contains '1 | 30' "$scalarsel_out"
+require_contains '3 | 30' "$scalarsel_out"
+require_contains 'c
+3' "$scalarsel_out"

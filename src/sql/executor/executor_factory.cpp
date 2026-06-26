@@ -239,10 +239,23 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto* p_plan = static_cast<ProjectPlan*>(plan);
             auto child = create(p_plan->child.get());
             if (!child) return UniquePtr<Executor>();
+            // Materialize scalar subqueries in the projection list (e.g.
+            // SELECT (SELECT MAX(v) FROM t)). The expression evaluator cannot
+            // execute a subquery node, so without this they evaluated to NULL.
+            // Done at build time like the WHERE-clause path; uncorrelated
+            // scalar subqueries run once and are substituted as a literal.
+            Vector<UniquePtr<Expression>> materialized;
+            materialized.reserve(p_plan->expressions.size());
+            for (u32 i = 0; i < p_plan->expressions.size(); i++) {
+                auto m = materialize_scalar_subqueries(p_plan->expressions[i].get());
+                materialized.push_back(m
+                    ? static_cast<UniquePtr<Expression>&&>(m)
+                    : UniquePtr<Expression>(p_plan->expressions[i]->clone()));
+            }
             return maybe_trace_executor(plan, UniquePtr<Executor>(new ProjectExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
                 p_plan->output_schema, p_plan->column_indices,
-                p_plan->expressions)));
+                materialized)));
         }
 
         case PlanNodeType::kInsert: {
