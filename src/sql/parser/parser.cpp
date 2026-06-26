@@ -1181,7 +1181,12 @@ UniquePtr<Expression> Parser::parse_primary() {
         lexer_.consume_token();
         auto expr = make_unique<Expression>();
         expr->type = ExprType::kLiteral;
-        expr->literal_value = Value(static_cast<float>(atof(t.value.c_str())));
+        // Parse as double (the wider type). Narrowing to float here would
+        // silently drop precision for every literal — e.g. the DOUBLE literal
+        // 3.141592653589793 became 3.1415927, so it no longer compared equal
+        // to the same value stored in a DOUBLE column. Insertion into a FLOAT
+        // column still narrows correctly via the schema-driven cast.
+        expr->literal_value = Value(static_cast<double>(atof(t.value.c_str())));
         return expr;
     }
 

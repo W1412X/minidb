@@ -282,3 +282,18 @@ require_contains '501 | 1002' "$big_out"
 require_contains 'deleted_rows
 6' "$big_out"
 require_contains '424' "$big_out"
+
+# Double-precision literals must not be narrowed to 32-bit float by the parser:
+# a DOUBLE column value must compare equal to the same literal, and a literal
+# that only differs beyond float precision must NOT match.
+dbl_out="$(
+    run_sql \
+        'CREATE TABLE dbl_lit (id INT PRIMARY KEY, d DOUBLE);' \
+        'INSERT INTO dbl_lit VALUES (1, 3.141592653589793);' \
+        'SELECT id FROM dbl_lit WHERE d = 3.141592653589793;' \
+        'SELECT COUNT(*) FROM dbl_lit WHERE d = 3.1415927;'
+)"
+require_contains 'id
+1' "$dbl_out"
+require_contains 'agg_0
+0' "$dbl_out"

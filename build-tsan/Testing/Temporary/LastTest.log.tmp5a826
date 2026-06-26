@@ -1,0 +1,1626 @@
+Start testing: Jun 26 07:41 PDT
+----------------------------------------------------------
+2/62 Testing: tuple_value_edge_test
+2/62 Test: tuple_value_edge_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/tuple_value_edge_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"tuple_value_edge_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.63 sec
+----------------------------------------------------------
+Test Passed.
+"tuple_value_edge_test" end time: Jun 26 07:41 PDT
+"tuple_value_edge_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+1/62 Testing: lock_manager_wait_test
+1/62 Test: lock_manager_wait_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/lock_manager_wait_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"lock_manager_wait_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   2.00 sec
+----------------------------------------------------------
+Test Passed.
+"lock_manager_wait_test" end time: Jun 26 07:41 PDT
+"lock_manager_wait_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+4/62 Testing: wal_buffer_pool_test
+4/62 Test: wal_buffer_pool_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/wal_buffer_pool_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"wal_buffer_pool_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.55 sec
+----------------------------------------------------------
+Test Passed.
+"wal_buffer_pool_test" end time: Jun 26 07:41 PDT
+"wal_buffer_pool_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/62 Testing: page_store_remote_test
+3/62 Test: page_store_remote_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/page_store_remote_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"page_store_remote_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27869)
+  Write of size 4 at 0x00016af60444 by main thread:
+    #0 minidb::PageServerTcpService::stop() <null> (page_store_remote_test:arm64+0x10001edf4)
+    #1 assert_tcp_remote_page_store_client() <null> (page_store_remote_test:arm64+0x100003bc8)
+    #2 assert_tcp_remote_page_store_client() <null> (page_store_remote_test:arm64+0x10000383c)
+    #3 <null> <null> (0x000199f3dd54)
+
+  Previous read of size 4 at 0x00016af60444 by thread T1:
+    #0 minidb::PageServerTcpService::accept_loop() <null> (page_store_remote_test:arm64+0x10001f710)
+    #1 decltype(*std::declval<minidb::PageServerTcpService*>().*std::declval<void (minidb::PageServerTcpService::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*, void>(void (minidb::PageServerTcpService::*&&)(), minidb::PageServerTcpService*&&) <null> (page_store_remote_test:arm64+0x100028b30)
+    #2 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*>&, std::__1::__tuple_indices<2ul>) <null> (page_store_remote_test:arm64+0x100028a48)
+    #3 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*>>(void*) <null> (page_store_remote_test:arm64+0x100028578)
+
+  Location is stack of main thread.
+
+  Thread T1 (tid=17203133, finished) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (page_store_remote_test:arm64+0x100007e10)
+    #2 std::__1::thread::thread<void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*, 0>(void (minidb::PageServerTcpService::*&&)(), minidb::PageServerTcpService*&&) <null> (page_store_remote_test:arm64+0x100028354)
+    #3 std::__1::thread::thread<void (minidb::PageServerTcpService::*)(), minidb::PageServerTcpService*, 0>(void (minidb::PageServerTcpService::*&&)(), minidb::PageServerTcpService*&&) <null> (page_store_remote_test:arm64+0x10001f8dc)
+    #4 minidb::PageServerTcpService::start() <null> (page_store_remote_test:arm64+0x10001f548)
+    #5 assert_tcp_remote_page_store_client() <null> (page_store_remote_test:arm64+0x1000038f4)
+    #6 assert_tcp_remote_page_store_client() <null> (page_store_remote_test:arm64+0x10000383c)
+    #7 <null> <null> (0x000199f3dd54)
+
+SUMMARY: ThreadSanitizer: data race (page_store_remote_test:arm64+0x10001edf4) in minidb::PageServerTcpService::stop()+0xa4
+==================
+ThreadSanitizer: reported 1 warnings
+<end of output>
+Test time =   0.97 sec
+----------------------------------------------------------
+Test Failed.
+"page_store_remote_test" end time: Jun 26 07:41 PDT
+"page_store_remote_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/62 Testing: transaction_slots_test
+5/62 Test: transaction_slots_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/transaction_slots_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"transaction_slots_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=560
+<end of output>
+Test time =   0.65 sec
+----------------------------------------------------------
+Test Passed.
+"transaction_slots_test" end time: Jun 26 07:41 PDT
+"transaction_slots_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/62 Testing: index_key_btree_test
+7/62 Test: index_key_btree_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/index_key_btree_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_key_btree_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.65 sec
+----------------------------------------------------------
+Test Passed.
+"index_key_btree_test" end time: Jun 26 07:41 PDT
+"index_key_btree_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/62 Testing: datetime_parse_test
+8/62 Test: datetime_parse_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/datetime_parse_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"datetime_parse_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+datetime_parse_test passed
+<end of output>
+Test time =   0.49 sec
+----------------------------------------------------------
+Test Passed.
+"datetime_parse_test" end time: Jun 26 07:41 PDT
+"datetime_parse_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/62 Testing: btree_property_test
+6/62 Test: btree_property_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/btree_property_test" "12648434"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"btree_property_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+btree_property_test seed=12648434
+<end of output>
+Test time =   2.02 sec
+----------------------------------------------------------
+Test Passed.
+"btree_property_test" end time: Jun 26 07:41 PDT
+"btree_property_test" time elapsed: 00:00:02
+----------------------------------------------------------
+
+9/62 Testing: container_test
+9/62 Test: container_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/container_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"container_test" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.49 sec
+----------------------------------------------------------
+Test Passed.
+"container_test" end time: Jun 26 07:41 PDT
+"container_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/62 Testing: sql_keyword_combinations
+11/62 Test: sql_keyword_combinations
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/sql_keyword_combinations.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"sql_keyword_combinations" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+/Users/lixiang/wx-files/minidb/tests/sql/sql_keyword_combinations.sh: line 48: 27891 Abort trap: 6           "$BIN" --dir "$DB_DIR" > "$OUT_FILE" 2>&1  <<'SQL'
+CREATE TABLE order (id INT PRIMARY KEY, count INT, sum INT, default INT, group INT, LENGTH INT);
+CREATE TABLE order_items (id INT PRIMARY KEY, order_id INT, quantity INT, unit_price FLOAT);
+INSERT INTO order (id, count, sum, default, group, LENGTH) VALUES (1, 10, 100, 7, 1, 5), (2, 20, 200, 8, 1, 6), (3, 30, 300, 9, 2, 7);
+INSERT INTO order_items VALUES (1, 1, 2, 12.5), (2, 1, 3, 9.5), (11, 2, 4, 8.0);
+
+SELECT count FROM order ORDER BY count LIMIT 1;
+SELECT sum + default FROM order WHERE group = 1 ORDER BY id LIMIT 1;
+SELECT LENGTH FROM order WHERE id = 1;
+SELECT COUNT(*) FROM order CROSS JOIN order_items oi WHERE oi.id < 10;
+SELECT COUNT(*) FROM order o INNER JOIN order_items oi ON o.id = oi.order_id WHERE oi.id < 10;
+SELECT COUNT(*) FROM order o LEFT JOIN order_items oi ON o.id = oi.order_id WHERE oi.id < 10;
+SELECT group, COUNT(*) AS count FROM order GROUP BY group ORDER BY group;
+SELECT o.id AS order, oi.quantity AS group FROM order AS o INNER JOIN order_items AS oi ON o.id = oi.order_id ORDER BY order LIMIT 2;
+
+CREATE INDEX idx_order_group ON order (group);
+SELECT id FROM order WHERE group = 1 ORDER BY id;
+UPDATE order SET default = default + 1 WHERE id = 1;
+SELECT default FROM order WHERE id = 1;
+DELETE FROM order WHERE id = 3;
+SELECT COUNT(*) FROM order;
+DESCRIBE order;
+
+CREATE TABLE `select` (`from` INT PRIMARY KEY, `where` INT, `count` INT);
+INSERT INTO `select` (`from`, `where`, `count`) VALUES (1, 2, 3);
+SELECT `from`, `where`, `count` FROM `select`;
+CREATE TABLE `left` (`join` INT PRIMARY KEY, `order` INT);
+INSERT INTO `left` (`join`, `order`) VALUES (1, 9);
+SELECT `join`, `order` FROM `left`;
+
+CREATE TABLE default (to INT PRIMARY KEY, execute INT);
+INSERT INTO default VALUES (1, 2);
+SELECT to, execute FROM default;
+DROP TABLE default;
+
+PREPARE p AS SELECT count FROM order WHERE id = 1;
+EXECUTE p;
+DEALLOCATE p;
+exit
+SQL
+
+<end of output>
+Test time =   0.64 sec
+----------------------------------------------------------
+Test Failed.
+"sql_keyword_combinations" end time: Jun 26 07:41 PDT
+"sql_keyword_combinations" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/62 Testing: sql_regression
+10/62 Test: sql_regression
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/sql_regression.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"sql_regression" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27887)
+  Read of size 8 at 0x00010d602880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010d602880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_index_delete(unsigned long long, unsigned int, minidb::IndexKey const&, minidb::RecordId const&) <null> (minidb:arm64+0x1000983d4)
+    #2 minidb::Database::delete_index_entries(unsigned int, minidb::Tuple const&, minidb::RecordId const&) <null> (minidb:arm64+0x10003af5c)
+    #3 minidb::apply_undo_record(minidb::Database*, minidb::UndoRecord const&, unsigned long long, bool, unsigned long long, minidb::DdlUndoInfo const*) <null> (minidb:arm64+0x10016f9f4)
+    #4 minidb::TransactionManager::rollback(minidb::Transaction*) <null> (minidb:arm64+0x10016ed28)
+    #5 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009e8fc)
+    #6 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #7 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #8 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010d602800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010d602888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17203483, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=55
+ThreadSanitizer: reported 1 warnings
+<end of output>
+Test time =   0.87 sec
+----------------------------------------------------------
+Test Failed.
+"sql_regression" end time: Jun 26 07:41 PDT
+"sql_regression" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/62 Testing: datetime_types
+13/62 Test: datetime_types
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/datetime_types.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"datetime_types" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27910)
+  Read of size 8 at 0x00010b902880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010b902880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010b902800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010b902888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17203544, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=13
+ThreadSanitizer: reported 1 warnings
+<end of output>
+Test time =   0.40 sec
+----------------------------------------------------------
+Test Failed.
+"datetime_types" end time: Jun 26 07:41 PDT
+"datetime_types" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/62 Testing: full_sql_suite
+12/62 Test: full_sql_suite
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/full_sql_suite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"full_sql_suite" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=697
+<end of output>
+Test time =   0.59 sec
+----------------------------------------------------------
+Test Passed.
+"full_sql_suite" end time: Jun 26 07:41 PDT
+"full_sql_suite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/62 Testing: join_syntax_strict
+14/62 Test: join_syntax_strict
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_syntax_strict.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"join_syntax_strict" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.30 sec
+----------------------------------------------------------
+Test Passed.
+"join_syntax_strict" end time: Jun 26 07:41 PDT
+"join_syntax_strict" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/62 Testing: semantic_validation
+15/62 Test: semantic_validation
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/semantic_validation.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"semantic_validation" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27941)
+  Read of size 8 at 0x00010b502880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010b502880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010b502800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010b502888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17203623, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=16
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/sql/semantic_validation.sh: line 8: 27940 Done                    printf '%s\n' "$@" 'exit'
+     27941 Abort trap: 6           | "$BIN" --dir "$DB_DIR"
+<end of output>
+Test time =   0.36 sec
+----------------------------------------------------------
+Test Failed.
+"semantic_validation" end time: Jun 26 07:41 PDT
+"semantic_validation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/62 Testing: filter_pushdown
+17/62 Test: filter_pushdown
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/filter_pushdown.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"filter_pushdown" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27968)
+  Read of size 8 at 0x00010d802880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010d802880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010d802800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010d802888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17203678, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=18
+ThreadSanitizer: reported 1 warnings
+<end of output>
+Test time =   0.42 sec
+----------------------------------------------------------
+Test Failed.
+"filter_pushdown" end time: Jun 26 07:41 PDT
+"filter_pushdown" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/62 Testing: join_optimizer
+16/62 Test: join_optimizer
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_optimizer.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"join_optimizer" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=27962)
+  Read of size 8 at 0x00010a302880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010a302880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_index_insert(unsigned long long, unsigned int, minidb::IndexKey const&, minidb::RecordId const&) <null> (minidb:arm64+0x100097ccc)
+    #2 minidb::Database::insert_index_entries(unsigned int, minidb::Tuple const&, minidb::RecordId const&) <null> (minidb:arm64+0x10003ac08)
+    #3 minidb::InsertExecutor::next() <null> (minidb:arm64+0x1000eb700)
+    #4 minidb::InsertExecutor::next() <null> (minidb:arm64+0x1000ea650)
+    #5 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #6 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #7 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010a302800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010a302888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17203666, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=5682
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/sql/join_optimizer.sh: line 83: 27962 Abort trap: 6           "$BIN" --dir "$DB_DIR" < "$SQL_FILE" > "$OUT_FILE"
+<end of output>
+Test time =   1.27 sec
+----------------------------------------------------------
+Test Failed.
+"join_optimizer" end time: Jun 26 07:41 PDT
+"join_optimizer" time elapsed: 00:00:01
+----------------------------------------------------------
+
+18/62 Testing: sql_correctness_matrix
+18/62 Test: sql_correctness_matrix
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/sql_correctness_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648430"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"sql_correctness_matrix" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+sql_correctness_matrix PASS seed=12648430 cases=90
+<end of output>
+Test time =  58.70 sec
+----------------------------------------------------------
+Test Passed.
+"sql_correctness_matrix" end time: Jun 26 07:42 PDT
+"sql_correctness_matrix" time elapsed: 00:00:58
+----------------------------------------------------------
+
+20/62 Testing: select_empty_list
+20/62 Test: select_empty_list
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/select_empty_list.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648444"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"select_empty_list" start time: Jun 26 07:42 PDT
+Output:
+----------------------------------------------------------
+select_empty_list PASS seed=12648444
+<end of output>
+Test time =   3.89 sec
+----------------------------------------------------------
+Test Passed.
+"select_empty_list" end time: Jun 26 07:42 PDT
+"select_empty_list" time elapsed: 00:00:03
+----------------------------------------------------------
+
+19/62 Testing: differential_sqlite
+19/62 Test: differential_sqlite
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/differential_sqlite.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648431"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"differential_sqlite" start time: Jun 26 07:41 PDT
+Output:
+----------------------------------------------------------
+differential_sqlite PASS seed=12648431 cases=167
+<end of output>
+Test time =  71.54 sec
+----------------------------------------------------------
+Test Passed.
+"differential_sqlite" end time: Jun 26 07:42 PDT
+"differential_sqlite" time elapsed: 00:01:11
+----------------------------------------------------------
+
+22/62 Testing: alter_table_semantics
+22/62 Test: alter_table_semantics
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/alter_table_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"alter_table_semantics" start time: Jun 26 07:42 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=28504)
+  Read of size 8 at 0x00010b402880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010b402880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_ddl(unsigned long long, minidb::DdlOp, unsigned int, unsigned int, minidb::String const&) <null> (minidb:arm64+0x100098020)
+    #2 minidb::Database::alter_table_drop_column(minidb::String const&, minidb::String const&, minidb::String*) <null> (minidb:arm64+0x100038434)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009f390)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010b402800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010b402888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17206048, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=20
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/ddl/alter_table_semantics.sh: line 31: 28504 Abort trap: 6           "$BIN" --dir "$DB_DIR" < "$SQL1" > "$OUT1"
+<end of output>
+Test time =   0.47 sec
+----------------------------------------------------------
+Test Failed.
+"alter_table_semantics" end time: Jun 26 07:42 PDT
+"alter_table_semantics" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/62 Testing: hot_index_semantics
+23/62 Test: hot_index_semantics
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/hot_index_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"hot_index_semantics" start time: Jun 26 07:42 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=28514)
+  Read of size 8 at 0x00010b702880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010b702880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010b702800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010b702888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17206081, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=21
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/ddl/hot_index_semantics.sh: line 32: 28514 Abort trap: 6           "$BIN" --dir "$DB_DIR" < "$SQL_FILE" > "$OUT_FILE"
+<end of output>
+Test time =   0.50 sec
+----------------------------------------------------------
+Test Failed.
+"hot_index_semantics" end time: Jun 26 07:43 PDT
+"hot_index_semantics" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/62 Testing: persistence_and_composite
+24/62 Test: persistence_and_composite
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/persistence_and_composite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"persistence_and_composite" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=28523)
+  Read of size 8 at 0x00010df02880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010df02880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010df02800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010df02888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17206110, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=10
+ThreadSanitizer: reported 1 warnings
+<end of output>
+Test time =   0.45 sec
+----------------------------------------------------------
+Test Failed.
+"persistence_and_composite" end time: Jun 26 07:43 PDT
+"persistence_and_composite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/62 Testing: index_delete_rebuild
+25/62 Test: index_delete_rebuild
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_delete_rebuild.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_delete_rebuild" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=2524
+<end of output>
+Test time =   0.73 sec
+----------------------------------------------------------
+Test Passed.
+"index_delete_rebuild" end time: Jun 26 07:43 PDT
+"index_delete_rebuild" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/62 Testing: index_unique_matrix
+26/62 Test: index_unique_matrix
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_unique_matrix.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_unique_matrix" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=28543)
+  Read of size 8 at 0x000109e02880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x000109e02880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x000109e02800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x000109e02888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17206171, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=58
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/index/index_unique_matrix.sh: line 40: 28543 Abort trap: 6           "$BIN" --dir "$DB_DIR" < "$SQL1" > "$OUT1"
+<end of output>
+Test time =   0.62 sec
+----------------------------------------------------------
+Test Failed.
+"index_unique_matrix" end time: Jun 26 07:43 PDT
+"index_unique_matrix" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/62 Testing: mvcc_lock_regression
+27/62 Test: mvcc_lock_regression
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_lock_regression.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648433"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"mvcc_lock_regression" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+mvcc_lock_regression PASS seed=12648433 workers=2 per_worker=3
+<end of output>
+Test time =   9.66 sec
+----------------------------------------------------------
+Test Passed.
+"mvcc_lock_regression" end time: Jun 26 07:43 PDT
+"mvcc_lock_regression" time elapsed: 00:00:09
+----------------------------------------------------------
+
+21/62 Testing: p1_features
+21/62 Test: p1_features
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/p1_features_test.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648455"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"p1_features" start time: Jun 26 07:42 PDT
+Output:
+----------------------------------------------------------
+  [OK] NULLS FIRST / NULLS LAST
+  [OK] CAST expression
+  [OK] DDL operations
+  [OK] UNION NULL deduplication
+  [OK] UNIQUE NULL semantics
+p1_features PASS seed=12648455
+<end of output>
+Test time =  25.72 sec
+----------------------------------------------------------
+Test Passed.
+"p1_features" end time: Jun 26 07:43 PDT
+"p1_features" time elapsed: 00:00:25
+----------------------------------------------------------
+
+28/62 Testing: lost_update
+28/62 Test: lost_update
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/lost_update.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648438"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"lost_update" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+lost_update PASS seed=12648438 successes=1 conflicts=1
+<end of output>
+Test time =   5.57 sec
+----------------------------------------------------------
+Test Passed.
+"lost_update" end time: Jun 26 07:43 PDT
+"lost_update" time elapsed: 00:00:05
+----------------------------------------------------------
+
+30/62 Testing: write_skew
+30/62 Test: write_skew
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648439"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"write_skew" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+write_skew PASS seed=12648439 (SI anomaly observed as documented)
+<end of output>
+Test time =   3.35 sec
+----------------------------------------------------------
+Test Passed.
+"write_skew" end time: Jun 26 07:43 PDT
+"write_skew" time elapsed: 00:00:03
+----------------------------------------------------------
+
+31/62 Testing: write_skew_serializable
+31/62 Test: write_skew_serializable
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew_serializable.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648460"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"write_skew_serializable" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+write_skew_serializable PASS seed=12648460 (one txn aborted, invariant preserved)
+<end of output>
+Test time =   1.51 sec
+----------------------------------------------------------
+Test Passed.
+"write_skew_serializable" end time: Jun 26 07:43 PDT
+"write_skew_serializable" time elapsed: 00:00:01
+----------------------------------------------------------
+
+32/62 Testing: phantom_read
+32/62 Test: phantom_read
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/phantom_read.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648456"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"phantom_read" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+phantom_read PASS seed=12648456 (SI prevented phantom within snapshot: read1=300, read2=300, post_commit=400)
+<end of output>
+Test time =   1.67 sec
+----------------------------------------------------------
+Test Passed.
+"phantom_read" end time: Jun 26 07:43 PDT
+"phantom_read" time elapsed: 00:00:01
+----------------------------------------------------------
+
+33/62 Testing: long_snapshot_gc
+33/62 Test: long_snapshot_gc
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/long_snapshot_gc.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648458"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"long_snapshot_gc" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+long_snapshot_gc PASS seed=12648458 (snapshot survived GC: sum1=150, sum2=150, post_commit_sum=90)
+<end of output>
+Test time =   3.36 sec
+----------------------------------------------------------
+Test Passed.
+"long_snapshot_gc" end time: Jun 26 07:43 PDT
+"long_snapshot_gc" time elapsed: 00:00:03
+----------------------------------------------------------
+
+29/62 Testing: mvcc_visibility_matrix
+29/62 Test: mvcc_visibility_matrix
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_visibility_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648446"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"mvcc_visibility_matrix" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+mvcc_visibility_matrix PASS seed=12648446
+<end of output>
+Test time =  13.93 sec
+----------------------------------------------------------
+Test Passed.
+"mvcc_visibility_matrix" end time: Jun 26 07:43 PDT
+"mvcc_visibility_matrix" time elapsed: 00:00:13
+----------------------------------------------------------
+
+34/62 Testing: vacuum_concurrent
+34/62 Test: vacuum_concurrent
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/vacuum_concurrent.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648459"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"vacuum_concurrent" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+vacuum_concurrent PASS seed=12648459 (5 sections, all green)
+<end of output>
+Test time =   2.95 sec
+----------------------------------------------------------
+Test Passed.
+"vacuum_concurrent" end time: Jun 26 07:43 PDT
+"vacuum_concurrent" time elapsed: 00:00:02
+----------------------------------------------------------
+
+36/62 Testing: index_heap_atomic
+36/62 Test: index_heap_atomic
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/index_heap_atomic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648441"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_heap_atomic" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+index_heap_atomic PASS seed=12648441
+<end of output>
+Test time =   4.00 sec
+----------------------------------------------------------
+Test Passed.
+"index_heap_atomic" end time: Jun 26 07:43 PDT
+"index_heap_atomic" time elapsed: 00:00:03
+----------------------------------------------------------
+
+37/62 Testing: clog_status_log
+37/62 Test: clog_status_log
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/clog_status_log.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648450"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"clog_status_log" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+clog_status_log PASS seed=12648450 committed=2 aborted=1 after_churn=49
+<end of output>
+Test time =   1.49 sec
+----------------------------------------------------------
+Test Passed.
+"clog_status_log" end time: Jun 26 07:43 PDT
+"clog_status_log" time elapsed: 00:00:01
+----------------------------------------------------------
+
+35/62 Testing: commit_durability
+35/62 Test: commit_durability
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/commit_durability.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648435"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"commit_durability" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+commit_durability PASS seed=12648435 acknowledged=80
+<end of output>
+Test time =   7.42 sec
+----------------------------------------------------------
+Test Passed.
+"commit_durability" end time: Jun 26 07:43 PDT
+"commit_durability" time elapsed: 00:00:07
+----------------------------------------------------------
+
+38/62 Testing: statement_savepoint
+38/62 Test: statement_savepoint
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/statement_savepoint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648451"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"statement_savepoint" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+statement_savepoint PASS seed=12648451
+<end of output>
+Test time =   5.99 sec
+----------------------------------------------------------
+Test Passed.
+"statement_savepoint" end time: Jun 26 07:43 PDT
+"statement_savepoint" time elapsed: 00:00:05
+----------------------------------------------------------
+
+40/62 Testing: constraints_not_null_default
+40/62 Test: constraints_not_null_default
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/constraints_not_null_default.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648437"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"constraints_not_null_default" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+constraints_not_null_default PASS seed=12648437
+<end of output>
+Test time =   3.30 sec
+----------------------------------------------------------
+Test Passed.
+"constraints_not_null_default" end time: Jun 26 07:43 PDT
+"constraints_not_null_default" time elapsed: 00:00:03
+----------------------------------------------------------
+
+41/62 Testing: post_recovery_verify
+41/62 Test: post_recovery_verify
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/post_recovery_verify.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648442"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"post_recovery_verify" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+post_recovery_verify FAIL: setup failed: rc=-6
+Data directory: /var/folders/c4/7zkhck2x1rx2y43qpv8c02hw0000gn/T/minidb-c4-pos.6yuq85lt
+Table 't' created.
+
+Index 't_v' created.
+
+affected_rows
+1
+
+affected_rows
+1
+
+Goodbye.
+==================
+WARNING: ThreadSanitizer: data race (pid=29356)
+  Read of size 8 at 0x00010ba02880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010ba02880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010ba02800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010ba02888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17209022, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=12
+ThreadSanitizer: reported 1 warnings
+
+<end of output>
+Test time =   0.61 sec
+----------------------------------------------------------
+Test Failed.
+"post_recovery_verify" end time: Jun 26 07:43 PDT
+"post_recovery_verify" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/62 Testing: ddl_implicit_commit
+39/62 Test: ddl_implicit_commit
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/ddl_implicit_commit.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648453"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"ddl_implicit_commit" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+ddl_implicit_commit PASS seed=12648453 (all DDL transactional, including metadata-only DROP COLUMN)
+<end of output>
+Test time =  10.11 sec
+----------------------------------------------------------
+Test Passed.
+"ddl_implicit_commit" end time: Jun 26 07:43 PDT
+"ddl_implicit_commit" time elapsed: 00:00:10
+----------------------------------------------------------
+
+42/62 Testing: varchar_length
+42/62 Test: varchar_length
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/varchar_length.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648445"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"varchar_length" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+varchar_length PASS seed=12648445
+<end of output>
+Test time =   4.61 sec
+----------------------------------------------------------
+Test Passed.
+"varchar_length" end time: Jun 26 07:43 PDT
+"varchar_length" time elapsed: 00:00:04
+----------------------------------------------------------
+
+43/62 Testing: check_constraint
+43/62 Test: check_constraint
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/check_constraint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648452"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"check_constraint" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+check_constraint PASS seed=12648452
+<end of output>
+Test time =   4.81 sec
+----------------------------------------------------------
+Test Passed.
+"check_constraint" end time: Jun 26 07:43 PDT
+"check_constraint" time elapsed: 00:00:04
+----------------------------------------------------------
+
+45/62 Testing: recovery_smoke
+45/62 Test: recovery_smoke
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/acid/durability/recovery_smoke.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"recovery_smoke" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=5
+[DB] destructor: flush complete, durable_lsn=5
+[DB] destructor: flush complete, durable_lsn=25
+<end of output>
+Test time =   4.30 sec
+----------------------------------------------------------
+Test Passed.
+"recovery_smoke" end time: Jun 26 07:43 PDT
+"recovery_smoke" time elapsed: 00:00:04
+----------------------------------------------------------
+
+46/62 Testing: wal_replay_slot_reuse
+46/62 Test: wal_replay_slot_reuse
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_replay_slot_reuse.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"wal_replay_slot_reuse" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=29486)
+  Read of size 8 at 0x00010df02880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010df02880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_commit(unsigned long long) <null> (minidb:arm64+0x100096e30)
+    #2 minidb::TransactionManager::commit(minidb::Transaction*) <null> (minidb:arm64+0x10016e124)
+    #3 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x1000a14c0)
+    #4 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #5 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #6 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010df02800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010df02888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17209491, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=252
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_replay_slot_reuse.sh: line 8: 29485 Done                    printf '%s\n' "$@" 'exit'
+     29486 Abort trap: 6           | "$BIN" --dir "$DB_DIR"
+<end of output>
+Test time =   0.41 sec
+----------------------------------------------------------
+Test Failed.
+"wal_replay_slot_reuse" end time: Jun 26 07:43 PDT
+"wal_replay_slot_reuse" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/62 Testing: torn_page
+47/62 Test: torn_page
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/torn_page.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648436"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"torn_page" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+torn_page PASS seed=12648436
+<end of output>
+Test time =   1.97 sec
+----------------------------------------------------------
+Test Passed.
+"torn_page" end time: Jun 26 07:43 PDT
+"torn_page" time elapsed: 00:00:01
+----------------------------------------------------------
+
+48/62 Testing: checkpoint_barrier
+48/62 Test: checkpoint_barrier
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/checkpoint_barrier.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648440"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"checkpoint_barrier" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+checkpoint_barrier PASS seed=12648440 acknowledged=28
+<end of output>
+Test time =   3.43 sec
+----------------------------------------------------------
+Test Passed.
+"checkpoint_barrier" end time: Jun 26 07:44 PDT
+"checkpoint_barrier" time elapsed: 00:00:03
+----------------------------------------------------------
+
+44/62 Testing: null_three_valued_logic
+44/62 Test: null_three_valued_logic
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/null_three_valued_logic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648454"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"null_three_valued_logic" start time: Jun 26 07:43 PDT
+Output:
+----------------------------------------------------------
+null_three_valued_logic PASS seed=12648454
+<end of output>
+Test time =  11.74 sec
+----------------------------------------------------------
+Test Passed.
+"null_three_valued_logic" end time: Jun 26 07:44 PDT
+"null_three_valued_logic" time elapsed: 00:00:11
+----------------------------------------------------------
+
+49/62 Testing: wal_record_corruption
+49/62 Test: wal_record_corruption
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_record_corruption.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648447"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"wal_record_corruption" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+wal_record_corruption PASS seed=12648447 ids=['1']
+<end of output>
+Test time =   1.08 sec
+----------------------------------------------------------
+Test Passed.
+"wal_record_corruption" end time: Jun 26 07:44 PDT
+"wal_record_corruption" time elapsed: 00:00:01
+----------------------------------------------------------
+
+50/62 Testing: index_state_machine
+50/62 Test: index_state_machine
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/index_state_machine.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648448"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_state_machine" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+index_state_machine PASS seed=12648448
+<end of output>
+Test time =   2.58 sec
+----------------------------------------------------------
+Test Passed.
+"index_state_machine" end time: Jun 26 07:44 PDT
+"index_state_machine" time elapsed: 00:00:02
+----------------------------------------------------------
+
+52/62 Testing: crash_recovery_harness
+52/62 Test: crash_recovery_harness
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/crash_recovery_harness.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648432"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"crash_recovery_harness" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+crash_recovery_harness FAIL seed=12648432: result mismatch seed=12648432
+SQL: crash cycle=8 op=uncommitted_update
+MiniDB: []
+Reference: [('43', '7078')]
+<end of output>
+Test time =   4.78 sec
+----------------------------------------------------------
+Test Failed.
+"crash_recovery_harness" end time: Jun 26 07:44 PDT
+"crash_recovery_harness" time elapsed: 00:00:04
+----------------------------------------------------------
+
+51/62 Testing: ddl_wal
+51/62 Test: ddl_wal
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/ddl_wal.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648449"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"ddl_wal" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+ddl_wal PASS seed=12648449
+<end of output>
+Test time =   8.01 sec
+----------------------------------------------------------
+Test Passed.
+"ddl_wal" end time: Jun 26 07:44 PDT
+"ddl_wal" time elapsed: 00:00:08
+----------------------------------------------------------
+
+54/62 Testing: remote_page_store
+54/62 Test: remote_page_store
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/storage/remote_page_store.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"remote_page_store" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=9
+[DB] destructor: flush complete, durable_lsn=9
+<end of output>
+Test time =   2.69 sec
+----------------------------------------------------------
+Test Passed.
+"remote_page_store" end time: Jun 26 07:44 PDT
+"remote_page_store" time elapsed: 00:00:02
+----------------------------------------------------------
+
+55/62 Testing: performance_paths
+55/62 Test: performance_paths
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_paths.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"performance_paths" start time: Jun 26 07:44 PDT
+Output:
+----------------------------------------------------------
+==================
+WARNING: ThreadSanitizer: data race (pid=29690)
+  Read of size 8 at 0x00010b602880 by thread T1:
+    #0 minidb::WalManager::bytes_since_checkpoint() const <null> (minidb:arm64+0x10002fdd0)
+    #1 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f830)
+    #2 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #3 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #4 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Previous write of size 8 at 0x00010b602880 by main thread (mutexes: write M0):
+    #0 minidb::WalManager::write_record(minidb::WalType, unsigned long long, unsigned char const*, unsigned int) <null> (minidb:arm64+0x100096694)
+    #1 minidb::WalManager::log_index_insert(unsigned long long, unsigned int, minidb::IndexKey const&, minidb::RecordId const&) <null> (minidb:arm64+0x100097ccc)
+    #2 minidb::Database::insert_index_entries(unsigned int, minidb::Tuple const&, minidb::RecordId const&) <null> (minidb:arm64+0x10003ac08)
+    #3 minidb::InsertExecutor::next() <null> (minidb:arm64+0x1000eb700)
+    #4 minidb::InsertExecutor::next() <null> (minidb:arm64+0x1000ea650)
+    #5 minidb::REPL::execute_sql(minidb::String const&) <null> (minidb:arm64+0x10009dc28)
+    #6 minidb::REPL::run() <null> (minidb:arm64+0x10009c70c)
+    #7 <null> <null> (0x000199f3dd54)
+
+  As if synchronized via sleep:
+    #0 nanosleep <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2dc28)
+    #1 std::__1::this_thread::sleep_for(std::__1::chrono::duration<long long, std::__1::ratio<1l, 1000000000l>> const&) <null> (libc++.1.dylib:arm64e+0x24404)
+    #2 minidb::Database::background_maintenance_loop() <null> (minidb:arm64+0x10002f618)
+    #3 decltype(*std::declval<minidb::Database*>().*std::declval<void (minidb::Database::*)()>()()) std::__1::__invoke[abi:ne200100]<void (minidb::Database::*)(), minidb::Database*, void>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x1000437e4)
+    #4 void std::__1::__thread_execute[abi:ne200100]<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*, 2ul>(std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>&, std::__1::__tuple_indices<2ul>) <null> (minidb:arm64+0x10004367c)
+    #5 void* std::__1::__thread_proxy[abi:ne200100]<std::__1::tuple<std::__1::unique_ptr<std::__1::__thread_struct, std::__1::default_delete<std::__1::__thread_struct>>, void (minidb::Database::*)(), minidb::Database*>>(void*) <null> (minidb:arm64+0x100042ee0)
+
+  Location is heap block of size 8448 at 0x00010b602800 allocated by main thread:
+    #0 operator new(unsigned long) <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x867c4)
+    #1 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c354)
+    #2 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #3 main <null> (minidb:arm64+0x1000019dc)
+
+  Mutex M0 (0x00010b602888) created at:
+    #0 pthread_mutex_init <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x310f8)
+    #1 minidb::Mutex::Mutex() <null> (minidb:arm64+0x100011588)
+    #2 minidb::Mutex::Mutex() <null> (minidb:arm64+0x1000115e4)
+    #3 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095c3c)
+    #4 minidb::WalManager::WalManager(minidb::String const&, unsigned long long, bool, bool, unsigned long long) <null> (minidb:arm64+0x100095e48)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c3f4)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+  Thread T1 (tid=17210232, running) created by main thread at:
+    #0 pthread_create <null> (libclang_rt.tsan_osx_dynamic.dylib:arm64e+0x2f708)
+    #1 std::__1::__libcpp_thread_create[abi:ne200100](_opaque_pthread_t**, void* (*)(void*), void*) <null> (minidb:arm64+0x100042e48)
+    #2 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x100042be4)
+    #3 std::__1::thread::thread<void (minidb::Database::*)(), minidb::Database*, 0>(void (minidb::Database::*&&)(), minidb::Database*&&) <null> (minidb:arm64+0x10002f920)
+    #4 minidb::Database::start_background_maintenance() <null> (minidb:arm64+0x10002e960)
+    #5 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002c838)
+    #6 minidb::Database::Database(minidb::String const&, minidb::DbConfig const&) <null> (minidb:arm64+0x10002caec)
+    #7 main <null> (minidb:arm64+0x1000019dc)
+
+SUMMARY: ThreadSanitizer: data race (minidb:arm64+0x10002fdd0) in minidb::WalManager::bytes_since_checkpoint() const+0x34
+==================
+[DB] destructor: flush complete, durable_lsn=4117
+ThreadSanitizer: reported 1 warnings
+/Users/lixiang/wx-files/minidb/tests/performance/performance_paths.sh: line 72: 29690 Abort trap: 6           "$BIN" --dir "$DB_DIR" < "$SQL_FILE" > "$OUT_FILE"
+<end of output>
+Test time =   1.07 sec
+----------------------------------------------------------
+Test Failed.
+"performance_paths" end time: Jun 26 07:44 PDT
+"performance_paths" time elapsed: 00:00:01
+----------------------------------------------------------
+
