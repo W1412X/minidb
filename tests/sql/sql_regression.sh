@@ -346,3 +346,18 @@ require_contains 'id
 1' "$def_out"
 require_contains 'agg_0
 1' "$def_out"
+
+# Compiled predicate must compare cross-type numerics by value, matching the
+# interpreter. A genuine int64 value (via CAST) compared to an int32 literal
+# must still match — raw Value::compare would order by type-id and miss it.
+xtype_out="$(
+    run_sql \
+        'CREATE TABLE xt (id BIGINT);' \
+        'INSERT INTO xt VALUES (CAST(3 AS BIGINT)), (CAST(8 AS BIGINT));' \
+        'SELECT id FROM xt WHERE id = 3;' \
+        'SELECT COUNT(*) FROM xt WHERE id < 5;'
+)"
+require_contains 'id
+3' "$xtype_out"
+require_contains 'agg_0
+1' "$xtype_out"

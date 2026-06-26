@@ -110,14 +110,21 @@ bool CompiledPredicate::passes(const Tuple& tuple) const {
                 const Value& l = s[static_cast<u32>(node.left)];
                 const Value& r = s[static_cast<u32>(node.right)];
                 if (l.is_null() || r.is_null()) { s[i] = Value(); break; }
+                // Use the type-aware comparison so the compiled path matches the
+                // interpreter. Raw Value operators order by type-id when types
+                // differ, so e.g. an int64 column compared to an int32 literal
+                // (id = 3 after CAST(3 AS BIGINT)) would never match here while
+                // the interpreted Filter matched — a compiled-vs-interpreted
+                // divergence that made results depend on the chosen plan.
+                int cmp = ExpressionEvaluator::compare_values(l, r);
                 bool b = false;
                 switch (node.op_code) {
-                    case kCmpEq: b = (l == r); break;
-                    case kCmpNe: b = (l != r); break;
-                    case kCmpLt: b = (l <  r); break;
-                    case kCmpGt: b = (l >  r); break;
-                    case kCmpLe: b = (l <= r); break;
-                    case kCmpGe: b = (l >= r); break;
+                    case kCmpEq: b = (cmp == 0); break;
+                    case kCmpNe: b = (cmp != 0); break;
+                    case kCmpLt: b = (cmp <  0); break;
+                    case kCmpGt: b = (cmp >  0); break;
+                    case kCmpLe: b = (cmp <= 0); break;
+                    case kCmpGe: b = (cmp >= 0); break;
                 }
                 s[i] = Value(b);
                 break;
