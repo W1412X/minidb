@@ -181,12 +181,6 @@ u32 find_unquoted_semicolon(const String& text, u32 from, ScanState* state) {
     return text.size();
 }
 
-bool statement_is_complete(const String& text) {
-    ScanState s;
-    u32 pos = find_unquoted_semicolon(text, 0, &s);
-    return pos < text.size();
-}
-
 String strip_leading_ws(const String& s) {
     u32 i = 0;
     while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;

@@ -190,16 +190,6 @@ static bool skip_value_bounded(const byte*& buf, const byte* end) {
     }
 }
 
-static bool column_projected(u32 col_idx, const Vector<u32>& projected, u32* out_pos) {
-    for (u32 i = 0; i < projected.size(); i++) {
-        if (projected[i] == col_idx) {
-            if (out_pos) *out_pos = i;
-            return true;
-        }
-    }
-    return false;
-}
-
 Tuple Tuple::deserialize_from_page(const byte* buf, const Schema& schema) {
     return deserialize_from_page(buf, schema, kPageSize);
 }
