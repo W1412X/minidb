@@ -1,79 +1,65 @@
-lock_manager_wait_test 1 1.99736
-tuple_value_edge_test 1 1.62595
+lock_manager_wait_test 2 1.50317
+tuple_value_edge_test 2 1.12482
 page_store_remote_test 0 0
-wal_buffer_pool_test 1 0.554081
-transaction_slots_test 1 0.647637
-btree_property_test 1 2.01912
-index_key_btree_test 1 0.653752
-datetime_parse_test 1 0.49141
-container_test 1 0.486342
-sql_regression 0 0
-sql_keyword_combinations 0 0
-full_sql_suite 1 0.587968
-datetime_types 0 0
-join_syntax_strict 1 0.299648
-semantic_validation 0 0
-join_optimizer 0 0
-filter_pushdown 0 0
-sql_correctness_matrix 1 58.7009
-differential_sqlite 1 71.5389
-select_empty_list 1 3.88767
-p1_features 1 25.7162
-alter_table_semantics 0 0
-hot_index_semantics 0 0
-persistence_and_composite 0 0
-index_delete_rebuild 1 0.726752
-index_unique_matrix 0 0
-mvcc_lock_regression 1 9.65844
-lost_update 1 5.56644
-mvcc_visibility_matrix 1 13.9296
-write_skew 1 3.35192
-write_skew_serializable 1 1.50755
-phantom_read 1 1.66548
-long_snapshot_gc 1 3.36184
-vacuum_concurrent 1 2.949
-commit_durability 1 7.42093
-index_heap_atomic 1 3.99641
-clog_status_log 1 1.49465
-statement_savepoint 1 5.9926
-ddl_implicit_commit 1 10.1059
-constraints_not_null_default 1 3.30478
-post_recovery_verify 0 0
-varchar_length 1 4.60635
-check_constraint 1 4.80936
-null_three_valued_logic 1 11.7368
-recovery_smoke 1 4.30315
-wal_replay_slot_reuse 0 0
-torn_page 1 1.96769
-checkpoint_barrier 1 3.43112
-wal_record_corruption 1 1.08332
-index_state_machine 1 2.57826
-ddl_wal 1 8.01358
+wal_buffer_pool_test 2 0.599893
+transaction_slots_test 2 0.863254
+btree_property_test 2 1.89716
+index_key_btree_test 2 0.668964
+datetime_parse_test 2 0.570506
+container_test 2 0.734726
+sql_regression 1 3.29656
+sql_keyword_combinations 1 0.307611
+full_sql_suite 2 0.613472
+datetime_types 1 0.268191
+join_syntax_strict 2 0.353636
+semantic_validation 1 4.61778
+join_optimizer 1 1.12604
+filter_pushdown 1 2.49846
+sql_correctness_matrix 2 52.1662
+differential_sqlite 2 66.2774
+select_empty_list 2 3.52769
+p1_features 2 24.4492
+alter_table_semantics 1 0.583741
+hot_index_semantics 1 0.301745
+persistence_and_composite 1 0.869521
+index_delete_rebuild 2 0.678498
+index_unique_matrix 1 0.60198
+mvcc_lock_regression 2 9.57382
+lost_update 2 5.47825
+mvcc_visibility_matrix 2 13.9022
+write_skew 2 3.24581
+write_skew_serializable 2 1.4579
+phantom_read 2 1.60414
+long_snapshot_gc 2 3.06117
+vacuum_concurrent 2 2.81006
+commit_durability 2 7.47564
+index_heap_atomic 2 3.55879
+clog_status_log 2 1.34705
+statement_savepoint 2 5.85167
+ddl_implicit_commit 2 10.1892
+constraints_not_null_default 2 3.0482
+post_recovery_verify 1 1.34985
+varchar_length 2 4.12017
+check_constraint 2 4.06192
+null_three_valued_logic 2 11.7744
+recovery_smoke 2 4.14045
+wal_replay_slot_reuse 1 1.42303
+torn_page 2 1.8005
+checkpoint_barrier 2 3.33177
+wal_record_corruption 2 1.03503
+index_state_machine 2 2.52425
+ddl_wal 2 8.14543
 crash_recovery_harness 0 0
-ddl_crash_recovery 1 11.2225
-remote_page_store 1 2.68969
-performance_paths 0 0
-performance_delivery 1 1.93787
-performance_optimizations 1 0.506102
-bulk_update_delete_perf 0 0
-production_regression 1 0.850276
-resource_limits 1 0.933252
-update_halloween 1 2.93711
-lsn_watermark_restart 1 2.18659
+ddl_crash_recovery 2 11.2381
+remote_page_store 2 2.69608
+performance_paths 1 0.718978
+performance_delivery 2 1.92244
+performance_optimizations 2 0.48521
+bulk_update_delete_perf 1 1.08452
+production_regression 2 0.77523
+resource_limits 2 0.871419
+update_halloween 2 2.65812
+lsn_watermark_restart 2 1.88671
 ---
 page_store_remote_test
-sql_keyword_combinations
-sql_regression
-datetime_types
-semantic_validation
-filter_pushdown
-join_optimizer
-alter_table_semantics
-hot_index_semantics
-persistence_and_composite
-index_unique_matrix
-post_recovery_verify
-wal_replay_slot_reuse
 crash_recovery_harness
-performance_paths
-bulk_update_delete_perf

@@ -104,10 +104,16 @@ bool PageServerTcpService::start() {
 
 void PageServerTcpService::stop() {
     bool was_running = running_.exchange(false);
-    if (listen_fd_ >= 0) {
-        shutdown_fd(listen_fd_);
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    // Close (but do not yet clear) the listening socket to unblock the
+    // acceptor's blocking accept(). We must not write listen_fd_ here: the
+    // acceptor reads it concurrently in accept(listen_fd_), and a concurrent
+    // read+write of the same int is a data race. Two reads do not conflict,
+    // so close() using the current value is safe; the -1 store is deferred
+    // until after accept_thread_ is joined, when no other thread touches it.
+    int fd = listen_fd_;
+    if (fd >= 0) {
+        shutdown_fd(fd);
+        ::close(fd);
     }
     if (was_running) {
         LockGuard clients_guard(clients_latch_);
@@ -118,6 +124,7 @@ void PageServerTcpService::stop() {
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
+    listen_fd_ = -1;  // safe now: the acceptor has exited
     {
         LockGuard workers_guard(workers_latch_);
         for (size_t i = 0; i < worker_threads_.size(); i++) {
