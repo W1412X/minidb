@@ -42,14 +42,23 @@ inline String encode_value_key(const Value& value) {
                           static_cast<long long>(value.get_datetime_micros()));
             text = buf;
             break;
-        case TypeId::kFloat:
-            std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(value.get_float()));
+        case TypeId::kFloat: {
+            // Normalize -0.0 to 0.0 so it keys identically to +0.0: %g prints
+            // them as "-0" vs "0", which would make DISTINCT/GROUP BY/UNION
+            // treat them as different even though Value::compare says equal.
+            double d = static_cast<double>(value.get_float());
+            if (d == 0.0) d = 0.0;
+            std::snprintf(buf, sizeof(buf), "%.9g", d);
             text = buf;
             break;
-        case TypeId::kDouble:
-            std::snprintf(buf, sizeof(buf), "%.17g", value.get_double());
+        }
+        case TypeId::kDouble: {
+            double d = value.get_double();
+            if (d == 0.0) d = 0.0;
+            std::snprintf(buf, sizeof(buf), "%.17g", d);
             text = buf;
             break;
+        }
         case TypeId::kVarchar:
             text = value.get_string();
             break;
