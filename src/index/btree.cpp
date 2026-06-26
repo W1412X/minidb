@@ -402,6 +402,26 @@ bool BPlusTree::insert(const IndexKey& key, const RecordId& rid) {
 }
 
 bool BPlusTree::bulk_load_sorted(const Vector<BTreeBulkEntry>& entries) {
+    // NULL key values break the bulk builder: the caller pre-sorts with a
+    // comparator that does not match the tree's navigation order for NULLs, so
+    // the resulting separators are inconsistent and point searches for the
+    // non-null keys fail. When any key holds a NULL, fall back to per-key
+    // insert(), which navigates with the tree's own comparator and places each
+    // entry correctly (the tree must already be created by the caller). This
+    // keeps the fast bulk path for the common all-non-null case.
+    for (u32 i = 0; i < entries.size(); i++) {
+        bool has_null = false;
+        for (u32 j = 0; j < entries[i].key.column_count(); j++) {
+            if (entries[i].key.value(j).is_null()) { has_null = true; break; }
+        }
+        if (has_null) {
+            for (u32 k = 0; k < entries.size(); k++) {
+                if (!insert(entries[k].key, entries[k].rid)) return false;
+            }
+            return true;
+        }
+    }
+
     WriteGuard guard(tree_latch_);
     if (root_page_id_ == kNullPageId) {
         create();

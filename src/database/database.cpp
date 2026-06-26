@@ -24,15 +24,7 @@ static bool btree_supports_type(TypeId type) {
 static IndexKey index_key_from_tuple(const IndexEntry& index, const Tuple& tuple) {
     Vector<Value> values;
     for (u32 i = 0; i < index.key_columns.size(); i++) {
-        const Value& v = tuple.get_value(index.key_columns[i]);
-        // A key column that is NULL is not indexed: NULL never satisfies an
-        // equality/range predicate (IS NULL uses a sequential scan), and a
-        // UNIQUE column permits multiple NULLs. Returning an empty key (which
-        // every index-maintenance path skips via is_null()) keeps NULLs out of
-        // the B+tree — bulk_load_sorted in particular produced a corrupt tree
-        // when fed NULL keys, breaking lookups for the non-null rows too.
-        if (v.is_null()) return IndexKey();
-        values.push_back(v);
+        values.push_back(tuple.get_value(index.key_columns[i]));
     }
     return IndexKey::from_values(values);
 }
@@ -501,22 +493,23 @@ bool Database::create_index(const String& name, const String& table_name,
                                                            table->schema, lp->length);
                 if (tuple.xmax() != kInvalidTxnId) continue;
                 IndexKey key = index_key_from_tuple(probe, tuple);
-                if (key.is_null()) continue;  // NULL key columns are not indexed
                 if (!key.fits()) {
                     pool_->unpin_page(page_id);
                     return false;
                 }
                 if (unique) {
                     String unique_key;
-                    if (!make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
-                        pool_->unpin_page(page_id);
-                        return false;
+                    // make_projected_tuple_key returns false when any key column
+                    // is NULL. A UNIQUE column permits multiple NULLs, so only
+                    // enforce uniqueness for fully-non-null keys; NULL-bearing
+                    // rows are still indexed (the bulk loader handles NULL keys).
+                    if (make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
+                        if (seen_keys.find(unique_key)) {
+                            pool_->unpin_page(page_id);
+                            return false;
+                        }
+                        seen_keys.insert(unique_key, true);
                     }
-                    if (seen_keys.find(unique_key)) {
-                        pool_->unpin_page(page_id);
-                        return false;
-                    }
-                    seen_keys.insert(unique_key, true);
                 }
                 entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }

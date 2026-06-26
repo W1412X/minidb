@@ -464,3 +464,27 @@ require_contains 'id
 3' "$nullidx_out"
 require_contains 'agg_0
 2' "$nullidx_out"
+
+# CREATE INDEX with NULLs, harder cases: a composite key with a trailing NULL
+# must still be found by a prefix query (the leading column is non-null), and
+# CREATE UNIQUE INDEX over existing NULL rows must succeed (multiple NULLs are
+# allowed) while still rejecting duplicate non-null values.
+nullidx2_out="$(
+    run_sql \
+        'CREATE TABLE nidx2 (id INT PRIMARY KEY, a INT, b INT);' \
+        'INSERT INTO nidx2 VALUES (1,10,100),(2,10,NULL),(3,20,200);' \
+        'CREATE INDEX nidx2_ab ON nidx2(a,b);' \
+        'SELECT id FROM nidx2 WHERE a = 10 ORDER BY id;' \
+        'CREATE TABLE nuq (id INT PRIMARY KEY, e INT);' \
+        'INSERT INTO nuq VALUES (1,100),(2,NULL),(3,NULL),(4,200);' \
+        'CREATE UNIQUE INDEX nuq_e ON nuq(e);' \
+        'INSERT INTO nuq VALUES (5, NULL);' \
+        'INSERT INTO nuq VALUES (6, 100);' \
+        'SELECT COUNT(*) FROM nuq;'
+)"
+require_contains 'id
+1
+2' "$nullidx2_out"
+require_not_contains 'failed to create index' "$nullidx2_out"
+require_contains 'agg_0
+5' "$nullidx2_out"
