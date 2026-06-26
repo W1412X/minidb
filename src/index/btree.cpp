@@ -900,7 +900,11 @@ void BPlusTree::borrow_from_left_leaf(PageId leaf_id, PageId left_id,
                                        PageId parent_id, u16 parent_idx) {
     auto l_result = pool_->fetch_page(left_id);
     auto r_result = pool_->fetch_page(leaf_id);
-    if (!l_result.ok() || !r_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(left_id);
+        if (r_result.ok()) pool_->unpin_page(leaf_id);
+        return;
+    }
 
     Page* left = l_result.value();
     Page* leaf = r_result.value();
@@ -937,7 +941,11 @@ void BPlusTree::borrow_from_right_leaf(PageId leaf_id, PageId right_id,
                                         PageId parent_id, u16 parent_idx) {
     auto l_result = pool_->fetch_page(leaf_id);
     auto r_result = pool_->fetch_page(right_id);
-    if (!l_result.ok() || !r_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(leaf_id);
+        if (r_result.ok()) pool_->unpin_page(right_id);
+        return;
+    }
 
     Page* leaf = l_result.value();
     Page* right = r_result.value();
@@ -975,7 +983,11 @@ void BPlusTree::merge_leaves(PageId left_id, PageId right_id,
                               PageId parent_id, u16 parent_idx) {
     auto l_result = pool_->fetch_page(left_id);
     auto r_result = pool_->fetch_page(right_id);
-    if (!l_result.ok() || !r_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(left_id);
+        if (r_result.ok()) pool_->unpin_page(right_id);
+        return;
+    }
 
     Page* left = l_result.value();
     Page* right = r_result.value();
@@ -1001,6 +1013,10 @@ void BPlusTree::merge_leaves(PageId left_id, PageId right_id,
     if (!p_result.ok()) return;
     Page* parent = p_result.value();
     u16 pn = internal_num_keys(parent);
+    // Two adjacent children always imply at least one separator key, so pn>=1
+    // here. Guard the u16 subtraction anyway: pn-1 would wrap to 65535 and the
+    // shift loop would stomp the whole page if the invariant were ever broken.
+    if (pn == 0) { pool_->unpin_page(parent_id); return; }
 
     for (u16 i = parent_idx; i < pn - 1; i++) {
         internal_set_key(parent, i, internal_key(parent, i + 1));
@@ -1040,7 +1056,12 @@ void BPlusTree::borrow_from_left_internal(PageId node_id, PageId left_id,
     auto l_result = pool_->fetch_page(left_id);
     auto r_result = pool_->fetch_page(node_id);
     auto p_result = pool_->fetch_page(parent_id);
-    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(left_id);
+        if (r_result.ok()) pool_->unpin_page(node_id);
+        if (p_result.ok()) pool_->unpin_page(parent_id);
+        return;
+    }
 
     Page* left = l_result.value();
     Page* node = r_result.value();
@@ -1078,7 +1099,12 @@ void BPlusTree::borrow_from_right_internal(PageId node_id, PageId right_id,
     auto l_result = pool_->fetch_page(node_id);
     auto r_result = pool_->fetch_page(right_id);
     auto p_result = pool_->fetch_page(parent_id);
-    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(node_id);
+        if (r_result.ok()) pool_->unpin_page(right_id);
+        if (p_result.ok()) pool_->unpin_page(parent_id);
+        return;
+    }
 
     Page* node = l_result.value();
     Page* right = r_result.value();
@@ -1117,7 +1143,12 @@ void BPlusTree::merge_internal_nodes(PageId left_id, PageId right_id,
     auto l_result = pool_->fetch_page(left_id);
     auto r_result = pool_->fetch_page(right_id);
     auto p_result = pool_->fetch_page(parent_id);
-    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) return;
+    if (!l_result.ok() || !r_result.ok() || !p_result.ok()) {
+        if (l_result.ok()) pool_->unpin_page(left_id);
+        if (r_result.ok()) pool_->unpin_page(right_id);
+        if (p_result.ok()) pool_->unpin_page(parent_id);
+        return;
+    }
 
     Page* left = l_result.value();
     Page* right = r_result.value();
@@ -1142,6 +1173,9 @@ void BPlusTree::merge_internal_nodes(PageId left_id, PageId right_id,
 
     // Remove separator from parent (already fetched as parent)
     u16 pn = internal_num_keys(parent);
+    // Guard the u16 subtraction: pn-1 wraps to 65535 if the (normally
+    // impossible) pn==0 case were ever reached, overwriting the whole page.
+    if (pn == 0) { pool_->unpin_page(parent_id); return; }
 
     for (u16 i = parent_idx; i < pn - 1; i++) {
         internal_set_key(parent, i, internal_key(parent, i + 1));
