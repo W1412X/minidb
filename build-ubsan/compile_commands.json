@@ -1,0 +1,422 @@
+[
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/catalog/catalog.cpp.o -c /Users/lixiang/wx-files/minidb/src/catalog/catalog.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/catalog/catalog.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/catalog/catalog.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/datetime.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/datetime.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/datetime.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/datetime.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/db_config.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/db_config.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/db_config.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/db_config.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/mutex.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/mutex.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/mutex.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/mutex.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/resource_manager.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/resource_manager.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/resource_manager.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/resource_manager.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/sql_types.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/sql_types.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/sql_types.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/sql_types.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/common/trace.cpp.o -c /Users/lixiang/wx-files/minidb/src/common/trace.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/common/trace.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/common/trace.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/concurrency/lock_manager.cpp.o -c /Users/lixiang/wx-files/minidb/src/concurrency/lock_manager.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/concurrency/lock_manager.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/concurrency/lock_manager.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/container/string.cpp.o -c /Users/lixiang/wx-files/minidb/src/container/string.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/container/string.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/container/string.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/database/database.cpp.o -c /Users/lixiang/wx-files/minidb/src/database/database.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/database/database.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/database/database.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/index/btree.cpp.o -c /Users/lixiang/wx-files/minidb/src/index/btree.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/index/btree.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/index/btree.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/index/index_iterator.cpp.o -c /Users/lixiang/wx-files/minidb/src/index/index_iterator.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/index/index_iterator.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/index/index_iterator.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/index/index_key.cpp.o -c /Users/lixiang/wx-files/minidb/src/index/index_key.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/index/index_key.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/index/index_key.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/network/server.cpp.o -c /Users/lixiang/wx-files/minidb/src/network/server.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/network/server.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/network/server.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/record/schema.cpp.o -c /Users/lixiang/wx-files/minidb/src/record/schema.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/record/schema.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/record/schema.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/record/tuple.cpp.o -c /Users/lixiang/wx-files/minidb/src/record/tuple.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/record/tuple.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/record/tuple.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/record/value.cpp.o -c /Users/lixiang/wx-files/minidb/src/record/value.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/record/value.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/record/value.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/recovery/gc.cpp.o -c /Users/lixiang/wx-files/minidb/src/recovery/gc.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/recovery/gc.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/recovery/gc.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/recovery/wal.cpp.o -c /Users/lixiang/wx-files/minidb/src/recovery/wal.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/recovery/wal.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/recovery/wal.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/repl/repl.cpp.o -c /Users/lixiang/wx-files/minidb/src/repl/repl.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/repl/repl.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/repl/repl.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/aggregate_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/aggregate_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/aggregate_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/aggregate_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/compiled_predicate.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/compiled_predicate.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/compiled_predicate.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/compiled_predicate.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/delete.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/delete.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/delete.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/delete.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/distinct_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/distinct_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/distinct_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/distinct_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/executor_factory.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/executor_factory.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/executor_factory.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/executor_factory.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/expression_evaluator.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/expression_evaluator.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/expression_evaluator.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/expression_evaluator.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/filter.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/filter.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/filter.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/filter.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/hash_join_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/hash_join_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/hash_join_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/hash_join_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/index_lookup_join.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/index_lookup_join.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/index_lookup_join.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/index_lookup_join.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/index_scan_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/index_scan_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/index_scan_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/index_scan_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/insert.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/insert.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/insert.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/insert.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/limit_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/limit_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/limit_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/limit_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/nested_loop_join.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/nested_loop_join.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/nested_loop_join.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/nested_loop_join.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/project.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/project.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/project.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/project.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/seq_scan.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/seq_scan.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/seq_scan.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/seq_scan.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/sort_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/sort_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/sort_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/sort_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/subquery_in_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/subquery_in_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/subquery_in_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/subquery_in_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/trace_report.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/trace_report.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/trace_report.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/trace_report.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/union_executor.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/union_executor.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/union_executor.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/union_executor.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/executor/update.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/executor/update.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/executor/update.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/executor/update.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/optimizer/optimizer.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/optimizer/optimizer.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/optimizer/optimizer.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/optimizer/optimizer.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/parser/lexer.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/parser/lexer.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/parser/lexer.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/parser/lexer.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/parser/parser.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/parser/parser.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/parser/parser.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/parser/parser.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/planner/plan_node.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/planner/plan_node.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/planner/plan_node.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/planner/plan_node.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/planner/planner.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/planner/planner.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/planner/planner.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/planner/planner.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/sql/planner/semantic_validator.cpp.o -c /Users/lixiang/wx-files/minidb/src/sql/planner/semantic_validator.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/sql/planner/semantic_validator.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/sql/planner/semantic_validator.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/buffer_pool.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/buffer_pool.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/buffer_pool.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/buffer_pool.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/disk_manager.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/disk_manager.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/disk_manager.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/disk_manager.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/fsm.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/fsm.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/fsm.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/fsm.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/heap_file.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/heap_file.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/heap_file.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/heap_file.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/page.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/page.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/page.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/page.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/page_server.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/page_server.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/page_server.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/page_server.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/page_server_tcp.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/page_server_tcp.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/page_server_tcp.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/page_server_tcp.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/page_store.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/page_store.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/page_store.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/page_store.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/remote_page_store_client.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/remote_page_store_client.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/remote_page_store_client.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/remote_page_store_client.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/shared_memory.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/shared_memory.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/shared_memory.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/shared_memory.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/shm.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/shm.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/shm.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/shm.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/storage/visibility_map.cpp.o -c /Users/lixiang/wx-files/minidb/src/storage/visibility_map.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/storage/visibility_map.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/storage/visibility_map.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/transaction/transaction.cpp.o -c /Users/lixiang/wx-files/minidb/src/transaction/transaction.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/transaction/transaction.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/transaction/transaction.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_lib.dir/src/transaction/txn_status_log.cpp.o -c /Users/lixiang/wx-files/minidb/src/transaction/txn_status_log.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/transaction/txn_status_log.cpp",
+  "output": "CMakeFiles/minidb_lib.dir/src/transaction/txn_status_log.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb.dir/src/main.cpp.o -c /Users/lixiang/wx-files/minidb/src/main.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/main.cpp",
+  "output": "CMakeFiles/minidb.dir/src/main.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/minidb_pageserver.dir/src/pageserver_main.cpp.o -c /Users/lixiang/wx-files/minidb/src/pageserver_main.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/src/pageserver_main.cpp",
+  "output": "CMakeFiles/minidb_pageserver.dir/src/pageserver_main.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/lock_manager_wait_test.dir/unit/lock_manager_wait_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/lock_manager_wait_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/lock_manager_wait_test.cpp",
+  "output": "tests/CMakeFiles/lock_manager_wait_test.dir/unit/lock_manager_wait_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/tuple_value_edge_test.dir/unit/tuple_value_edge_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/tuple_value_edge_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/tuple_value_edge_test.cpp",
+  "output": "tests/CMakeFiles/tuple_value_edge_test.dir/unit/tuple_value_edge_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/page_store_remote_test.dir/unit/page_store_remote_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/page_store_remote_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/page_store_remote_test.cpp",
+  "output": "tests/CMakeFiles/page_store_remote_test.dir/unit/page_store_remote_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/wal_buffer_pool_test.dir/unit/wal_buffer_pool_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/wal_buffer_pool_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/wal_buffer_pool_test.cpp",
+  "output": "tests/CMakeFiles/wal_buffer_pool_test.dir/unit/wal_buffer_pool_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/transaction_slots_test.dir/unit/transaction_slots_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/transaction_slots_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/transaction_slots_test.cpp",
+  "output": "tests/CMakeFiles/transaction_slots_test.dir/unit/transaction_slots_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/btree_property_test.dir/unit/btree_property_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/btree_property_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/btree_property_test.cpp",
+  "output": "tests/CMakeFiles/btree_property_test.dir/unit/btree_property_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/index_key_btree_test.dir/unit/index_key_btree_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/index_key_btree_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/index_key_btree_test.cpp",
+  "output": "tests/CMakeFiles/index_key_btree_test.dir/unit/index_key_btree_test.cpp.o"
+},
+{
+  "directory": "/Users/lixiang/wx-files/minidb/build-ubsan/tests",
+  "command": "/usr/bin/c++  -I/Users/lixiang/wx-files/minidb/src  -Wall -Wextra -Wpedantic -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -nostdinc++ -isystem/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -fsanitize=undefined -fno-omit-frame-pointer -o CMakeFiles/datetime_parse_test.dir/unit/datetime_parse_test.cpp.o -c /Users/lixiang/wx-files/minidb/tests/unit/datetime_parse_test.cpp",
+  "file": "/Users/lixiang/wx-files/minidb/tests/unit/datetime_parse_test.cpp",
+  "output": "tests/CMakeFiles/datetime_parse_test.dir/unit/datetime_parse_test.cpp.o"
+}
+]
