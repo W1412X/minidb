@@ -14,7 +14,7 @@ public:
     UniquePtr() noexcept : ptr_(nullptr) {}
     explicit UniquePtr(T* ptr) noexcept : ptr_(ptr) {}
     UniquePtr(std::nullptr_t) noexcept : ptr_(nullptr) {}
-    ~UniquePtr() { delete ptr_; }
+    ~UniquePtr() { destroy(ptr_); }
 
     // Move semantics.
     UniquePtr(UniquePtr&& other) noexcept : ptr_(other.ptr_) {
@@ -27,7 +27,7 @@ public:
 
     UniquePtr& operator=(UniquePtr&& other) noexcept {
         if (this != &other) {
-            delete ptr_;
+            destroy(ptr_);
             ptr_ = other.ptr_;
             other.ptr_ = nullptr;
         }
@@ -54,10 +54,19 @@ public:
     void reset(T* ptr = nullptr) noexcept {
         T* old = ptr_;
         ptr_ = ptr;
-        delete old;
+        destroy(old);
     }
 
 private:
+    // Deleting a pointer to an incomplete type is undefined behavior: the
+    // compiler cannot see the (possibly non-trivial) destructor and silently
+    // skips it, leaking owned resources. Force a hard compile error at every
+    // deletion site instead — matching std::unique_ptr's default_delete.
+    static void destroy(T* p) noexcept {
+        static_assert(sizeof(T) > 0, "cannot delete pointer to incomplete type");
+        delete p;
+    }
+
     T* ptr_;
 };
 
