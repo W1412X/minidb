@@ -502,3 +502,19 @@ require_contains '1 | 30' "$scalarsel_out"
 require_contains '3 | 30' "$scalarsel_out"
 require_contains 'c
 3' "$scalarsel_out"
+
+# DELETE/UPDATE whose WHERE is an IN-subquery must locate and mutate the
+# matching rows (the IN-subquery executor must forward the row id).
+inmut_out="$(
+    run_sql \
+        'CREATE TABLE inm (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO inm VALUES (1,10),(2,20),(3,30);' \
+        'DELETE FROM inm WHERE v IN (SELECT v FROM inm WHERE id = 1);' \
+        'SELECT id FROM inm ORDER BY id;' \
+        'UPDATE inm SET v = 99 WHERE v IN (SELECT v FROM inm WHERE id = 2);' \
+        'SELECT id, v FROM inm ORDER BY id;'
+)"
+require_contains 'deleted_rows
+1' "$inmut_out"
+require_contains '2 | 99' "$inmut_out"
+require_not_contains '1 | 10' "$inmut_out"

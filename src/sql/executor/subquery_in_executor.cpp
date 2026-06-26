@@ -69,4 +69,8 @@ ExecResult SubqueryInExecutor::next() {
 
 const Schema& SubqueryInExecutor::output_schema() const { return output_schema_; }
 
+bool SubqueryInExecutor::last_record_id(RecordId* rid) const {
+    return child_ ? child_->last_record_id(rid) : false;
+}
+
 } // namespace minidb
