@@ -1,6 +1,6 @@
 /**
  * @file database.h
- * @brief Database — Unified management of DiskManager, BufferPool, Catalog, HeapFile, LockManager, SharedMemory
+ * @brief Database — Unified management of DiskManager, BufferPool, Catalog, HeapFile, LockManager
  */
 #pragma once
 
@@ -13,7 +13,6 @@
 #include "storage/page_server.h"
 #include "storage/remote_page_store_client.h"
 #include "storage/heap_file.h"
-#include "storage/shared_memory.h"
 #include "catalog/catalog.h"
 #include "transaction/transaction.h"
 #include "recovery/wal.h"
@@ -70,7 +69,6 @@ public:
     ResourceManager& resources() { return *resources_; }
     String stats_summary() const;
     LockManager& lock_manager() { return lock_mgr_; }
-    SharedMemory* shared_memory() { return shm_.get(); }
     void maybe_gc();
     void vacuum();
     void collect_statistics(u32 table_id);  // W18: Collect column-level statistics
@@ -115,7 +113,6 @@ private:
     Catalog catalog_;
     TransactionManager txn_manager_;
     LockManager lock_mgr_;
-    UniquePtr<SharedMemory> shm_;
     UniquePtr<WalManager> wal_;
     UniquePtr<GarbageCollector> gc_;
     u32 ops_since_gc_;

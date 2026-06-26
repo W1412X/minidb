@@ -136,8 +136,6 @@ Database::Database(const String& db_dir, const DbConfig& config)
     // Collect statistics for query optimizer (on-demand via ANALYZE, not at startup)
     // collect_all_statistics();  // Re-enabled on first EXPLAIN if stats_valid==false
 
-    // Initialize shared memory (4MB default size)
-    shm_ = UniquePtr<SharedMemory>(SharedMemory::create("minidb_main", 4 * 1024 * 1024));
     start_background_maintenance();
 }
 
