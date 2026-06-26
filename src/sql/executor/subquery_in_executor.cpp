@@ -53,6 +53,10 @@ ExecResult SubqueryInExecutor::next() {
         if (!r.ok()) return ExecResult::empty();
 
         Value left_val = ExpressionEvaluator::evaluate(*left_expr_, r.tuple);
+        // A NULL left value makes both IN and NOT IN evaluate to UNKNOWN, so
+        // the row never qualifies for either. (NULL IN (...) and NULL NOT IN
+        // (...) are both UNKNOWN in SQL three-valued logic.)
+        if (left_val.is_null()) continue;
         bool found = in_set(left_val);
         if (not_) {
             // NOT IN: SQL semantics
