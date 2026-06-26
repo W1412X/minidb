@@ -330,3 +330,19 @@ require_contains 'agg_0
 2' "$cntpred_out"
 require_contains 'agg_0
 4' "$cntpred_out"
+
+# A column DEFAULT must be stored with the column's exact type, not widened.
+# A widened default (int64 for an INT32 column) compares unequal to a same-typed
+# literal because Value::compare orders by type-id first.
+def_out="$(
+    run_sql \
+        'CREATE TABLE deftype (id INT PRIMARY KEY, a INT DEFAULT 5);' \
+        'INSERT INTO deftype (id) VALUES (1);' \
+        'INSERT INTO deftype VALUES (2, 9);' \
+        'SELECT id FROM deftype WHERE a = 5;' \
+        'SELECT COUNT(*) FROM deftype WHERE a = 5;'
+)"
+require_contains 'id
+1' "$def_out"
+require_contains 'agg_0
+1' "$def_out"

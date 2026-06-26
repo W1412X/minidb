@@ -12,13 +12,25 @@ namespace minidb {
 Value Column::default_as_value() const {
     if (default_value.empty()) return Value();
     switch (type) {
-        case TypeId::kInt32:
-        case TypeId::kInt64: {
+        // Produce the column's exact type. Returning a wider type (int64 for an
+        // INT32 column, double for a FLOAT column) makes the stored default
+        // compare unequal to a same-typed literal — Value::compare orders by
+        // type-id first — so e.g. WHERE a = 5 never matches a DEFAULT-5 int32.
+        case TypeId::kInt32: {
             char* end = nullptr;
             long v = std::strtol(default_value.c_str(), &end, 10);
+            return Value(static_cast<i32>(v));
+        }
+        case TypeId::kInt64: {
+            char* end = nullptr;
+            long long v = std::strtoll(default_value.c_str(), &end, 10);
             return Value(static_cast<i64>(v));
         }
-        case TypeId::kFloat:
+        case TypeId::kFloat: {
+            char* end = nullptr;
+            float v = std::strtof(default_value.c_str(), &end);
+            return Value(v);
+        }
         case TypeId::kDouble: {
             char* end = nullptr;
             double v = std::strtod(default_value.c_str(), &end);
