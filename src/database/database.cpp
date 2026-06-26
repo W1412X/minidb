@@ -24,7 +24,15 @@ static bool btree_supports_type(TypeId type) {
 static IndexKey index_key_from_tuple(const IndexEntry& index, const Tuple& tuple) {
     Vector<Value> values;
     for (u32 i = 0; i < index.key_columns.size(); i++) {
-        values.push_back(tuple.get_value(index.key_columns[i]));
+        const Value& v = tuple.get_value(index.key_columns[i]);
+        // A key column that is NULL is not indexed: NULL never satisfies an
+        // equality/range predicate (IS NULL uses a sequential scan), and a
+        // UNIQUE column permits multiple NULLs. Returning an empty key (which
+        // every index-maintenance path skips via is_null()) keeps NULLs out of
+        // the B+tree — bulk_load_sorted in particular produced a corrupt tree
+        // when fed NULL keys, breaking lookups for the non-null rows too.
+        if (v.is_null()) return IndexKey();
+        values.push_back(v);
     }
     return IndexKey::from_values(values);
 }
@@ -493,6 +501,7 @@ bool Database::create_index(const String& name, const String& table_name,
                                                            table->schema, lp->length);
                 if (tuple.xmax() != kInvalidTxnId) continue;
                 IndexKey key = index_key_from_tuple(probe, tuple);
+                if (key.is_null()) continue;  // NULL key columns are not indexed
                 if (!key.fits()) {
                     pool_->unpin_page(page_id);
                     return false;
@@ -941,7 +950,7 @@ bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
         IndexEntry* index = indexes[i];
         if (!index) continue;
         IndexKey key = index_key_from_tuple(*index, tuple);
-        if (!key.fits()) continue;
+        if (key.is_null() || !key.fits()) continue;  // NULL columns are not indexed
         BPlusTree* tree = get_index_tree(index->index_id);
         if (!tree) continue;
         wal_->log_index_insert(txn_id, index->index_id, key, rid);
@@ -965,7 +974,7 @@ void Database::delete_index_entries(u32 table_id, const Tuple& tuple, const Reco
         IndexEntry* index = indexes[i];
         if (!index) continue;
         IndexKey key = index_key_from_tuple(*index, tuple);
-        if (!key.fits()) continue;
+        if (key.is_null() || !key.fits()) continue;  // NULL columns are not indexed
         BPlusTree* tree = get_index_tree(index->index_id);
         if (tree) {
             wal_->log_index_delete(txn_id, index->index_id, key, rid);
@@ -1022,7 +1031,7 @@ void Database::rebuild_index(IndexEntry* index) {
             Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset, table->schema, lp->length);
             if (tuple.xmax() != kInvalidTxnId) continue;
             IndexKey key = index_key_from_tuple(*index, tuple);
-            if (key.fits()) {
+            if (!key.is_null() && key.fits()) {  // NULL columns are not indexed
                 entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
         }

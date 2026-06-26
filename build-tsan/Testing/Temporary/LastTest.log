@@ -1,226 +1,159 @@
-Start testing: Jun 26 09:44 PDT
+Start testing: Jun 26 10:46 PDT
 ----------------------------------------------------------
-2/59 Testing: tuple_value_edge_test
-2/59 Test: tuple_value_edge_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/tuple_value_edge_test"
+19/59 Testing: sql_correctness_matrix
+19/59 Test: sql_correctness_matrix
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/sql_correctness_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648430"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"tuple_value_edge_test" start time: Jun 26 09:44 PDT
+"sql_correctness_matrix" start time: Jun 26 10:46 PDT
 Output:
 ----------------------------------------------------------
+sql_correctness_matrix PASS seed=12648430 cases=90
 <end of output>
-Test time =   0.62 sec
+Test time =  47.59 sec
 ----------------------------------------------------------
 Test Passed.
-"tuple_value_edge_test" end time: Jun 26 09:44 PDT
-"tuple_value_edge_test" time elapsed: 00:00:00
+"sql_correctness_matrix" end time: Jun 26 10:47 PDT
+"sql_correctness_matrix" time elapsed: 00:00:47
 ----------------------------------------------------------
 
-1/59 Testing: lock_manager_wait_test
-1/59 Test: lock_manager_wait_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/lock_manager_wait_test"
+20/59 Testing: differential_sqlite
+20/59 Test: differential_sqlite
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/differential_sqlite.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648431"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"lock_manager_wait_test" start time: Jun 26 09:44 PDT
+"differential_sqlite" start time: Jun 26 10:46 PDT
 Output:
 ----------------------------------------------------------
+differential_sqlite PASS seed=12648431 cases=167
 <end of output>
-Test time =   1.36 sec
+Test time =  65.05 sec
 ----------------------------------------------------------
 Test Passed.
-"lock_manager_wait_test" end time: Jun 26 09:44 PDT
-"lock_manager_wait_test" time elapsed: 00:00:01
+"differential_sqlite" end time: Jun 26 10:47 PDT
+"differential_sqlite" time elapsed: 00:01:05
 ----------------------------------------------------------
 
-3/59 Testing: page_store_remote_test
-3/59 Test: page_store_remote_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/page_store_remote_test"
+22/59 Testing: p1_features
+22/59 Test: p1_features
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/p1_features_test.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648455"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"page_store_remote_test" start time: Jun 26 09:44 PDT
+"p1_features" start time: Jun 26 10:47 PDT
 Output:
 ----------------------------------------------------------
+  [OK] NULLS FIRST / NULLS LAST
+  [OK] CAST expression
+  [OK] DDL operations
+  [OK] UNION NULL deduplication
+  [OK] UNIQUE NULL semantics
+p1_features PASS seed=12648455
 <end of output>
-Test time =   1.10 sec
+Test time =  24.53 sec
 ----------------------------------------------------------
 Test Passed.
-"page_store_remote_test" end time: Jun 26 09:44 PDT
-"page_store_remote_test" time elapsed: 00:00:01
+"p1_features" end time: Jun 26 10:47 PDT
+"p1_features" time elapsed: 00:00:24
 ----------------------------------------------------------
 
-4/59 Testing: wal_buffer_pool_test
-4/59 Test: wal_buffer_pool_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/wal_buffer_pool_test"
+30/59 Testing: mvcc_visibility_matrix
+30/59 Test: mvcc_visibility_matrix
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_visibility_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648446"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"wal_buffer_pool_test" start time: Jun 26 09:44 PDT
+"mvcc_visibility_matrix" start time: Jun 26 10:47 PDT
 Output:
 ----------------------------------------------------------
+mvcc_visibility_matrix PASS seed=12648446
 <end of output>
-Test time =   0.58 sec
+Test time =  13.87 sec
 ----------------------------------------------------------
 Test Passed.
-"wal_buffer_pool_test" end time: Jun 26 09:44 PDT
-"wal_buffer_pool_test" time elapsed: 00:00:00
+"mvcc_visibility_matrix" end time: Jun 26 10:48 PDT
+"mvcc_visibility_matrix" time elapsed: 00:00:13
 ----------------------------------------------------------
 
-5/59 Testing: transaction_slots_test
-5/59 Test: transaction_slots_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/transaction_slots_test"
+45/59 Testing: null_three_valued_logic
+45/59 Test: null_three_valued_logic
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/null_three_valued_logic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648454"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"transaction_slots_test" start time: Jun 26 09:44 PDT
+"null_three_valued_logic" start time: Jun 26 10:47 PDT
 Output:
 ----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=560
+null_three_valued_logic PASS seed=12648454
 <end of output>
-Test time =   0.75 sec
+Test time =  12.24 sec
 ----------------------------------------------------------
 Test Passed.
-"transaction_slots_test" end time: Jun 26 09:44 PDT
-"transaction_slots_test" time elapsed: 00:00:00
+"null_three_valued_logic" end time: Jun 26 10:48 PDT
+"null_three_valued_logic" time elapsed: 00:00:12
 ----------------------------------------------------------
 
-7/59 Testing: index_key_btree_test
-7/59 Test: index_key_btree_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/index_key_btree_test"
+28/59 Testing: mvcc_lock_regression
+28/59 Test: mvcc_lock_regression
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_lock_regression.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648433"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"index_key_btree_test" start time: Jun 26 09:44 PDT
+"mvcc_lock_regression" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
+mvcc_lock_regression PASS seed=12648433 workers=2 per_worker=3
 <end of output>
-Test time =   0.62 sec
+Test time =   9.41 sec
 ----------------------------------------------------------
 Test Passed.
-"index_key_btree_test" end time: Jun 26 09:44 PDT
-"index_key_btree_test" time elapsed: 00:00:00
+"mvcc_lock_regression" end time: Jun 26 10:48 PDT
+"mvcc_lock_regression" time elapsed: 00:00:09
 ----------------------------------------------------------
 
-8/59 Testing: datetime_parse_test
-8/59 Test: datetime_parse_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/datetime_parse_test"
+40/59 Testing: ddl_implicit_commit
+40/59 Test: ddl_implicit_commit
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/ddl_implicit_commit.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648453"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"datetime_parse_test" start time: Jun 26 09:44 PDT
+"ddl_implicit_commit" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-datetime_parse_test passed
+ddl_implicit_commit PASS seed=12648453 (all DDL transactional, including metadata-only DROP COLUMN)
 <end of output>
-Test time =   0.48 sec
+Test time =  10.35 sec
 ----------------------------------------------------------
 Test Passed.
-"datetime_parse_test" end time: Jun 26 09:44 PDT
-"datetime_parse_test" time elapsed: 00:00:00
+"ddl_implicit_commit" end time: Jun 26 10:48 PDT
+"ddl_implicit_commit" time elapsed: 00:00:10
 ----------------------------------------------------------
 
-6/59 Testing: btree_property_test
-6/59 Test: btree_property_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/btree_property_test" "12648434"
+36/59 Testing: commit_durability
+36/59 Test: commit_durability
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/commit_durability.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648435"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"btree_property_test" start time: Jun 26 09:44 PDT
+"commit_durability" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-btree_property_test seed=12648434
+commit_durability PASS seed=12648435 acknowledged=80
 <end of output>
-Test time =   1.85 sec
+Test time =   7.51 sec
 ----------------------------------------------------------
 Test Passed.
-"btree_property_test" end time: Jun 26 09:44 PDT
-"btree_property_test" time elapsed: 00:00:01
+"commit_durability" end time: Jun 26 10:48 PDT
+"commit_durability" time elapsed: 00:00:07
 ----------------------------------------------------------
 
-9/59 Testing: container_test
-9/59 Test: container_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/container_test"
+39/59 Testing: statement_savepoint
+39/59 Test: statement_savepoint
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/statement_savepoint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648451"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"container_test" start time: Jun 26 09:44 PDT
+"statement_savepoint" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
+statement_savepoint PASS seed=12648451
 <end of output>
-Test time =   0.53 sec
+Test time =   5.86 sec
 ----------------------------------------------------------
 Test Passed.
-"container_test" end time: Jun 26 09:44 PDT
-"container_test" time elapsed: 00:00:00
-----------------------------------------------------------
-
-10/59 Testing: config_parse_test
-10/59 Test: config_parse_test
-Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/config_parse_test"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"config_parse_test" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-<end of output>
-Test time =   0.72 sec
-----------------------------------------------------------
-Test Passed.
-"config_parse_test" end time: Jun 26 09:44 PDT
-"config_parse_test" time elapsed: 00:00:00
-----------------------------------------------------------
-
-12/59 Testing: sql_keyword_combinations
-12/59 Test: sql_keyword_combinations
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/sql_keyword_combinations.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"sql_keyword_combinations" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-<end of output>
-Test time =   0.60 sec
-----------------------------------------------------------
-Test Passed.
-"sql_keyword_combinations" end time: Jun 26 09:44 PDT
-"sql_keyword_combinations" time elapsed: 00:00:00
-----------------------------------------------------------
-
-13/59 Testing: full_sql_suite
-13/59 Test: full_sql_suite
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/full_sql_suite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"full_sql_suite" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=697
-<end of output>
-Test time =   0.55 sec
-----------------------------------------------------------
-Test Passed.
-"full_sql_suite" end time: Jun 26 09:44 PDT
-"full_sql_suite" time elapsed: 00:00:00
-----------------------------------------------------------
-
-14/59 Testing: datetime_types
-14/59 Test: datetime_types
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/datetime_types.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"datetime_types" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=13
-datetime_types passed
-<end of output>
-Test time =   0.30 sec
-----------------------------------------------------------
-Test Passed.
-"datetime_types" end time: Jun 26 09:44 PDT
-"datetime_types" time elapsed: 00:00:00
-----------------------------------------------------------
-
-15/59 Testing: join_syntax_strict
-15/59 Test: join_syntax_strict
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_syntax_strict.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"join_syntax_strict" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-<end of output>
-Test time =   0.31 sec
-----------------------------------------------------------
-Test Passed.
-"join_syntax_strict" end time: Jun 26 09:44 PDT
-"join_syntax_strict" time elapsed: 00:00:00
+"statement_savepoint" end time: Jun 26 10:48 PDT
+"statement_savepoint" time elapsed: 00:00:05
 ----------------------------------------------------------
 
 11/59 Testing: sql_regression
 11/59 Test: sql_regression
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/sql_regression.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"sql_regression" start time: Jun 26 09:44 PDT
+"sql_regression" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=55
@@ -240,19 +173,38 @@ Output:
 [DB] destructor: flush complete, durable_lsn=1915
 [DB] destructor: flush complete, durable_lsn=1920
 [DB] destructor: flush complete, durable_lsn=1928
+[DB] destructor: flush complete, durable_lsn=1928
+[DB] destructor: flush complete, durable_lsn=1941
+[DB] destructor: flush complete, durable_lsn=1956
 <end of output>
-Test time =   6.10 sec
+Test time =   8.60 sec
 ----------------------------------------------------------
 Test Passed.
-"sql_regression" end time: Jun 26 09:44 PDT
-"sql_regression" time elapsed: 00:00:06
+"sql_regression" end time: Jun 26 10:48 PDT
+"sql_regression" time elapsed: 00:00:08
+----------------------------------------------------------
+
+29/59 Testing: lost_update
+29/59 Test: lost_update
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/lost_update.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648438"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"lost_update" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+lost_update PASS seed=12648438 successes=1 conflicts=1
+<end of output>
+Test time =   5.22 sec
+----------------------------------------------------------
+Test Passed.
+"lost_update" end time: Jun 26 10:48 PDT
+"lost_update" time elapsed: 00:00:05
 ----------------------------------------------------------
 
 16/59 Testing: semantic_validation
 16/59 Test: semantic_validation
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/semantic_validation.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"semantic_validation" start time: Jun 26 09:44 PDT
+"semantic_validation" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=16
@@ -273,34 +225,114 @@ Output:
 [DB] destructor: flush complete, durable_lsn=20
 [DB] destructor: flush complete, durable_lsn=26
 <end of output>
-Test time =   5.07 sec
+Test time =   6.19 sec
 ----------------------------------------------------------
 Test Passed.
-"semantic_validation" end time: Jun 26 09:44 PDT
-"semantic_validation" time elapsed: 00:00:05
+"semantic_validation" end time: Jun 26 10:48 PDT
+"semantic_validation" time elapsed: 00:00:06
 ----------------------------------------------------------
 
-17/59 Testing: join_optimizer
-17/59 Test: join_optimizer
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_optimizer.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+43/59 Testing: varchar_length
+43/59 Test: varchar_length
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/varchar_length.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648445"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"join_optimizer" start time: Jun 26 09:44 PDT
+"varchar_length" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=5682
+varchar_length PASS seed=12648445
 <end of output>
-Test time =   1.15 sec
+Test time =   3.38 sec
 ----------------------------------------------------------
 Test Passed.
-"join_optimizer" end time: Jun 26 09:44 PDT
-"join_optimizer" time elapsed: 00:00:01
+"varchar_length" end time: Jun 26 10:48 PDT
+"varchar_length" time elapsed: 00:00:03
+----------------------------------------------------------
+
+44/59 Testing: check_constraint
+44/59 Test: check_constraint
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/check_constraint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648452"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"check_constraint" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+check_constraint PASS seed=12648452
+<end of output>
+Test time =   3.54 sec
+----------------------------------------------------------
+Test Passed.
+"check_constraint" end time: Jun 26 10:48 PDT
+"check_constraint" time elapsed: 00:00:03
+----------------------------------------------------------
+
+21/59 Testing: select_empty_list
+21/59 Test: select_empty_list
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/select_empty_list.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648444"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"select_empty_list" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+select_empty_list PASS seed=12648444
+<end of output>
+Test time =   3.13 sec
+----------------------------------------------------------
+Test Passed.
+"select_empty_list" end time: Jun 26 10:48 PDT
+"select_empty_list" time elapsed: 00:00:03
+----------------------------------------------------------
+
+48/59 Testing: checkpoint_barrier
+48/59 Test: checkpoint_barrier
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/checkpoint_barrier.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648440"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"checkpoint_barrier" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+checkpoint_barrier PASS seed=12648440 acknowledged=28
+<end of output>
+Test time =   3.21 sec
+----------------------------------------------------------
+Test Passed.
+"checkpoint_barrier" end time: Jun 26 10:48 PDT
+"checkpoint_barrier" time elapsed: 00:00:03
+----------------------------------------------------------
+
+31/59 Testing: write_skew
+31/59 Test: write_skew
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648439"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"write_skew" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+write_skew PASS seed=12648439 (SI anomaly observed as documented)
+<end of output>
+Test time =   3.15 sec
+----------------------------------------------------------
+Test Passed.
+"write_skew" end time: Jun 26 10:48 PDT
+"write_skew" time elapsed: 00:00:03
+----------------------------------------------------------
+
+37/59 Testing: index_heap_atomic
+37/59 Test: index_heap_atomic
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/index_heap_atomic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648441"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_heap_atomic" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+index_heap_atomic PASS seed=12648441
+<end of output>
+Test time =   3.09 sec
+----------------------------------------------------------
+Test Passed.
+"index_heap_atomic" end time: Jun 26 10:48 PDT
+"index_heap_atomic" time elapsed: 00:00:03
 ----------------------------------------------------------
 
 18/59 Testing: filter_pushdown
 18/59 Test: filter_pushdown
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/filter_pushdown.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"filter_pushdown" start time: Jun 26 09:44 PDT
+"filter_pushdown" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=18
@@ -314,443 +346,115 @@ Output:
 [DB] destructor: flush complete, durable_lsn=24
 filter_pushdown: PASS
 <end of output>
-Test time =   2.76 sec
+Test time =   3.50 sec
 ----------------------------------------------------------
 Test Passed.
-"filter_pushdown" end time: Jun 26 09:44 PDT
-"filter_pushdown" time elapsed: 00:00:02
-----------------------------------------------------------
-
-19/59 Testing: sql_correctness_matrix
-19/59 Test: sql_correctness_matrix
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/sql_correctness_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648430"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"sql_correctness_matrix" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-sql_correctness_matrix PASS seed=12648430 cases=90
-<end of output>
-Test time =  46.26 sec
-----------------------------------------------------------
-Test Passed.
-"sql_correctness_matrix" end time: Jun 26 09:45 PDT
-"sql_correctness_matrix" time elapsed: 00:00:46
-----------------------------------------------------------
-
-21/59 Testing: select_empty_list
-21/59 Test: select_empty_list
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/select_empty_list.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648444"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"select_empty_list" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-select_empty_list PASS seed=12648444
-<end of output>
-Test time =   3.31 sec
-----------------------------------------------------------
-Test Passed.
-"select_empty_list" end time: Jun 26 09:45 PDT
-"select_empty_list" time elapsed: 00:00:03
-----------------------------------------------------------
-
-20/59 Testing: differential_sqlite
-20/59 Test: differential_sqlite
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/differential_sqlite.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648431"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"differential_sqlite" start time: Jun 26 09:44 PDT
-Output:
-----------------------------------------------------------
-differential_sqlite PASS seed=12648431 cases=167
-<end of output>
-Test time =  63.70 sec
-----------------------------------------------------------
-Test Passed.
-"differential_sqlite" end time: Jun 26 09:45 PDT
-"differential_sqlite" time elapsed: 00:01:03
-----------------------------------------------------------
-
-23/59 Testing: alter_table_semantics
-23/59 Test: alter_table_semantics
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/alter_table_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"alter_table_semantics" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=20
-[DB] destructor: flush complete, durable_lsn=20
-<end of output>
-Test time =   0.94 sec
-----------------------------------------------------------
-Test Passed.
-"alter_table_semantics" end time: Jun 26 09:45 PDT
-"alter_table_semantics" time elapsed: 00:00:00
-----------------------------------------------------------
-
-24/59 Testing: hot_index_semantics
-24/59 Test: hot_index_semantics
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/hot_index_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"hot_index_semantics" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=21
-<end of output>
-Test time =   0.47 sec
-----------------------------------------------------------
-Test Passed.
-"hot_index_semantics" end time: Jun 26 09:45 PDT
-"hot_index_semantics" time elapsed: 00:00:00
-----------------------------------------------------------
-
-25/59 Testing: persistence_and_composite
-25/59 Test: persistence_and_composite
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/persistence_and_composite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"persistence_and_composite" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=10
-[DB] destructor: flush complete, durable_lsn=12
-[DB] destructor: flush complete, durable_lsn=24
-<end of output>
-Test time =   1.37 sec
-----------------------------------------------------------
-Test Passed.
-"persistence_and_composite" end time: Jun 26 09:45 PDT
-"persistence_and_composite" time elapsed: 00:00:01
-----------------------------------------------------------
-
-26/59 Testing: index_delete_rebuild
-26/59 Test: index_delete_rebuild
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_delete_rebuild.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"index_delete_rebuild" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=2524
-<end of output>
-Test time =   0.69 sec
-----------------------------------------------------------
-Test Passed.
-"index_delete_rebuild" end time: Jun 26 09:45 PDT
-"index_delete_rebuild" time elapsed: 00:00:00
-----------------------------------------------------------
-
-27/59 Testing: index_unique_matrix
-27/59 Test: index_unique_matrix
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_unique_matrix.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"index_unique_matrix" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=58
-[DB] destructor: flush complete, durable_lsn=68
-<end of output>
-Test time =   0.94 sec
-----------------------------------------------------------
-Test Passed.
-"index_unique_matrix" end time: Jun 26 09:45 PDT
-"index_unique_matrix" time elapsed: 00:00:00
-----------------------------------------------------------
-
-22/59 Testing: p1_features
-22/59 Test: p1_features
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/sql/p1_features_test.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648455"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"p1_features" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-  [OK] NULLS FIRST / NULLS LAST
-  [OK] CAST expression
-  [OK] DDL operations
-  [OK] UNION NULL deduplication
-  [OK] UNIQUE NULL semantics
-p1_features PASS seed=12648455
-<end of output>
-Test time =  23.20 sec
-----------------------------------------------------------
-Test Passed.
-"p1_features" end time: Jun 26 09:45 PDT
-"p1_features" time elapsed: 00:00:23
-----------------------------------------------------------
-
-29/59 Testing: lost_update
-29/59 Test: lost_update
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/lost_update.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648438"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"lost_update" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-lost_update PASS seed=12648438 successes=1 conflicts=1
-<end of output>
-Test time =   5.32 sec
-----------------------------------------------------------
-Test Passed.
-"lost_update" end time: Jun 26 09:45 PDT
-"lost_update" time elapsed: 00:00:05
-----------------------------------------------------------
-
-28/59 Testing: mvcc_lock_regression
-28/59 Test: mvcc_lock_regression
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_lock_regression.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648433"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"mvcc_lock_regression" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-mvcc_lock_regression PASS seed=12648433 workers=2 per_worker=3
-<end of output>
-Test time =   9.35 sec
-----------------------------------------------------------
-Test Passed.
-"mvcc_lock_regression" end time: Jun 26 09:45 PDT
-"mvcc_lock_regression" time elapsed: 00:00:09
-----------------------------------------------------------
-
-31/59 Testing: write_skew
-31/59 Test: write_skew
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648439"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"write_skew" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-write_skew PASS seed=12648439 (SI anomaly observed as documented)
-<end of output>
-Test time =   3.02 sec
-----------------------------------------------------------
-Test Passed.
-"write_skew" end time: Jun 26 09:46 PDT
-"write_skew" time elapsed: 00:00:03
-----------------------------------------------------------
-
-32/59 Testing: write_skew_serializable
-32/59 Test: write_skew_serializable
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew_serializable.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648460"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"write_skew_serializable" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-write_skew_serializable PASS seed=12648460 (one txn aborted, invariant preserved)
-<end of output>
-Test time =   1.29 sec
-----------------------------------------------------------
-Test Passed.
-"write_skew_serializable" end time: Jun 26 09:46 PDT
-"write_skew_serializable" time elapsed: 00:00:01
-----------------------------------------------------------
-
-33/59 Testing: phantom_read
-33/59 Test: phantom_read
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/phantom_read.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648456"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"phantom_read" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-phantom_read PASS seed=12648456 (SI prevented phantom within snapshot: read1=300, read2=300, post_commit=400)
-<end of output>
-Test time =   1.46 sec
-----------------------------------------------------------
-Test Passed.
-"phantom_read" end time: Jun 26 09:46 PDT
-"phantom_read" time elapsed: 00:00:01
-----------------------------------------------------------
-
-34/59 Testing: long_snapshot_gc
-34/59 Test: long_snapshot_gc
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/long_snapshot_gc.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648458"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"long_snapshot_gc" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-long_snapshot_gc PASS seed=12648458 (snapshot survived GC: sum1=150, sum2=150, post_commit_sum=90)
-<end of output>
-Test time =   2.31 sec
-----------------------------------------------------------
-Test Passed.
-"long_snapshot_gc" end time: Jun 26 09:46 PDT
-"long_snapshot_gc" time elapsed: 00:00:02
-----------------------------------------------------------
-
-35/59 Testing: vacuum_concurrent
-35/59 Test: vacuum_concurrent
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/vacuum_concurrent.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648459"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"vacuum_concurrent" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-vacuum_concurrent PASS seed=12648459 (5 sections, all green)
-<end of output>
-Test time =   2.62 sec
-----------------------------------------------------------
-Test Passed.
-"vacuum_concurrent" end time: Jun 26 09:46 PDT
-"vacuum_concurrent" time elapsed: 00:00:02
-----------------------------------------------------------
-
-30/59 Testing: mvcc_visibility_matrix
-30/59 Test: mvcc_visibility_matrix
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/mvcc_visibility_matrix.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648446"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"mvcc_visibility_matrix" start time: Jun 26 09:45 PDT
-Output:
-----------------------------------------------------------
-mvcc_visibility_matrix PASS seed=12648446
-<end of output>
-Test time =  13.72 sec
-----------------------------------------------------------
-Test Passed.
-"mvcc_visibility_matrix" end time: Jun 26 09:46 PDT
-"mvcc_visibility_matrix" time elapsed: 00:00:13
-----------------------------------------------------------
-
-37/59 Testing: index_heap_atomic
-37/59 Test: index_heap_atomic
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/index_heap_atomic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648441"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"index_heap_atomic" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-index_heap_atomic PASS seed=12648441
-<end of output>
-Test time =   2.95 sec
-----------------------------------------------------------
-Test Passed.
-"index_heap_atomic" end time: Jun 26 09:46 PDT
-"index_heap_atomic" time elapsed: 00:00:02
-----------------------------------------------------------
-
-38/59 Testing: clog_status_log
-38/59 Test: clog_status_log
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/clog_status_log.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648450"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"clog_status_log" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-clog_status_log PASS seed=12648450 committed=2 aborted=1 after_churn=49
-<end of output>
-Test time =   1.06 sec
-----------------------------------------------------------
-Test Passed.
-"clog_status_log" end time: Jun 26 09:46 PDT
-"clog_status_log" time elapsed: 00:00:01
-----------------------------------------------------------
-
-36/59 Testing: commit_durability
-36/59 Test: commit_durability
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/commit_durability.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648435"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"commit_durability" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-commit_durability PASS seed=12648435 acknowledged=80
-<end of output>
-Test time =   7.28 sec
-----------------------------------------------------------
-Test Passed.
-"commit_durability" end time: Jun 26 09:46 PDT
-"commit_durability" time elapsed: 00:00:07
-----------------------------------------------------------
-
-39/59 Testing: statement_savepoint
-39/59 Test: statement_savepoint
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/statement_savepoint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648451"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"statement_savepoint" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-statement_savepoint PASS seed=12648451
-<end of output>
-Test time =   5.82 sec
-----------------------------------------------------------
-Test Passed.
-"statement_savepoint" end time: Jun 26 09:46 PDT
-"statement_savepoint" time elapsed: 00:00:05
+"filter_pushdown" end time: Jun 26 10:48 PDT
+"filter_pushdown" time elapsed: 00:00:03
 ----------------------------------------------------------
 
 41/59 Testing: constraints_not_null_default
 41/59 Test: constraints_not_null_default
 Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/constraints_not_null_default.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648437"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"constraints_not_null_default" start time: Jun 26 09:46 PDT
+"constraints_not_null_default" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 constraints_not_null_default PASS seed=12648437
 <end of output>
-Test time =   2.74 sec
+Test time =   2.77 sec
 ----------------------------------------------------------
 Test Passed.
-"constraints_not_null_default" end time: Jun 26 09:46 PDT
+"constraints_not_null_default" end time: Jun 26 10:48 PDT
 "constraints_not_null_default" time elapsed: 00:00:02
 ----------------------------------------------------------
 
-42/59 Testing: post_recovery_verify
-42/59 Test: post_recovery_verify
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/post_recovery_verify.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648442"
+51/59 Testing: remote_page_store
+51/59 Test: remote_page_store
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/storage/remote_page_store.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"post_recovery_verify" start time: Jun 26 09:46 PDT
+"remote_page_store" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-post_recovery_verify PASS seed=12648442
+[DB] destructor: flush complete, durable_lsn=9
+[DB] destructor: flush complete, durable_lsn=9
 <end of output>
-Test time =   1.82 sec
+Test time =   2.86 sec
 ----------------------------------------------------------
 Test Passed.
-"post_recovery_verify" end time: Jun 26 09:46 PDT
-"post_recovery_verify" time elapsed: 00:00:01
+"remote_page_store" end time: Jun 26 10:48 PDT
+"remote_page_store" time elapsed: 00:00:02
 ----------------------------------------------------------
 
-40/59 Testing: ddl_implicit_commit
-40/59 Test: ddl_implicit_commit
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/ddl_implicit_commit.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648453"
+35/59 Testing: vacuum_concurrent
+35/59 Test: vacuum_concurrent
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/vacuum_concurrent.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648459"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"ddl_implicit_commit" start time: Jun 26 09:46 PDT
+"vacuum_concurrent" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-ddl_implicit_commit PASS seed=12648453 (all DDL transactional, including metadata-only DROP COLUMN)
+vacuum_concurrent PASS seed=12648459 (5 sections, all green)
 <end of output>
-Test time =   8.84 sec
+Test time =   2.65 sec
 ----------------------------------------------------------
 Test Passed.
-"ddl_implicit_commit" end time: Jun 26 09:46 PDT
-"ddl_implicit_commit" time elapsed: 00:00:08
+"vacuum_concurrent" end time: Jun 26 10:48 PDT
+"vacuum_concurrent" time elapsed: 00:00:02
 ----------------------------------------------------------
 
-43/59 Testing: varchar_length
-43/59 Test: varchar_length
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/varchar_length.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648445"
+50/59 Testing: index_state_machine
+50/59 Test: index_state_machine
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/index_state_machine.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648448"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"varchar_length" start time: Jun 26 09:46 PDT
+"index_state_machine" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-varchar_length PASS seed=12648445
+index_state_machine PASS seed=12648448
 <end of output>
-Test time =   3.55 sec
+Test time =   2.45 sec
 ----------------------------------------------------------
 Test Passed.
-"varchar_length" end time: Jun 26 09:46 PDT
-"varchar_length" time elapsed: 00:00:03
+"index_state_machine" end time: Jun 26 10:48 PDT
+"index_state_machine" time elapsed: 00:00:02
 ----------------------------------------------------------
 
-44/59 Testing: check_constraint
-44/59 Test: check_constraint
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/check_constraint.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648452"
+58/59 Testing: update_halloween
+58/59 Test: update_halloween
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/regression/update_halloween.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648443"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"check_constraint" start time: Jun 26 09:46 PDT
+"update_halloween" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-check_constraint PASS seed=12648452
+update_halloween PASS seed=12648443
 <end of output>
-Test time =   3.50 sec
+Test time =   2.36 sec
 ----------------------------------------------------------
 Test Passed.
-"check_constraint" end time: Jun 26 09:46 PDT
-"check_constraint" time elapsed: 00:00:03
+"update_halloween" end time: Jun 26 10:48 PDT
+"update_halloween" time elapsed: 00:00:02
+----------------------------------------------------------
+
+34/59 Testing: long_snapshot_gc
+34/59 Test: long_snapshot_gc
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/long_snapshot_gc.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648458"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"long_snapshot_gc" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+long_snapshot_gc PASS seed=12648458 (snapshot survived GC: sum1=150, sum2=150, post_commit_sum=90)
+<end of output>
+Test time =   2.77 sec
+----------------------------------------------------------
+Test Passed.
+"long_snapshot_gc" end time: Jun 26 10:48 PDT
+"long_snapshot_gc" time elapsed: 00:00:02
 ----------------------------------------------------------
 
 46/59 Testing: wal_replay_slot_reuse
 46/59 Test: wal_replay_slot_reuse
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_replay_slot_reuse.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"wal_replay_slot_reuse" start time: Jun 26 09:46 PDT
+"wal_replay_slot_reuse" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=252
@@ -759,179 +463,179 @@ Output:
 [DB] destructor: flush complete, durable_lsn=263
 [DB] destructor: flush complete, durable_lsn=263
 <end of output>
-Test time =   1.99 sec
+Test time =   1.95 sec
 ----------------------------------------------------------
 Test Passed.
-"wal_replay_slot_reuse" end time: Jun 26 09:46 PDT
+"wal_replay_slot_reuse" end time: Jun 26 10:48 PDT
 "wal_replay_slot_reuse" time elapsed: 00:00:01
 ----------------------------------------------------------
 
-47/59 Testing: torn_page
-47/59 Test: torn_page
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/torn_page.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648436"
+6/59 Testing: btree_property_test
+6/59 Test: btree_property_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/btree_property_test" "12648434"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"torn_page" start time: Jun 26 09:46 PDT
+"btree_property_test" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-torn_page PASS seed=12648436
+btree_property_test seed=12648434
 <end of output>
-Test time =   1.60 sec
+Test time =   1.73 sec
 ----------------------------------------------------------
 Test Passed.
-"torn_page" end time: Jun 26 09:46 PDT
-"torn_page" time elapsed: 00:00:01
+"btree_property_test" end time: Jun 26 10:48 PDT
+"btree_property_test" time elapsed: 00:00:01
 ----------------------------------------------------------
 
-48/59 Testing: checkpoint_barrier
-48/59 Test: checkpoint_barrier
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/checkpoint_barrier.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648440"
+42/59 Testing: post_recovery_verify
+42/59 Test: post_recovery_verify
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/post_recovery_verify.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648442"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"checkpoint_barrier" start time: Jun 26 09:46 PDT
+"post_recovery_verify" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-checkpoint_barrier PASS seed=12648440 acknowledged=28
+post_recovery_verify PASS seed=12648442
 <end of output>
-Test time =   3.17 sec
+Test time =   1.86 sec
 ----------------------------------------------------------
 Test Passed.
-"checkpoint_barrier" end time: Jun 26 09:46 PDT
-"checkpoint_barrier" time elapsed: 00:00:03
-----------------------------------------------------------
-
-49/59 Testing: wal_record_corruption
-49/59 Test: wal_record_corruption
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_record_corruption.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648447"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"wal_record_corruption" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-wal_record_corruption PASS seed=12648447 ids=['1']
-<end of output>
-Test time =   1.04 sec
-----------------------------------------------------------
-Test Passed.
-"wal_record_corruption" end time: Jun 26 09:46 PDT
-"wal_record_corruption" time elapsed: 00:00:01
-----------------------------------------------------------
-
-45/59 Testing: null_three_valued_logic
-45/59 Test: null_three_valued_logic
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/consistency/null_three_valued_logic.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648454"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"null_three_valued_logic" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-null_three_valued_logic PASS seed=12648454
-<end of output>
-Test time =  10.28 sec
-----------------------------------------------------------
-Test Passed.
-"null_three_valued_logic" end time: Jun 26 09:46 PDT
-"null_three_valued_logic" time elapsed: 00:00:10
-----------------------------------------------------------
-
-50/59 Testing: index_state_machine
-50/59 Test: index_state_machine
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/index_state_machine.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648448"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"index_state_machine" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-index_state_machine PASS seed=12648448
-<end of output>
-Test time =   2.49 sec
-----------------------------------------------------------
-Test Passed.
-"index_state_machine" end time: Jun 26 09:46 PDT
-"index_state_machine" time elapsed: 00:00:02
-----------------------------------------------------------
-
-52/59 Testing: performance_paths
-52/59 Test: performance_paths
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_paths.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"performance_paths" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=4117
-<end of output>
-Test time =   0.84 sec
-----------------------------------------------------------
-Test Passed.
-"performance_paths" end time: Jun 26 09:46 PDT
-"performance_paths" time elapsed: 00:00:00
-----------------------------------------------------------
-
-51/59 Testing: remote_page_store
-51/59 Test: remote_page_store
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/storage/remote_page_store.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"remote_page_store" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=9
-[DB] destructor: flush complete, durable_lsn=9
-<end of output>
-Test time =   2.68 sec
-----------------------------------------------------------
-Test Passed.
-"remote_page_store" end time: Jun 26 09:46 PDT
-"remote_page_store" time elapsed: 00:00:02
-----------------------------------------------------------
-
-54/59 Testing: performance_optimizations
-54/59 Test: performance_optimizations
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_optimizations.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
-Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"performance_optimizations" start time: Jun 26 09:46 PDT
-Output:
-----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=509
-<end of output>
-Test time =   0.44 sec
-----------------------------------------------------------
-Test Passed.
-"performance_optimizations" end time: Jun 26 09:46 PDT
-"performance_optimizations" time elapsed: 00:00:00
+"post_recovery_verify" end time: Jun 26 10:48 PDT
+"post_recovery_verify" time elapsed: 00:00:01
 ----------------------------------------------------------
 
 53/59 Testing: performance_delivery
 53/59 Test: performance_delivery
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_delivery.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"performance_delivery" start time: Jun 26 09:46 PDT
+"performance_delivery" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=6162
 <end of output>
-Test time =   1.82 sec
+Test time =   1.79 sec
 ----------------------------------------------------------
 Test Passed.
-"performance_delivery" end time: Jun 26 09:46 PDT
+"performance_delivery" end time: Jun 26 10:48 PDT
 "performance_delivery" time elapsed: 00:00:01
 ----------------------------------------------------------
 
-56/59 Testing: production_regression
-56/59 Test: production_regression
-Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/regression/production_regression.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+59/59 Testing: lsn_watermark_restart
+59/59 Test: lsn_watermark_restart
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/regression/lsn_watermark_restart.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648445"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"production_regression" start time: Jun 26 09:46 PDT
+"lsn_watermark_restart" start time: Jun 26 10:48 PDT
 Output:
 ----------------------------------------------------------
-[DB] destructor: flush complete, durable_lsn=1968
+lsn_watermark_restart PASS seed=12648445
 <end of output>
-Test time =   0.70 sec
+Test time =   1.61 sec
 ----------------------------------------------------------
 Test Passed.
-"production_regression" end time: Jun 26 09:46 PDT
-"production_regression" time elapsed: 00:00:00
+"lsn_watermark_restart" end time: Jun 26 10:48 PDT
+"lsn_watermark_restart" time elapsed: 00:00:01
+----------------------------------------------------------
+
+47/59 Testing: torn_page
+47/59 Test: torn_page
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/torn_page.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648436"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"torn_page" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+torn_page PASS seed=12648436
+<end of output>
+Test time =   1.65 sec
+----------------------------------------------------------
+Test Passed.
+"torn_page" end time: Jun 26 10:48 PDT
+"torn_page" time elapsed: 00:00:01
+----------------------------------------------------------
+
+33/59 Testing: phantom_read
+33/59 Test: phantom_read
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/phantom_read.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648456"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"phantom_read" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+phantom_read PASS seed=12648456 (SI prevented phantom within snapshot: read1=300, read2=300, post_commit=400)
+<end of output>
+Test time =   1.52 sec
+----------------------------------------------------------
+Test Passed.
+"phantom_read" end time: Jun 26 10:48 PDT
+"phantom_read" time elapsed: 00:00:01
+----------------------------------------------------------
+
+25/59 Testing: persistence_and_composite
+25/59 Test: persistence_and_composite
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/persistence_and_composite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"persistence_and_composite" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=10
+[DB] destructor: flush complete, durable_lsn=12
+[DB] destructor: flush complete, durable_lsn=24
+<end of output>
+Test time =   1.19 sec
+----------------------------------------------------------
+Test Passed.
+"persistence_and_composite" end time: Jun 26 10:48 PDT
+"persistence_and_composite" time elapsed: 00:00:01
+----------------------------------------------------------
+
+1/59 Testing: lock_manager_wait_test
+1/59 Test: lock_manager_wait_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/lock_manager_wait_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"lock_manager_wait_test" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.03 sec
+----------------------------------------------------------
+Test Passed.
+"lock_manager_wait_test" end time: Jun 26 10:49 PDT
+"lock_manager_wait_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+32/59 Testing: write_skew_serializable
+32/59 Test: write_skew_serializable
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/isolation/write_skew_serializable.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648460"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"write_skew_serializable" start time: Jun 26 10:48 PDT
+Output:
+----------------------------------------------------------
+write_skew_serializable PASS seed=12648460 (one txn aborted, invariant preserved)
+<end of output>
+Test time =   1.44 sec
+----------------------------------------------------------
+Test Passed.
+"write_skew_serializable" end time: Jun 26 10:49 PDT
+"write_skew_serializable" time elapsed: 00:00:01
+----------------------------------------------------------
+
+17/59 Testing: join_optimizer
+17/59 Test: join_optimizer
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_optimizer.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"join_optimizer" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=5682
+<end of output>
+Test time =   1.26 sec
+----------------------------------------------------------
+Test Passed.
+"join_optimizer" end time: Jun 26 10:49 PDT
+"join_optimizer" time elapsed: 00:00:01
 ----------------------------------------------------------
 
 55/59 Testing: bulk_update_delete_perf
 55/59 Test: bulk_update_delete_perf
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/bulk_update_delete_perf.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"bulk_update_delete_perf" start time: Jun 26 09:46 PDT
+"bulk_update_delete_perf" start time: Jun 26 10:49 PDT
 Output:
 ----------------------------------------------------------
 [DB] destructor: flush complete, durable_lsn=6808
@@ -939,55 +643,354 @@ Output:
 Test time =   1.11 sec
 ----------------------------------------------------------
 Test Passed.
-"bulk_update_delete_perf" end time: Jun 26 09:46 PDT
+"bulk_update_delete_perf" end time: Jun 26 10:49 PDT
 "bulk_update_delete_perf" time elapsed: 00:00:01
+----------------------------------------------------------
+
+3/59 Testing: page_store_remote_test
+3/59 Test: page_store_remote_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/page_store_remote_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"page_store_remote_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.96 sec
+----------------------------------------------------------
+Test Passed.
+"page_store_remote_test" end time: Jun 26 10:49 PDT
+"page_store_remote_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+49/59 Testing: wal_record_corruption
+49/59 Test: wal_record_corruption
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/durability/wal_record_corruption.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648447"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"wal_record_corruption" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+wal_record_corruption PASS seed=12648447 ids=['1']
+<end of output>
+Test time =   1.01 sec
+----------------------------------------------------------
+Test Passed.
+"wal_record_corruption" end time: Jun 26 10:49 PDT
+"wal_record_corruption" time elapsed: 00:00:01
+----------------------------------------------------------
+
+38/59 Testing: clog_status_log
+38/59 Test: clog_status_log
+Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/acid/atomicity/clog_status_log.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648450"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"clog_status_log" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+clog_status_log PASS seed=12648450 committed=2 aborted=1 after_churn=49
+<end of output>
+Test time =   1.24 sec
+----------------------------------------------------------
+Test Passed.
+"clog_status_log" end time: Jun 26 10:49 PDT
+"clog_status_log" time elapsed: 00:00:01
+----------------------------------------------------------
+
+27/59 Testing: index_unique_matrix
+27/59 Test: index_unique_matrix
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_unique_matrix.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_unique_matrix" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=58
+[DB] destructor: flush complete, durable_lsn=68
+<end of output>
+Test time =   0.85 sec
+----------------------------------------------------------
+Test Passed.
+"index_unique_matrix" end time: Jun 26 10:49 PDT
+"index_unique_matrix" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/59 Testing: alter_table_semantics
+23/59 Test: alter_table_semantics
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/alter_table_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"alter_table_semantics" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=20
+[DB] destructor: flush complete, durable_lsn=20
+<end of output>
+Test time =   0.86 sec
+----------------------------------------------------------
+Test Passed.
+"alter_table_semantics" end time: Jun 26 10:49 PDT
+"alter_table_semantics" time elapsed: 00:00:00
 ----------------------------------------------------------
 
 57/59 Testing: resource_limits
 57/59 Test: resource_limits
 Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/regression/resource_limits.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"resource_limits" start time: Jun 26 09:46 PDT
+"resource_limits" start time: Jun 26 10:49 PDT
 Output:
 ----------------------------------------------------------
 <end of output>
-Test time =   0.84 sec
+Test time =   0.83 sec
 ----------------------------------------------------------
 Test Passed.
-"resource_limits" end time: Jun 26 09:46 PDT
+"resource_limits" end time: Jun 26 10:49 PDT
 "resource_limits" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-59/59 Testing: lsn_watermark_restart
-59/59 Test: lsn_watermark_restart
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/regression/lsn_watermark_restart.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648445"
+52/59 Testing: performance_paths
+52/59 Test: performance_paths
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_paths.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"lsn_watermark_restart" start time: Jun 26 09:46 PDT
+"performance_paths" start time: Jun 26 10:49 PDT
 Output:
 ----------------------------------------------------------
-lsn_watermark_restart PASS seed=12648445
+[DB] destructor: flush complete, durable_lsn=4117
 <end of output>
-Test time =   1.67 sec
+Test time =   0.86 sec
 ----------------------------------------------------------
 Test Passed.
-"lsn_watermark_restart" end time: Jun 26 09:46 PDT
-"lsn_watermark_restart" time elapsed: 00:00:01
+"performance_paths" end time: Jun 26 10:49 PDT
+"performance_paths" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-58/59 Testing: update_halloween
-58/59 Test: update_halloween
-Command: "/usr/bin/python3" "/Users/lixiang/wx-files/minidb/tests/regression/update_halloween.py" "/Users/lixiang/wx-files/minidb/build-tsan/minidb" "--seed" "12648443"
+5/59 Testing: transaction_slots_test
+5/59 Test: transaction_slots_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/transaction_slots_test"
 Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
-"update_halloween" start time: Jun 26 09:46 PDT
+"transaction_slots_test" start time: Jun 26 10:49 PDT
 Output:
 ----------------------------------------------------------
-update_halloween PASS seed=12648443
+[DB] destructor: flush complete, durable_lsn=560
 <end of output>
-Test time =   2.44 sec
+Test time =   0.82 sec
 ----------------------------------------------------------
 Test Passed.
-"update_halloween" end time: Jun 26 09:46 PDT
-"update_halloween" time elapsed: 00:00:02
+"transaction_slots_test" end time: Jun 26 10:49 PDT
+"transaction_slots_test" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: Jun 26 09:46 PDT
+10/59 Testing: config_parse_test
+10/59 Test: config_parse_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/config_parse_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"config_parse_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   1.02 sec
+----------------------------------------------------------
+Test Passed.
+"config_parse_test" end time: Jun 26 10:49 PDT
+"config_parse_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+56/59 Testing: production_regression
+56/59 Test: production_regression
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/regression/production_regression.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"production_regression" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=1968
+<end of output>
+Test time =   0.70 sec
+----------------------------------------------------------
+Test Passed.
+"production_regression" end time: Jun 26 10:49 PDT
+"production_regression" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/59 Testing: index_delete_rebuild
+26/59 Test: index_delete_rebuild
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/index/index_delete_rebuild.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_delete_rebuild" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=2524
+<end of output>
+Test time =   0.63 sec
+----------------------------------------------------------
+Test Passed.
+"index_delete_rebuild" end time: Jun 26 10:49 PDT
+"index_delete_rebuild" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/59 Testing: tuple_value_edge_test
+2/59 Test: tuple_value_edge_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/tuple_value_edge_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"tuple_value_edge_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.67 sec
+----------------------------------------------------------
+Test Passed.
+"tuple_value_edge_test" end time: Jun 26 10:49 PDT
+"tuple_value_edge_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/59 Testing: index_key_btree_test
+7/59 Test: index_key_btree_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/index_key_btree_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"index_key_btree_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.88 sec
+----------------------------------------------------------
+Test Passed.
+"index_key_btree_test" end time: Jun 26 10:49 PDT
+"index_key_btree_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/59 Testing: sql_keyword_combinations
+12/59 Test: sql_keyword_combinations
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/sql_keyword_combinations.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"sql_keyword_combinations" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.44 sec
+----------------------------------------------------------
+Test Passed.
+"sql_keyword_combinations" end time: Jun 26 10:49 PDT
+"sql_keyword_combinations" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/59 Testing: wal_buffer_pool_test
+4/59 Test: wal_buffer_pool_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/wal_buffer_pool_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"wal_buffer_pool_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.66 sec
+----------------------------------------------------------
+Test Passed.
+"wal_buffer_pool_test" end time: Jun 26 10:49 PDT
+"wal_buffer_pool_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/59 Testing: full_sql_suite
+13/59 Test: full_sql_suite
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/full_sql_suite.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"full_sql_suite" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=697
+<end of output>
+Test time =   0.66 sec
+----------------------------------------------------------
+Test Passed.
+"full_sql_suite" end time: Jun 26 10:49 PDT
+"full_sql_suite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/59 Testing: container_test
+9/59 Test: container_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/container_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"container_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.67 sec
+----------------------------------------------------------
+Test Passed.
+"container_test" end time: Jun 26 10:49 PDT
+"container_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/59 Testing: datetime_parse_test
+8/59 Test: datetime_parse_test
+Command: "/Users/lixiang/wx-files/minidb/build-tsan/tests/datetime_parse_test"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"datetime_parse_test" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+datetime_parse_test passed
+<end of output>
+Test time =   0.92 sec
+----------------------------------------------------------
+Test Passed.
+"datetime_parse_test" end time: Jun 26 10:49 PDT
+"datetime_parse_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/59 Testing: hot_index_semantics
+24/59 Test: hot_index_semantics
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/ddl/hot_index_semantics.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"hot_index_semantics" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=21
+<end of output>
+Test time =   0.43 sec
+----------------------------------------------------------
+Test Passed.
+"hot_index_semantics" end time: Jun 26 10:49 PDT
+"hot_index_semantics" time elapsed: 00:00:00
+----------------------------------------------------------
+
+54/59 Testing: performance_optimizations
+54/59 Test: performance_optimizations
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/performance/performance_optimizations.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"performance_optimizations" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=509
+<end of output>
+Test time =   0.46 sec
+----------------------------------------------------------
+Test Passed.
+"performance_optimizations" end time: Jun 26 10:49 PDT
+"performance_optimizations" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/59 Testing: join_syntax_strict
+15/59 Test: join_syntax_strict
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/join_syntax_strict.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"join_syntax_strict" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.42 sec
+----------------------------------------------------------
+Test Passed.
+"join_syntax_strict" end time: Jun 26 10:49 PDT
+"join_syntax_strict" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/59 Testing: datetime_types
+14/59 Test: datetime_types
+Command: "/bin/bash" "/Users/lixiang/wx-files/minidb/tests/sql/datetime_types.sh" "/Users/lixiang/wx-files/minidb/build-tsan/minidb"
+Directory: /Users/lixiang/wx-files/minidb/build-tsan/tests
+"datetime_types" start time: Jun 26 10:49 PDT
+Output:
+----------------------------------------------------------
+[DB] destructor: flush complete, durable_lsn=13
+datetime_types passed
+<end of output>
+Test time =   0.41 sec
+----------------------------------------------------------
+Test Passed.
+"datetime_types" end time: Jun 26 10:49 PDT
+"datetime_types" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Jun 26 10:49 PDT

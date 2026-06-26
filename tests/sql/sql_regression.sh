@@ -444,3 +444,23 @@ require_contains 'a
 10
 25
 30' "$stale_out"
+
+# CREATE INDEX on a table that already contains NULL-valued rows must not
+# corrupt the index: lookups for the non-null rows must still work. (NULL key
+# columns are not indexed; IS NULL uses a sequential scan.)
+nullidx_out="$(
+    run_sql \
+        'CREATE TABLE nidx (id INT PRIMARY KEY, a INT);' \
+        'INSERT INTO nidx VALUES (1,10),(2,NULL),(3,30),(4,NULL);' \
+        'CREATE INDEX nidx_a ON nidx(a);' \
+        'SELECT id FROM nidx WHERE a = 10;' \
+        'SELECT id FROM nidx WHERE a = 30;' \
+        'SELECT COUNT(*) FROM nidx WHERE a >= 5;' \
+        'SELECT COUNT(*) FROM nidx WHERE a IS NULL;'
+)"
+require_contains 'id
+1' "$nullidx_out"
+require_contains 'id
+3' "$nullidx_out"
+require_contains 'agg_0
+2' "$nullidx_out"
