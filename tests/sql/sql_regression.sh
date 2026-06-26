@@ -382,3 +382,18 @@ ucoerce_out="$(
         'SELECT d FROM ucoercet WHERE id = 1;'
 )"
 require_contains '7.000000' "$ucoerce_out"
+
+# CAST of an out-of-range value to a narrower integer type must yield NULL,
+# not a silently wrapped/garbage value (the fast numeric cast path used to
+# wrap or invoke UB).
+cast_out="$(
+    run_sql \
+        'SELECT CAST(5000000000 AS INT) AS a;' \
+        'SELECT CAST(3000000000.0 AS INT) AS b;' \
+        'SELECT CAST(2000000000 AS INT) AS c;'
+)"
+require_contains 'a
+NULL' "$cast_out"
+require_contains 'c
+2000000000' "$cast_out"
+require_not_contains '705032704' "$cast_out"
