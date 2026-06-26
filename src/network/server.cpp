@@ -1363,13 +1363,22 @@ void Server::handle_client(int client_fd) {
 
         bool in_single_quote = false;
         bool in_double_quote = false;
+        bool in_line_comment = false;
         bool found_semi = false;
         for (u32 i = 0; i < sql_buffer.size(); i++) {
             char c = sql_buffer[i];
+            if (in_line_comment) {
+                if (c == '\n') in_line_comment = false;
+                continue;
+            }
             if (c == '\'' && !in_double_quote) {
                 in_single_quote = !in_single_quote;
             } else if (c == '"' && !in_single_quote) {
                 in_double_quote = !in_double_quote;
+            } else if (c == '-' && i + 1 < sql_buffer.size() && sql_buffer[i + 1] == '-' &&
+                       !in_single_quote && !in_double_quote) {
+                in_line_comment = true;
+                i++;
             } else if (c == ';' && !in_single_quote && !in_double_quote) {
                 found_semi = true;
                 break;
@@ -1382,12 +1391,21 @@ void Server::handle_client(int client_fd) {
                 u32 semi_pos = sql_buffer.size();
                 in_single_quote = false;
                 in_double_quote = false;
+                in_line_comment = false;
                 for (u32 i = start; i < sql_buffer.size(); i++) {
                     char c = sql_buffer[i];
+                    if (in_line_comment) {
+                        if (c == '\n') in_line_comment = false;
+                        continue;
+                    }
                     if (c == '\'' && !in_double_quote) {
                         in_single_quote = !in_single_quote;
                     } else if (c == '"' && !in_single_quote) {
                         in_double_quote = !in_double_quote;
+                    } else if (c == '-' && i + 1 < sql_buffer.size() && sql_buffer[i + 1] == '-' &&
+                               !in_single_quote && !in_double_quote) {
+                        in_line_comment = true;
+                        i++;
                     } else if (c == ';' && !in_single_quote && !in_double_quote) {
                         semi_pos = i;
                         break;
