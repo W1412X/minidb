@@ -131,7 +131,14 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     LockGuard guard(latch_);
     if (fd_ < 0) return 0;
 
+    // Zero the whole header first: WalRecord is not packed, so there are
+    // padding bytes between `type` (u16) and `data_len` (u32). The CRC is
+    // computed over sizeof(hdr), so leaving padding uninitialized both reads
+    // indeterminate stack memory (UB) and writes nondeterministic bytes into
+    // the durable WAL. Zeroing keeps the on-disk format/size unchanged while
+    // making the bytes deterministic.
     WalRecord hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
     hdr.magic = kWalRecordMagic;
     hdr.crc = 0;     // placeholder — included in the CRC as zero
     hdr.lsn = next_lsn_.load();
@@ -381,6 +388,7 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // log is truncated, so no other writer can sneak in records that
     // would later get clobbered by the truncate.
     WalRecord hdr;
+    std::memset(&hdr, 0, sizeof(hdr));  // zero padding; see write_record
     hdr.magic = kWalRecordMagic;
     hdr.crc = 0;
     hdr.lsn = next_lsn_.load();
