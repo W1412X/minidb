@@ -297,3 +297,19 @@ require_contains 'id
 1' "$dbl_out"
 require_contains 'agg_0
 0' "$dbl_out"
+
+# SUM/AVG over an INT32 column must accumulate in 64-bit. Each value is in
+# int32 range but the running total overflows int32; the result must not
+# collapse to NULL. Covers both the fast (no GROUP BY) and slow (GROUP BY)
+# aggregation paths.
+sum_out="$(
+    run_sql \
+        'CREATE TABLE sumbig (g INT, x INT);' \
+        'INSERT INTO sumbig VALUES (1, 2000000000), (1, 2000000000), (2, 2000000000), (2, 2000000000);' \
+        'SELECT SUM(x) FROM sumbig;' \
+        'SELECT g, SUM(x) FROM sumbig GROUP BY g ORDER BY g;'
+)"
+require_contains 'agg_0
+8000000000' "$sum_out"
+require_contains '1 | 4000000000' "$sum_out"
+require_not_contains 'NULL' "$sum_out"
