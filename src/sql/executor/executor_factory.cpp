@@ -307,7 +307,12 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             for (u32 i = 0; i < u_plan->set_clauses.size(); i++) {
                 Pair<String, UniquePtr<Expression>> c;
                 c.first = u_plan->set_clauses[i].first;
-                c.second = UniquePtr<Expression>(u_plan->set_clauses[i].second->clone());
+                // Materialize scalar subqueries in the SET value, e.g.
+                // UPDATE t SET v = (SELECT MAX(v) FROM t); otherwise the
+                // evaluator cannot run the subquery and stores NULL.
+                auto m = materialize_scalar_subqueries(u_plan->set_clauses[i].second.get());
+                c.second = m ? static_cast<UniquePtr<Expression>&&>(m)
+                             : UniquePtr<Expression>(u_plan->set_clauses[i].second->clone());
                 clauses.push_back(static_cast<Pair<String, UniquePtr<Expression>>&&>(c));
             }
 
