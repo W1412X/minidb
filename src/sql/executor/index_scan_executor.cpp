@@ -11,14 +11,15 @@ IndexScanExecutor::IndexScanExecutor(
     BufferPool* pool, HeapFile* heap, BPlusTree* index,
     const IndexKey& search_key, bool is_range,
     const IndexKey& range_high, const Schema& output_schema,
-    TransactionManager* txn_mgr)
+    TransactionManager* txn_mgr, const Vector<u32>& key_columns)
     : pool_(pool), index_(index),
       search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
       has_last_index_rid_(false), txn_mgr_(txn_mgr), last_rid_(),
       table_id_(heap ? heap->table_id() : 0), heap_(heap),
-      cached_heap_page_id_(kNullPageId), cached_heap_page_(nullptr) {}
+      cached_heap_page_id_(kNullPageId), cached_heap_page_(nullptr),
+      key_columns_(key_columns) {}
 
 IndexScanExecutor::~IndexScanExecutor() {
     if (cached_heap_page_) {
@@ -207,6 +208,7 @@ ExecResult IndexScanExecutor::next() {
             if (scan_leaf_id_ == kNullPageId) batch_exhausted_ = true;
         }
         RecordId rid = batch_rids_[batch_pos_];
+        IndexKey entry_key = batch_keys_[batch_pos_];
         batch_pos_++;
         last_index_rid_ = rid;
         has_last_index_rid_ = true;
@@ -243,6 +245,27 @@ ExecResult IndexScanExecutor::next() {
             VersionResult vr = follow_version_chain(pool_, txn_mgr_, page, visible_slot,
                                                      output_schema_);
             if (vr.tuple.column_count() > 0) {
+                // Key recheck: the index entry may be stale (an UPDATE of the
+                // indexed column inserts a new entry but leaves the old one
+                // until GC). Following the version chain from a stale entry
+                // reaches the current version, whose key may no longer match —
+                // emitting it would return a wrong row, or (in a range scan)
+                // duplicate the row that its own up-to-date entry also yields.
+                // Confirm the visible tuple's key columns still equal this
+                // entry's key before accepting it.
+                if (!key_columns_.empty()) {
+                    bool key_ok = entry_key.column_count() == key_columns_.size();
+                    for (u32 k = 0; key_ok && k < key_columns_.size(); k++) {
+                        if (key_columns_[k] >= vr.tuple.column_count() ||
+                            vr.tuple.get_value(key_columns_[k]).compare(entry_key.value(k)) != 0) {
+                            key_ok = false;
+                        }
+                    }
+                    if (!key_ok) {
+                        if (TraceContext* trace = current_trace()) trace->record_index_recheck(false);
+                        continue;
+                    }
+                }
                 if (TraceContext* trace = current_trace()) trace->record_index_recheck(true);
                 // Apply pushed-down residual predicate inline. Rejected rows
                 // never cross the operator boundary, saving a result move.
@@ -300,10 +323,18 @@ bool IndexScanExecutor::fast_count(u64* count) {
         (void)frozen_pages;
         if (heap_->meta().num_data_pages > 0 &&
             visible_pages >= heap_->meta().num_data_pages) {
+            // All pages all-visible ⟹ GC has removed dead versions and their
+            // stale index entries, so the raw entry count is exact.
             *count = index_->range_count(search_key_, high);
             return true;
         }
     }
+
+    // Not all pages are all-visible, so the index may hold stale entries whose
+    // key no longer matches the visible tuple. The per-entry visibility check
+    // below does not re-validate the key, so bail to the per-row scan path
+    // (which does) rather than over-counting superseded entries.
+    if (!key_columns_.empty()) return false;
 
     PageId leaf_id = kNullPageId;
     u16 slot_idx = 0;
@@ -391,11 +422,14 @@ IndexOnlyScanExecutor::IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index,
                                              bool is_range, const IndexKey& range_high,
                                              const Schema& output_schema,
                                              TransactionManager* txn_mgr,
-                                             HeapFile* heap)
+                                             HeapFile* heap,
+                                             const Schema& table_schema,
+                                             u32 recheck_key_col)
     : pool_(pool), index_(index), search_key_(search_key), is_range_(is_range),
       range_high_(range_high), output_schema_(output_schema),
       scan_leaf_id_(kNullPageId), scan_slot_idx_(0), last_index_rid_(),
-      has_last_index_rid_(false), txn_mgr_(txn_mgr), heap_(heap) {}
+      has_last_index_rid_(false), txn_mgr_(txn_mgr), heap_(heap),
+      recheck_schema_(table_schema), recheck_key_col_(recheck_key_col) {}
 
 void IndexOnlyScanExecutor::init() {
     scan_leaf_id_ = kNullPageId;
@@ -451,7 +485,24 @@ ExecResult IndexOnlyScanExecutor::next() {
                 }
                 bool visible = false;
                 if (lp && lp->is_valid()) {
-                    visible = visible_header(pool_, txn_mgr_, page, visible_slot);
+                    if (recheck_key_col_ != static_cast<u32>(-1) &&
+                        recheck_schema_.column_count() > recheck_key_col_) {
+                        // The index entry may be stale: an UPDATE that changed
+                        // the indexed column inserts a new entry but leaves the
+                        // old one until GC. Confirm the visible tuple's actual
+                        // key column still equals this entry's key before
+                        // emitting, otherwise a query for the old value would
+                        // wrongly return the row (and a scan would emit a
+                        // phantom key).
+                        VersionResult vr = follow_version_chain(
+                            pool_, txn_mgr_, page, visible_slot, recheck_schema_);
+                        if (vr.tuple.column_count() > recheck_key_col_) {
+                            Value actual = vr.tuple.get_value(recheck_key_col_);
+                            visible = actual.compare(key.first_value()) == 0;
+                        }
+                    } else {
+                        visible = visible_header(pool_, txn_mgr_, page, visible_slot);
+                    }
                 }
                 pool_->unpin_page(rid.page_id);
                 if (TraceContext* trace = current_trace()) {

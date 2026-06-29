@@ -56,6 +56,10 @@ static int sql_compare_values(const Value& left, const Value& right) {
     return left.compare(right);
 }
 
+int ExpressionEvaluator::compare_values(const Value& left, const Value& right) {
+    return sql_compare_values(left, right);
+}
+
 static Value compare_result(const Value& left, const Value& right, const String& op) {
     if (is_datetime_type(left.type_id()) || is_datetime_type(right.type_id())) {
         Value l = left;

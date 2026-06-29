@@ -1246,15 +1246,23 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         ExecResult r = exec->next();
         if (!r.ok()) break;
         u32 pos = 0;
+        // Reserve one byte for the trailing newline. The loop maintains the
+        // invariant pos <= cap, so `cap - pos` never underflows. The previous
+        // code computed `sizeof(row_buf) - pos - 2` which wrapped to a huge u32
+        // once a separator pushed pos to 8191, causing an out-of-bounds memcpy.
+        const u32 cap = sizeof(row_buf) - 1;
         for (u32 i = 0; i < out.column_count(); i++) {
-            if (i > 0 && pos + 3 < sizeof(row_buf)) { row_buf[pos++] = ' '; row_buf[pos++] = '|'; row_buf[pos++] = ' '; }
+            if (i > 0) {
+                for (const char* s = " | "; *s && pos < cap; ++s) row_buf[pos++] = *s;
+            }
             Value v = r.tuple.get_value(i);
             String vs = v.is_null() ? String("NULL") : v.to_string();
-            u32 cl = vs.size();
-            if (pos + cl >= sizeof(row_buf) - 2) cl = sizeof(row_buf) - pos - 2;
-            std::memcpy(row_buf + pos, vs.c_str(), cl); pos += cl;
+            u32 avail = cap - pos;
+            u32 cl = vs.size() < avail ? vs.size() : avail;
+            std::memcpy(row_buf + pos, vs.c_str(), cl);
+            pos += cl;
         }
-        if (pos < sizeof(row_buf)) row_buf[pos++] = '\n';
+        row_buf[pos++] = '\n';
         send(fd, row_buf, pos, 0);
         row_count++;
     }
@@ -1355,13 +1363,22 @@ void Server::handle_client(int client_fd) {
 
         bool in_single_quote = false;
         bool in_double_quote = false;
+        bool in_line_comment = false;
         bool found_semi = false;
         for (u32 i = 0; i < sql_buffer.size(); i++) {
             char c = sql_buffer[i];
+            if (in_line_comment) {
+                if (c == '\n') in_line_comment = false;
+                continue;
+            }
             if (c == '\'' && !in_double_quote) {
                 in_single_quote = !in_single_quote;
             } else if (c == '"' && !in_single_quote) {
                 in_double_quote = !in_double_quote;
+            } else if (c == '-' && i + 1 < sql_buffer.size() && sql_buffer[i + 1] == '-' &&
+                       !in_single_quote && !in_double_quote) {
+                in_line_comment = true;
+                i++;
             } else if (c == ';' && !in_single_quote && !in_double_quote) {
                 found_semi = true;
                 break;
@@ -1374,12 +1391,21 @@ void Server::handle_client(int client_fd) {
                 u32 semi_pos = sql_buffer.size();
                 in_single_quote = false;
                 in_double_quote = false;
+                in_line_comment = false;
                 for (u32 i = start; i < sql_buffer.size(); i++) {
                     char c = sql_buffer[i];
+                    if (in_line_comment) {
+                        if (c == '\n') in_line_comment = false;
+                        continue;
+                    }
                     if (c == '\'' && !in_double_quote) {
                         in_single_quote = !in_single_quote;
                     } else if (c == '"' && !in_single_quote) {
                         in_double_quote = !in_double_quote;
+                    } else if (c == '-' && i + 1 < sql_buffer.size() && sql_buffer[i + 1] == '-' &&
+                               !in_single_quote && !in_double_quote) {
+                        in_line_comment = true;
+                        i++;
                     } else if (c == ';' && !in_single_quote && !in_double_quote) {
                         semi_pos = i;
                         break;

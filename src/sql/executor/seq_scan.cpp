@@ -442,6 +442,15 @@ struct FastAggState {
                      has_value(false), double_sum(0.0) {}
 };
 
+// Widen integer SUM operands to 64-bit so partial sums of in-range int32
+// values do not overflow int32 and collapse to NULL. Mirrors the slow-path
+// aggregate executor.
+static Value widen_int_for_sum(const Value& v) {
+    if (v.type_id() == TypeId::kInt32) return Value(static_cast<i64>(v.get_int32()));
+    if (v.type_id() == TypeId::kBool)  return Value(static_cast<i64>(v.get_bool() ? 1 : 0));
+    return v;
+}
+
 static bool fast_numeric_as_double(const Value& value, double* out) {
     if (!out || value.is_null()) return false;
     switch (value.type_id()) {
@@ -560,7 +569,11 @@ bool SeqScanExecutor::fast_plain_aggregate(const Vector<AggregateColumn>& aggreg
                 }
                 if (v.is_null()) continue;
                 if (!state.has_value) {
-                    state.value = v;
+                    // Widen integer SUM accumulators to 64-bit so a running
+                    // total over int32 values does not overflow to NULL.
+                    state.value = (state.func == AggFunc::kSum)
+                                      ? widen_int_for_sum(v)
+                                      : v;
                     state.has_value = true;
                     state.count = 1;
                     double d = 0.0;

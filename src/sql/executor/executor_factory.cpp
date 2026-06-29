@@ -163,10 +163,14 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!heap || !index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
+            // Pass the index key columns so the scan can recheck stale entries
+            // (left by UPDATEs of the indexed column) against the visible tuple.
+            IndexEntry* idx_entry = db_.catalog().get_index(scan_plan->index_id);
+            Vector<u32> key_cols = idx_entry ? idx_entry->key_columns : Vector<u32>();
             auto exec = UniquePtr<IndexScanExecutor>(new IndexScanExecutor(
                 &db_.pool(), heap, index, scan_plan->search_key,
                 scan_plan->is_range, scan_plan->range_high,
-                scan_plan->output_schema, tm));
+                scan_plan->output_schema, tm, key_cols));
             if (scan_plan->pushed_predicate) {
                 auto pred = materialize_scalar_subqueries(scan_plan->pushed_predicate.get());
                 if (pred) exec->set_pushed_predicate(static_cast<UniquePtr<Expression>&&>(pred));
@@ -180,9 +184,19 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             if (!index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
+            // Pass the table schema + single key column so the executor can
+            // recheck stale index entries (left behind by UPDATEs of the
+            // indexed column) against the visible heap tuple.
+            TableEntry* table = db_.catalog().get_table(scan_plan->table_id);
+            IndexEntry* idx_entry = db_.catalog().get_index(scan_plan->index_id);
+            Schema table_schema = table ? table->schema : Schema();
+            u32 key_col = (idx_entry && idx_entry->key_columns.size() == 1)
+                              ? idx_entry->key_columns[0]
+                              : static_cast<u32>(-1);
             return maybe_trace_executor(plan, UniquePtr<Executor>(new IndexOnlyScanExecutor(
                 &db_.pool(), index, scan_plan->search_key, scan_plan->is_range,
-                scan_plan->range_high, scan_plan->output_schema, tm, heap)));
+                scan_plan->range_high, scan_plan->output_schema, tm, heap,
+                table_schema, key_col)));
         }
 
         case PlanNodeType::kFilter: {
@@ -225,10 +239,23 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             auto* p_plan = static_cast<ProjectPlan*>(plan);
             auto child = create(p_plan->child.get());
             if (!child) return UniquePtr<Executor>();
+            // Materialize scalar subqueries in the projection list (e.g.
+            // SELECT (SELECT MAX(v) FROM t)). The expression evaluator cannot
+            // execute a subquery node, so without this they evaluated to NULL.
+            // Done at build time like the WHERE-clause path; uncorrelated
+            // scalar subqueries run once and are substituted as a literal.
+            Vector<UniquePtr<Expression>> materialized;
+            materialized.reserve(p_plan->expressions.size());
+            for (u32 i = 0; i < p_plan->expressions.size(); i++) {
+                auto m = materialize_scalar_subqueries(p_plan->expressions[i].get());
+                materialized.push_back(m
+                    ? static_cast<UniquePtr<Expression>&&>(m)
+                    : UniquePtr<Expression>(p_plan->expressions[i]->clone()));
+            }
             return maybe_trace_executor(plan, UniquePtr<Executor>(new ProjectExecutor(
                 static_cast<UniquePtr<Executor>&&>(child),
                 p_plan->output_schema, p_plan->column_indices,
-                p_plan->expressions)));
+                materialized)));
         }
 
         case PlanNodeType::kInsert: {
@@ -280,7 +307,12 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
             for (u32 i = 0; i < u_plan->set_clauses.size(); i++) {
                 Pair<String, UniquePtr<Expression>> c;
                 c.first = u_plan->set_clauses[i].first;
-                c.second = UniquePtr<Expression>(u_plan->set_clauses[i].second->clone());
+                // Materialize scalar subqueries in the SET value, e.g.
+                // UPDATE t SET v = (SELECT MAX(v) FROM t); otherwise the
+                // evaluator cannot run the subquery and stores NULL.
+                auto m = materialize_scalar_subqueries(u_plan->set_clauses[i].second.get());
+                c.second = m ? static_cast<UniquePtr<Expression>&&>(m)
+                             : UniquePtr<Expression>(u_plan->set_clauses[i].second->clone());
                 clauses.push_back(static_cast<Pair<String, UniquePtr<Expression>>&&>(c));
             }
 

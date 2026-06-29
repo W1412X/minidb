@@ -31,6 +31,8 @@ set(MINIDB_UNIT_TESTS
     btree_property_test
     index_key_btree_test
     datetime_parse_test
+    container_test
+    config_parse_test
 )
 
 foreach(_test ${MINIDB_UNIT_TESTS})
@@ -47,6 +49,8 @@ add_test(NAME transaction_slots_test    COMMAND $<TARGET_FILE:transaction_slots_
 add_test(NAME btree_property_test       COMMAND $<TARGET_FILE:btree_property_test> 12648434)
 add_test(NAME index_key_btree_test      COMMAND $<TARGET_FILE:index_key_btree_test>)
 add_test(NAME datetime_parse_test       COMMAND $<TARGET_FILE:datetime_parse_test>)
+add_test(NAME container_test            COMMAND $<TARGET_FILE:container_test>)
+add_test(NAME config_parse_test         COMMAND $<TARGET_FILE:config_parse_test>)
 
 # ---------------------------------------------------------------------------
 # SQL correctness

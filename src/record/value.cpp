@@ -392,6 +392,22 @@ u32 Value::serialized_size() const {
 // Type cast — returns NULL on failure.
 // ============================================================
 
+// Range-checked floating-point to integer conversions. Out-of-range (or NaN)
+// inputs return NULL rather than wrapping — a raw static_cast of an
+// out-of-range double to an integer is undefined behavior, and the slow
+// string-based cast path already rejects such values, so the fast path must
+// agree.
+static Value double_to_int32_value(double d) {
+    if (!(d >= -2147483648.0 && d <= 2147483647.0)) return Value();
+    return Value(static_cast<i32>(d));
+}
+
+static Value double_to_int64_value(double d) {
+    // 2^63 is not representable as i64; use a strict upper bound to stay in range.
+    if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0)) return Value();
+    return Value(static_cast<i64>(d));
+}
+
 Value Value::cast_to(TypeId target) const {
     if (type_id_ == TypeId::kNull) return Value();
     if (type_id_ == target) return *this;
@@ -400,9 +416,11 @@ Value Value::cast_to(TypeId target) const {
     switch (target) {
         case TypeId::kInt32: {
             switch (type_id_) {
-                case TypeId::kInt64:  return Value(static_cast<i32>(int64_val_));
-                case TypeId::kFloat:  return Value(static_cast<i32>(float_val_));
-                case TypeId::kDouble: return Value(static_cast<i32>(double_val_));
+                case TypeId::kInt64:
+                    if (int64_val_ < INT32_MIN || int64_val_ > INT32_MAX) return Value();
+                    return Value(static_cast<i32>(int64_val_));
+                case TypeId::kFloat:  return double_to_int32_value(static_cast<double>(float_val_));
+                case TypeId::kDouble: return double_to_int32_value(double_val_);
                 case TypeId::kBool:   return Value(static_cast<i32>(bool_val_ ? 1 : 0));
                 default: break;
             }
@@ -411,8 +429,8 @@ Value Value::cast_to(TypeId target) const {
         case TypeId::kInt64: {
             switch (type_id_) {
                 case TypeId::kInt32:  return Value(static_cast<i64>(int32_val_));
-                case TypeId::kFloat:  return Value(static_cast<i64>(float_val_));
-                case TypeId::kDouble: return Value(static_cast<i64>(double_val_));
+                case TypeId::kFloat:  return double_to_int64_value(static_cast<double>(float_val_));
+                case TypeId::kDouble: return double_to_int64_value(double_val_);
                 case TypeId::kBool:   return Value(static_cast<i64>(bool_val_ ? 1 : 0));
                 default: break;
             }

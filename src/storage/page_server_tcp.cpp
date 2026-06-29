@@ -104,10 +104,16 @@ bool PageServerTcpService::start() {
 
 void PageServerTcpService::stop() {
     bool was_running = running_.exchange(false);
-    if (listen_fd_ >= 0) {
-        shutdown_fd(listen_fd_);
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    // Close (but do not yet clear) the listening socket to unblock the
+    // acceptor's blocking accept(). We must not write listen_fd_ here: the
+    // acceptor reads it concurrently in accept(listen_fd_), and a concurrent
+    // read+write of the same int is a data race. Two reads do not conflict,
+    // so close() using the current value is safe; the -1 store is deferred
+    // until after accept_thread_ is joined, when no other thread touches it.
+    int fd = listen_fd_;
+    if (fd >= 0) {
+        shutdown_fd(fd);
+        ::close(fd);
     }
     if (was_running) {
         LockGuard clients_guard(clients_latch_);
@@ -118,6 +124,7 @@ void PageServerTcpService::stop() {
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
+    listen_fd_ = -1;  // safe now: the acceptor has exited
     {
         LockGuard workers_guard(workers_latch_);
         for (size_t i = 0; i < worker_threads_.size(); i++) {
@@ -183,6 +190,20 @@ void PageServerTcpService::handle_client(int fd) {
         resp.reserved = 0;
         resp.durable_lsn = server_->durable_lsn();
         resp.value = 0;
+
+        // Reject absurd sizes read off the wire before using them to size
+        // allocations. hdr.count and hdr.name_len are attacker-controlled u32s;
+        // without a bound a single request can force a multi-terabyte resize()
+        // (OOM / DoS), and name_len == UINT32_MAX would overflow name_len + 1
+        // to 0, yielding an undersized buffer. The caps are far above any
+        // legitimate batch or filename length.
+        static constexpr u32 kMaxRpcBatchPages = 1u << 16;   // 64K pages (512 MB)
+        static constexpr u32 kMaxRpcNameLen = 4096;
+        if (hdr.count > kMaxRpcBatchPages || hdr.name_len > kMaxRpcNameLen) {
+            resp.status = static_cast<u16>(PageRpcStatus::kError);
+            write_full(fd, &resp, sizeof(resp));
+            return;
+        }
 
         if (hdr.op == static_cast<u16>(PageRpcOp::kReadBatch)) {
             Vector<PageRpcPageRef> refs;

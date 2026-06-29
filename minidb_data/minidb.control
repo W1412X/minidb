@@ -1,0 +1,4 @@
+version=1
+next_txn_id=7
+checkpoint_lsn=14
+clean_shutdown=true

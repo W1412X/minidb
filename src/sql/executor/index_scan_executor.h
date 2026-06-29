@@ -22,7 +22,8 @@ public:
     IndexScanExecutor(BufferPool* pool, HeapFile* heap, BPlusTree* index,
                       const IndexKey& search_key, bool is_range,
                       const IndexKey& range_high, const Schema& output_schema,
-                      TransactionManager* txn_mgr = nullptr);
+                      TransactionManager* txn_mgr = nullptr,
+                      const Vector<u32>& key_columns = Vector<u32>());
     ~IndexScanExecutor() override;
     void init() override;
     ExecResult next() override;
@@ -58,6 +59,13 @@ private:
     UniquePtr<Expression> pushed_predicate_;
     CompiledPredicate compiled_pushed_;
     bool pushed_compile_ok_ = false;
+    // Index key column indices (into output_schema_, which is the full table
+    // schema for an index scan). Used to recheck that a visible tuple's actual
+    // key still equals the index entry's key — entries left stale by an UPDATE
+    // of the indexed column are not removed until GC, and following the version
+    // chain from such an entry would otherwise yield a non-matching row (or a
+    // duplicate, in a range scan).
+    Vector<u32> key_columns_;
 
     // Batched range-scan buffer. range_scan_batch fills these with up to
     // kBatchSize entries per call, collapsing N×latch-and-pin work into a
@@ -76,7 +84,9 @@ public:
     IndexOnlyScanExecutor(BufferPool* pool, BPlusTree* index, const IndexKey& search_key,
                           bool is_range, const IndexKey& range_high,
                           const Schema& output_schema, TransactionManager* txn_mgr = nullptr,
-                          HeapFile* heap = nullptr);
+                          HeapFile* heap = nullptr,
+                          const Schema& table_schema = Schema(),
+                          u32 recheck_key_col = static_cast<u32>(-1));
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
@@ -95,6 +105,13 @@ private:
     bool has_last_index_rid_;
     TransactionManager* txn_mgr_;
     HeapFile* heap_;  // VM-based optimization: skip heap fetch for all-visible pages
+    // Recheck support: the full table schema and the single index key column.
+    // Index entries are not eagerly removed when an UPDATE changes the indexed
+    // column, so a stale entry's key may differ from the visible tuple's actual
+    // value. On not-all-visible pages we deserialize the visible tuple and
+    // confirm its key column still equals the entry key before emitting.
+    Schema recheck_schema_;
+    u32 recheck_key_col_;
     // Same batched-iterator buffer pattern as IndexScanExecutor — see the
     // comment there for rationale.
     static constexpr u32 kBatchSize = 32;

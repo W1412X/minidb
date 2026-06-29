@@ -8,6 +8,56 @@
 
 namespace minidb {
 
+namespace {
+
+bool is_int_like(TypeId t) {
+    return t == TypeId::kBool || t == TypeId::kInt32 || t == TypeId::kInt64;
+}
+
+bool is_numeric_like(TypeId t) {
+    return is_int_like(t) || t == TypeId::kFloat || t == TypeId::kDouble;
+}
+
+i64 as_i64(const Value& v) {
+    switch (v.type_id()) {
+        case TypeId::kBool:  return v.get_bool() ? 1 : 0;
+        case TypeId::kInt32: return v.get_int32();
+        case TypeId::kInt64: return v.get_int64();
+        default:             return 0;
+    }
+}
+
+double as_double(const Value& v) {
+    switch (v.type_id()) {
+        case TypeId::kBool:   return v.get_bool() ? 1.0 : 0.0;
+        case TypeId::kInt32:  return static_cast<double>(v.get_int32());
+        case TypeId::kInt64:  return static_cast<double>(v.get_int64());
+        case TypeId::kFloat:  return static_cast<double>(v.get_float());
+        case TypeId::kDouble: return v.get_double();
+        default:              return 0.0;
+    }
+}
+
+// Order two non-NULL values. Value::compare orders by type-id first when the
+// types differ, so a mixed-numeric ORDER BY key (e.g. int32 vs int64 produced
+// by a CASE expression) would sort all int32 values before all int64 values
+// regardless of magnitude. Compare cross-type numerics by value instead, while
+// keeping same-type comparison exact (important for full-width int64).
+int compare_values_for_sort(const Value& a, const Value& b) {
+    if (a.type_id() == b.type_id()) return a.compare(b);
+    if (is_numeric_like(a.type_id()) && is_numeric_like(b.type_id())) {
+        if (is_int_like(a.type_id()) && is_int_like(b.type_id())) {
+            i64 l = as_i64(a), r = as_i64(b);
+            return (l < r) ? -1 : (l > r ? 1 : 0);
+        }
+        double l = as_double(a), r = as_double(b);
+        return (l < r) ? -1 : (l > r ? 1 : 0);
+    }
+    return a.compare(b);
+}
+
+} // namespace
+
 SortExecutor::SortExecutor(UniquePtr<Executor> child, Vector<SortKey>&& keys,
                            const Schema& output_schema, u64 work_mem_bytes,
                            i32 top_n, u64 temp_file_limit_bytes,
@@ -137,7 +187,7 @@ int SortExecutor::compare_tuples(const Tuple& a, const Tuple& b) const {
             bool nf = keys_[i].nulls_first;
             return a_null ? (nf ? -1 : 1) : (nf ? 1 : -1);
         }
-        int cmp = va.compare(vb);
+        int cmp = compare_values_for_sort(va, vb);
         if (cmp != 0) {
             return keys_[i].ascending ? cmp : -cmp;
         }

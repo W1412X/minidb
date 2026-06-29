@@ -282,3 +282,263 @@ require_contains '501 | 1002' "$big_out"
 require_contains 'deleted_rows
 6' "$big_out"
 require_contains '424' "$big_out"
+
+# Double-precision literals must not be narrowed to 32-bit float by the parser:
+# a DOUBLE column value must compare equal to the same literal, and a literal
+# that only differs beyond float precision must NOT match.
+dbl_out="$(
+    run_sql \
+        'CREATE TABLE dbl_lit (id INT PRIMARY KEY, d DOUBLE);' \
+        'INSERT INTO dbl_lit VALUES (1, 3.141592653589793);' \
+        'SELECT id FROM dbl_lit WHERE d = 3.141592653589793;' \
+        'SELECT COUNT(*) FROM dbl_lit WHERE d = 3.1415927;'
+)"
+require_contains 'id
+1' "$dbl_out"
+require_contains 'agg_0
+0' "$dbl_out"
+
+# SUM/AVG over an INT32 column must accumulate in 64-bit. Each value is in
+# int32 range but the running total overflows int32; the result must not
+# collapse to NULL. Covers both the fast (no GROUP BY) and slow (GROUP BY)
+# aggregation paths.
+sum_out="$(
+    run_sql \
+        'CREATE TABLE sumbig (g INT, x INT);' \
+        'INSERT INTO sumbig VALUES (1, 2000000000), (1, 2000000000), (2, 2000000000), (2, 2000000000);' \
+        'SELECT SUM(x) FROM sumbig;' \
+        'SELECT g, SUM(x) FROM sumbig GROUP BY g ORDER BY g;'
+)"
+require_contains 'agg_0
+8000000000' "$sum_out"
+require_contains '1 | 4000000000' "$sum_out"
+require_not_contains 'NULL' "$sum_out"
+
+# COUNT(*) over a join with a single-table WHERE: the predicate is pushed into
+# the scan, and the count-only late-materialization projection must not drop the
+# column the pushed predicate references (else every row is filtered out → 0).
+cntpred_out="$(
+    run_sql \
+        'CREATE TABLE cpa (id INT, x INT);' \
+        'CREATE TABLE cpb (id INT);' \
+        'INSERT INTO cpa VALUES (1,50),(2,150),(3,200),(4,80);' \
+        'INSERT INTO cpb VALUES (1),(2),(3),(4);' \
+        'SELECT COUNT(*) FROM cpa JOIN cpb ON cpa.id = cpb.id WHERE cpa.x > 100;' \
+        'SELECT COUNT(*) FROM cpa JOIN cpb ON cpa.id = cpb.id;'
+)"
+require_contains 'agg_0
+2' "$cntpred_out"
+require_contains 'agg_0
+4' "$cntpred_out"
+
+# A column DEFAULT must be stored with the column's exact type, not widened.
+# A widened default (int64 for an INT32 column) compares unequal to a same-typed
+# literal because Value::compare orders by type-id first.
+def_out="$(
+    run_sql \
+        'CREATE TABLE deftype (id INT PRIMARY KEY, a INT DEFAULT 5);' \
+        'INSERT INTO deftype (id) VALUES (1);' \
+        'INSERT INTO deftype VALUES (2, 9);' \
+        'SELECT id FROM deftype WHERE a = 5;' \
+        'SELECT COUNT(*) FROM deftype WHERE a = 5;'
+)"
+require_contains 'id
+1' "$def_out"
+require_contains 'agg_0
+1' "$def_out"
+
+# Compiled predicate must compare cross-type numerics by value, matching the
+# interpreter. A genuine int64 value (via CAST) compared to an int32 literal
+# must still match — raw Value::compare would order by type-id and miss it.
+xtype_out="$(
+    run_sql \
+        'CREATE TABLE xt (id BIGINT);' \
+        'INSERT INTO xt VALUES (CAST(3 AS BIGINT)), (CAST(8 AS BIGINT));' \
+        'SELECT id FROM xt WHERE id = 3;' \
+        'SELECT COUNT(*) FROM xt WHERE id < 5;'
+)"
+require_contains 'id
+3' "$xtype_out"
+require_contains 'agg_0
+1' "$xtype_out"
+
+# INSERT must coerce a numeric value to the column's declared type, so the
+# stored type matches the schema regardless of the literal's spelling. An
+# integer literal inserted into a DOUBLE column must read back as a double.
+coerce_out="$(
+    run_sql \
+        'CREATE TABLE coercet (id INT PRIMARY KEY, d DOUBLE, f FLOAT);' \
+        'INSERT INTO coercet VALUES (1, 5, 5);' \
+        'SELECT d, f FROM coercet WHERE id = 1;'
+)"
+require_contains '5.000000 | 5.000000' "$coerce_out"
+
+# UPDATE must coerce a SET value to the column's declared numeric type too.
+ucoerce_out="$(
+    run_sql \
+        'CREATE TABLE ucoercet (id INT PRIMARY KEY, d DOUBLE);' \
+        'INSERT INTO ucoercet VALUES (1, 1.5);' \
+        'UPDATE ucoercet SET d = 7 WHERE id = 1;' \
+        'SELECT d FROM ucoercet WHERE id = 1;'
+)"
+require_contains '7.000000' "$ucoerce_out"
+
+# CAST of an out-of-range value to a narrower integer type must yield NULL,
+# not a silently wrapped/garbage value (the fast numeric cast path used to
+# wrap or invoke UB).
+cast_out="$(
+    run_sql \
+        'SELECT CAST(5000000000 AS INT) AS a;' \
+        'SELECT CAST(3000000000.0 AS INT) AS b;' \
+        'SELECT CAST(2000000000 AS INT) AS c;'
+)"
+require_contains 'a
+NULL' "$cast_out"
+require_contains 'c
+2000000000' "$cast_out"
+require_not_contains '705032704' "$cast_out"
+
+# Positional ORDER BY ("ORDER BY 2") must reference the Nth select item, not be
+# treated as an ignored constant. Covers plain, aggregate, and multi-key forms.
+pos_out="$(
+    run_sql \
+        'CREATE TABLE post (id INT PRIMARY KEY, a INT, b INT);' \
+        'INSERT INTO post VALUES (1,10,1),(2,10,2),(3,20,1),(4,20,3),(5,20,5);' \
+        'SELECT id FROM post ORDER BY 1 DESC;' \
+        'SELECT a, COUNT(*) FROM post GROUP BY a ORDER BY 2 DESC;'
+)"
+require_contains 'id
+5
+4
+3
+2
+1' "$pos_out"
+require_contains 'a | agg_0
+20 | 3
+10 | 2' "$pos_out"
+
+# After UPDATE of an indexed column, the old index entry survives until GC.
+# Index scans (regular, index-only, COUNT, range) must NOT return rows via the
+# stale entry: querying the old value yields nothing, the new value is found
+# once, a full index order has no phantom old key, and no duplicates appear.
+stale_out="$(
+    run_sql \
+        'CREATE TABLE staleidx (id INT PRIMARY KEY, a INT);' \
+        'INSERT INTO staleidx VALUES (1,10),(2,20),(3,30);' \
+        'CREATE INDEX sidx_a ON staleidx(a);' \
+        'UPDATE staleidx SET a = 25 WHERE id = 2;' \
+        'SELECT a FROM staleidx WHERE a = 20;' \
+        'SELECT id FROM staleidx WHERE a = 20;' \
+        'SELECT COUNT(*) FROM staleidx WHERE a = 20;' \
+        'SELECT id FROM staleidx WHERE a = 25;' \
+        'SELECT id FROM staleidx WHERE a >= 10 AND a <= 30 ORDER BY a, id;' \
+        'SELECT a FROM staleidx ORDER BY a;'
+)"
+require_contains 'agg_0
+0' "$stale_out"
+require_not_contains 'a
+20' "$stale_out"
+require_contains 'id
+2' "$stale_out"
+require_contains 'a
+10
+25
+30' "$stale_out"
+
+# CREATE INDEX on a table that already contains NULL-valued rows must not
+# corrupt the index: lookups for the non-null rows must still work. (NULL key
+# columns are not indexed; IS NULL uses a sequential scan.)
+nullidx_out="$(
+    run_sql \
+        'CREATE TABLE nidx (id INT PRIMARY KEY, a INT);' \
+        'INSERT INTO nidx VALUES (1,10),(2,NULL),(3,30),(4,NULL);' \
+        'CREATE INDEX nidx_a ON nidx(a);' \
+        'SELECT id FROM nidx WHERE a = 10;' \
+        'SELECT id FROM nidx WHERE a = 30;' \
+        'SELECT COUNT(*) FROM nidx WHERE a >= 5;' \
+        'SELECT COUNT(*) FROM nidx WHERE a IS NULL;'
+)"
+require_contains 'id
+1' "$nullidx_out"
+require_contains 'id
+3' "$nullidx_out"
+require_contains 'agg_0
+2' "$nullidx_out"
+
+# CREATE INDEX with NULLs, harder cases: a composite key with a trailing NULL
+# must still be found by a prefix query (the leading column is non-null), and
+# CREATE UNIQUE INDEX over existing NULL rows must succeed (multiple NULLs are
+# allowed) while still rejecting duplicate non-null values.
+nullidx2_out="$(
+    run_sql \
+        'CREATE TABLE nidx2 (id INT PRIMARY KEY, a INT, b INT);' \
+        'INSERT INTO nidx2 VALUES (1,10,100),(2,10,NULL),(3,20,200);' \
+        'CREATE INDEX nidx2_ab ON nidx2(a,b);' \
+        'SELECT id FROM nidx2 WHERE a = 10 ORDER BY id;' \
+        'CREATE TABLE nuq (id INT PRIMARY KEY, e INT);' \
+        'INSERT INTO nuq VALUES (1,100),(2,NULL),(3,NULL),(4,200);' \
+        'CREATE UNIQUE INDEX nuq_e ON nuq(e);' \
+        'INSERT INTO nuq VALUES (5, NULL);' \
+        'INSERT INTO nuq VALUES (6, 100);' \
+        'SELECT COUNT(*) FROM nuq;'
+)"
+require_contains 'id
+1
+2' "$nullidx2_out"
+require_not_contains 'failed to create index' "$nullidx2_out"
+require_contains 'agg_0
+5' "$nullidx2_out"
+
+# A scalar subquery in the SELECT list must be evaluated (uncorrelated: run once
+# and substituted), not silently yield NULL.
+scalarsel_out="$(
+    run_sql \
+        'CREATE TABLE ssq (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO ssq VALUES (1,10),(2,20),(3,30);' \
+        'SELECT id, (SELECT MAX(v) FROM ssq) AS m FROM ssq ORDER BY id;' \
+        'SELECT (SELECT COUNT(*) FROM ssq) AS c;'
+)"
+require_contains '1 | 30' "$scalarsel_out"
+require_contains '3 | 30' "$scalarsel_out"
+require_contains 'c
+3' "$scalarsel_out"
+
+# DELETE/UPDATE whose WHERE is an IN-subquery must locate and mutate the
+# matching rows (the IN-subquery executor must forward the row id).
+inmut_out="$(
+    run_sql \
+        'CREATE TABLE inm (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO inm VALUES (1,10),(2,20),(3,30);' \
+        'DELETE FROM inm WHERE v IN (SELECT v FROM inm WHERE id = 1);' \
+        'SELECT id FROM inm ORDER BY id;' \
+        'UPDATE inm SET v = 99 WHERE v IN (SELECT v FROM inm WHERE id = 2);' \
+        'SELECT id, v FROM inm ORDER BY id;'
+)"
+require_contains 'deleted_rows
+1' "$inmut_out"
+require_contains '2 | 99' "$inmut_out"
+require_not_contains '1 | 10' "$inmut_out"
+
+# UPDATE SET col = (scalar subquery) must evaluate the subquery, not store NULL.
+setsq_out="$(
+    run_sql \
+        'CREATE TABLE setsq (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO setsq VALUES (1,10),(2,20),(3,30);' \
+        'UPDATE setsq SET v = (SELECT MAX(v) FROM setsq) WHERE id = 1;' \
+        'SELECT v FROM setsq WHERE id = 1;'
+)"
+require_contains 'v
+30' "$setsq_out"
+
+# A NULL left value yields UNKNOWN for both IN and NOT IN (row never qualifies).
+notinnull_out="$(
+    run_sql \
+        'CREATE TABLE nin (id INT PRIMARY KEY, v INT);' \
+        'INSERT INTO nin VALUES (1,10),(2,NULL),(3,30);' \
+        'SELECT id FROM nin WHERE v NOT IN (SELECT v FROM nin WHERE id=1) ORDER BY id;'
+)"
+require_contains 'id
+3' "$notinnull_out"
+require_not_contains 'id
+2
+3' "$notinnull_out"

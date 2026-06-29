@@ -22,10 +22,10 @@ jobs:
         include:
           - os: ubuntu-latest
             os_label: linux-x86_64
-          - os: macos-13
-            os_label: macos-x86_64
+            cmake_flags: -DCMAKE_EXE_LINKER_FLAGS="-static"
           - os: macos-latest
             os_label: macos-arm64
+            cmake_flags: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -43,7 +43,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF ${{ matrix.cmake_flags }}
           cmake --build build --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 
       - name: Package

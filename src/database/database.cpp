@@ -136,8 +136,6 @@ Database::Database(const String& db_dir, const DbConfig& config)
     // Collect statistics for query optimizer (on-demand via ANALYZE, not at startup)
     // collect_all_statistics();  // Re-enabled on first EXPLAIN if stats_valid==false
 
-    // Initialize shared memory (4MB default size)
-    shm_ = UniquePtr<SharedMemory>(SharedMemory::create("minidb_main", 4 * 1024 * 1024));
     start_background_maintenance();
 }
 
@@ -501,15 +499,17 @@ bool Database::create_index(const String& name, const String& table_name,
                 }
                 if (unique) {
                     String unique_key;
-                    if (!make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
-                        pool_->unpin_page(page_id);
-                        return false;
+                    // make_projected_tuple_key returns false when any key column
+                    // is NULL. A UNIQUE column permits multiple NULLs, so only
+                    // enforce uniqueness for fully-non-null keys; NULL-bearing
+                    // rows are still indexed (the bulk loader handles NULL keys).
+                    if (make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
+                        if (seen_keys.find(unique_key)) {
+                            pool_->unpin_page(page_id);
+                            return false;
+                        }
+                        seen_keys.insert(unique_key, true);
                     }
-                    if (seen_keys.find(unique_key)) {
-                        pool_->unpin_page(page_id);
-                        return false;
-                    }
-                    seen_keys.insert(unique_key, true);
                 }
                 entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
@@ -943,7 +943,7 @@ bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
         IndexEntry* index = indexes[i];
         if (!index) continue;
         IndexKey key = index_key_from_tuple(*index, tuple);
-        if (!key.fits()) continue;
+        if (key.is_null() || !key.fits()) continue;  // NULL columns are not indexed
         BPlusTree* tree = get_index_tree(index->index_id);
         if (!tree) continue;
         wal_->log_index_insert(txn_id, index->index_id, key, rid);
@@ -967,7 +967,7 @@ void Database::delete_index_entries(u32 table_id, const Tuple& tuple, const Reco
         IndexEntry* index = indexes[i];
         if (!index) continue;
         IndexKey key = index_key_from_tuple(*index, tuple);
-        if (!key.fits()) continue;
+        if (key.is_null() || !key.fits()) continue;  // NULL columns are not indexed
         BPlusTree* tree = get_index_tree(index->index_id);
         if (tree) {
             wal_->log_index_delete(txn_id, index->index_id, key, rid);
@@ -1024,7 +1024,7 @@ void Database::rebuild_index(IndexEntry* index) {
             Tuple tuple = Tuple::deserialize_from_page(page->data() + lp->offset, table->schema, lp->length);
             if (tuple.xmax() != kInvalidTxnId) continue;
             IndexKey key = index_key_from_tuple(*index, tuple);
-            if (key.fits()) {
+            if (!key.is_null() && key.fits()) {  // NULL columns are not indexed
                 entries.push_back(BTreeBulkEntry(key, RecordId(page_id, slot)));
             }
         }

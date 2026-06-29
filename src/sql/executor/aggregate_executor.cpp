@@ -63,6 +63,17 @@ static double numeric_value_as_double(const Value& value, bool* ok) {
     }
 }
 
+// Accumulate integer SUM/AVG in 64-bit. Without this an int32 column whose
+// running total exceeds INT32_MAX produces a NULL (Value::operator+ returns
+// NULL on int32 overflow), so SUM/AVG silently collapse to NULL even though
+// every individual value is in range — and the planner already declares the
+// output type as int64.
+static Value widen_int_for_sum(const Value& v) {
+    if (v.type_id() == TypeId::kInt32) return Value(static_cast<i64>(v.get_int32()));
+    if (v.type_id() == TypeId::kBool)  return Value(static_cast<i64>(v.get_bool() ? 1 : 0));
+    return v;
+}
+
 static bool having_passes(const Value& cond) {
     bool pass = false;
     if (!ExpressionEvaluator::predicate_truth(cond, &pass)) {
@@ -89,7 +100,9 @@ static void advance_agg(AggState* state, AggFunc func, const Value& input, bool 
     if (input.is_null()) return;
 
     if (!state->has_value) {
-        state->value = input;
+        state->value = (func == AggFunc::kSum || func == AggFunc::kAvg)
+                           ? widen_int_for_sum(input)
+                           : input;
         state->count = 1;
         state->has_value = true;
         return;

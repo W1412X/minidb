@@ -122,6 +122,27 @@ static void assert_remote_page_store_features() {
     assert(!ro_at_5.write_page(pid, ignored.data(), ignored.header()->lsn).ok());
     assert(server.latest_page_lsn(pid) == 10);
     assert(server.replica_count() == 2);
+
+    // An out-of-order write of an OLDER image (lsn 7, after lsn 10) must be
+    // recorded for time-travel reads but must NOT clobber the materialized
+    // primary — otherwise the plain (read_lsn==0) path returns stale data.
+    Page v7;
+    fill_page(&v7, pid, 7, 0x77);
+    assert(rw.write_page(pid, v7.data(), v7.header()->lsn).ok());
+    assert(server.latest_page_lsn(pid) == 10);     // primary still newest
+    assert(server.log_index_size(pid) == 3);       // older version recorded
+    byte still_latest[kPageSize];
+    std::memset(still_latest, 0, sizeof(still_latest));
+    assert(rw.read_page(pid, still_latest).ok());
+    assert(reinterpret_cast<PageHeader*>(still_latest)->lsn == 10);  // not stale 7
+    assert(still_latest[sizeof(PageHeader)] == 0xaa);
+    // The older image is still reachable via a time-travel read.
+    RemotePageStore ro_at_7(&server, true, 7);
+    byte snap7[kPageSize];
+    std::memset(snap7, 0, sizeof(snap7));
+    assert(ro_at_7.read_page(pid, snap7).ok());
+    assert(reinterpret_cast<PageHeader*>(snap7)->lsn == 7);
+    assert(snap7[sizeof(PageHeader)] == 0x77);
 }
 
 static void assert_batch_io() {

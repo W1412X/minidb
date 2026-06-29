@@ -55,7 +55,8 @@ struct SeqScanPlan : PlanNode {
     // virtual-call + result-move overhead is amortized to zero — and so
     // rows that fail the filter never have to construct an ExecResult.
     UniquePtr<Expression> pushed_predicate;
-    SeqScanPlan() { type = PlanNodeType::kSeqScan; }
+    SeqScanPlan();
+    ~SeqScanPlan() override;
 };
 
 struct IndexScanPlan : PlanNode {
@@ -69,9 +70,8 @@ struct IndexScanPlan : PlanNode {
     // search key. Evaluated inline against each candidate heap tuple before
     // emission, so rows failing it don't pay the result-move cost.
     UniquePtr<Expression> pushed_predicate;
-    IndexScanPlan() : table_id(0), index_id(0), is_range(false) {
-        type = PlanNodeType::kIndexScan;
-    }
+    IndexScanPlan();
+    ~IndexScanPlan() override;
 };
 
 struct IndexOnlyScanPlan : PlanNode {
@@ -103,20 +103,23 @@ struct UpdatePlan : PlanNode {
     Vector<Pair<String, UniquePtr<Expression>>> set_clauses;
     UniquePtr<Expression> where_clause;
     UniquePtr<PlanNode> child;
-    UpdatePlan() { type = PlanNodeType::kUpdate; }
+    UpdatePlan();
+    ~UpdatePlan() override;
 };
 
 struct FilterPlan : PlanNode {
     UniquePtr<Expression> predicate;
     UniquePtr<PlanNode> child;
-    FilterPlan() { type = PlanNodeType::kFilter; }
+    FilterPlan();
+    ~FilterPlan() override;
 };
 
 struct ProjectPlan : PlanNode {
     Vector<u32> column_indices;
     Vector<UniquePtr<Expression>> expressions;
     UniquePtr<PlanNode> child;
-    ProjectPlan() { type = PlanNodeType::kProject; }
+    ProjectPlan();
+    ~ProjectPlan() override;
 };
 
 struct JoinPlan : PlanNode {
@@ -129,11 +132,8 @@ struct JoinPlan : PlanNode {
     u32 lookup_inner_table_id;
     u32 lookup_inner_index_id;
     double hint_weight;  // Join hint: >0 favors hash, <0 favors nested (cost multiplier)
-    JoinPlan() : join_type(JoinType::kInner), algorithm(JoinAlgorithm::kNestedLoop),
-                 hash_build_left(false), lookup_inner_table_id(0), lookup_inner_index_id(0),
-                 hint_weight(0.0) {
-        type = PlanNodeType::kJoin;
-    }
+    JoinPlan();
+    ~JoinPlan() override;
 };
 
 struct LimitPlan : PlanNode {
@@ -147,14 +147,18 @@ struct SortKey {
     UniquePtr<Expression> expression;
     bool ascending;
     bool nulls_first;   // true = NULLs sort before non-NULLs
-    SortKey() : ascending(true), nulls_first(true) {}
+    SortKey();
+    ~SortKey();
+    SortKey(SortKey&&) noexcept;
+    SortKey& operator=(SortKey&&) noexcept;
 };
 
 struct SortPlan : PlanNode {
     Vector<SortKey> keys;
     UniquePtr<PlanNode> child;
     i32 top_n;
-    SortPlan() : top_n(-1) { type = PlanNodeType::kSort; }
+    SortPlan();
+    ~SortPlan() override;
 };
 
 struct DistinctPlan : PlanNode {
@@ -167,7 +171,10 @@ struct AggregateColumn {
     UniquePtr<Expression> argument;
     String alias;
     bool distinct;
-    AggregateColumn() : func(AggFunc::kCount), distinct(false) {}
+    AggregateColumn();
+    ~AggregateColumn();
+    AggregateColumn(AggregateColumn&&) noexcept;
+    AggregateColumn& operator=(AggregateColumn&&) noexcept;
 };
 
 struct AggregatePlan : PlanNode {
@@ -175,7 +182,8 @@ struct AggregatePlan : PlanNode {
     Vector<UniquePtr<Expression>> group_by;
     UniquePtr<Expression> having;
     UniquePtr<PlanNode> child;
-    AggregatePlan() { type = PlanNodeType::kAggregate; }
+    AggregatePlan();
+    ~AggregatePlan() override;
 };
 
 struct UnionPlan : PlanNode {

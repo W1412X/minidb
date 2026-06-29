@@ -39,10 +39,16 @@ static bool parse_bool(const char* s, bool* out) {
 }
 
 static bool parse_u64_unit(const char* s, u64* out) {
+    // strtoull silently accepts a leading '-' and returns the wrapped unsigned
+    // value (so "-1" would parse to a huge limit). Reject any sign explicitly.
+    const char* p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '-' || *p == '+') return false;
+
     errno = 0;
     char* end = nullptr;
-    unsigned long long v = std::strtoull(s, &end, 10);
-    if (errno != 0 || end == s) return false;
+    unsigned long long v = std::strtoull(p, &end, 10);
+    if (errno != 0 || end == p) return false;
     while (*end == ' ' || *end == '\t') end++;
 
     u64 mul = 1;
@@ -56,6 +62,8 @@ static bool parse_u64_unit(const char* s, u64* out) {
         else if (ascii_ieq(end, "MIN")) mul = 60ULL * 1000ULL;
         else return false;
     }
+    // Reject values that would overflow u64 once the unit multiplier is applied.
+    if (v > static_cast<u64>(-1) / mul) return false;
     *out = static_cast<u64>(v) * mul;
     return true;
 }

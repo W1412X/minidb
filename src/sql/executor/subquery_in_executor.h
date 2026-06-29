@@ -26,6 +26,9 @@ public:
     void init() override;
     ExecResult next() override;
     const Schema& output_schema() const override;
+    // Forward the RID of the last emitted row from the underlying scan so a
+    // DELETE/UPDATE whose WHERE is an IN-subquery can locate the row to mutate.
+    bool last_record_id(RecordId* rid) const override;
 
 private:
     bool in_set(const Value& v) const;

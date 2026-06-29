@@ -505,14 +505,21 @@ static void apply_scan_projection(PlanNode* plan, const Vector<u32>& cols) {
     if (!plan || cols.empty()) return;
     if (plan->type == PlanNodeType::kSeqScan) {
         auto* scan = static_cast<SeqScanPlan*>(plan);
+        // A pushed-down WHERE predicate is evaluated against the columns this
+        // scan emits. If the late-materialization projection drops a column the
+        // predicate references, the predicate can no longer resolve it and
+        // silently filters every row out (e.g. COUNT(*) over a join with a
+        // single-table WHERE returns 0). Keep the predicate's columns.
+        Vector<u32> needed = cols;
+        collect_expr_columns(scan->pushed_predicate.get(), scan->output_schema, &needed);
         Schema projected;
-        for (u32 i = 0; i < cols.size(); i++) {
-            if (cols[i] < scan->output_schema.column_count()) {
-                projected.add_column(scan->output_schema.get_column(cols[i]));
+        for (u32 i = 0; i < needed.size(); i++) {
+            if (needed[i] < scan->output_schema.column_count()) {
+                projected.add_column(scan->output_schema.get_column(needed[i]));
             }
         }
         if (projected.column_count() > 0) {
-            scan->projected_columns = cols;
+            scan->projected_columns = needed;
             scan->output_schema = projected;
             scan->optimizer_note = "late materialized join projection";
         }
@@ -1216,26 +1223,25 @@ double Optimizer::estimate_selectivity(const Expression* predicate, u32 table_id
         return left + right - (left * right);
     }
 
-    // IS NULL
-    if (predicate->type == ExprType::kUnaryOp && predicate->op == "IS NULL") {
+    // IS NULL / IS NOT NULL. The AST stores these unary ops as "IS_NULL" /
+    // "IS_NOT_NULL" (see parser); matching "IS NULL" with a space meant these
+    // branches never fired, so null predicates fell through to the generic
+    // default selectivity and could mis-cost plans.
+    if (predicate->type == ExprType::kUnaryOp &&
+        (predicate->op == "IS_NULL" || predicate->op == "IS_NOT_NULL")) {
+        double null_sel = 0.1;  // default NULL fraction when stats are absent
         if (predicate->child && predicate->child->type == ExprType::kColumnRef) {
             TableEntry* table = catalog_ ? catalog_->get_table(table_id) : nullptr;
-            if (table_stats_fresh(table)) {
+            if (table_stats_fresh(table) && table->num_tuples > 0) {
                 int col_idx = table->schema.get_column_index(predicate->child->column_name);
                 if (col_idx >= 0 && static_cast<u32>(col_idx) < table->col_stats.size()) {
                     const ColumnStats& stats = table->col_stats[col_idx];
-                    if (table->num_tuples > 0) {
-                        return static_cast<double>(stats.null_count) / static_cast<double>(table->num_tuples);
-                    }
+                    null_sel = static_cast<double>(stats.null_count) /
+                               static_cast<double>(table->num_tuples);
                 }
             }
         }
-        return 0.1; // default NULL selectivity
-    }
-
-    // IS NOT NULL
-    if (predicate->type == ExprType::kUnaryOp && predicate->op == "IS NOT NULL") {
-        return 1.0 - estimate_selectivity(predicate->child.get(), table_id);
+        return predicate->op == "IS_NULL" ? null_sel : (1.0 - null_sel);
     }
 
     // Binary comparison with column reference

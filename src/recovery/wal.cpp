@@ -112,7 +112,7 @@ bool WalManager::append_to_buffer(const byte* data, u32 len) {
     }
     std::memcpy(write_buf_ + write_buf_pos_, data, len);
     write_buf_pos_ += len;
-    buffered_bytes_ += len;
+    buffered_bytes_.fetch_add(len);
     if (write_buf_pos_ == kWalBufferSize && !flush_buffer()) return false;
     return true;
 }
@@ -120,7 +120,7 @@ bool WalManager::append_to_buffer(const byte* data, u32 len) {
 bool WalManager::flush_buffer() {
     if (write_buf_pos_ == 0) return true;
     if (write_direct(write_buf_, write_buf_pos_)) {
-        buffer_flushes_++;
+        buffer_flushes_.fetch_add(1);
         write_buf_pos_ = 0;
         return true;
     }
@@ -131,10 +131,17 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     LockGuard guard(latch_);
     if (fd_ < 0) return 0;
 
+    // Zero the whole header first: WalRecord is not packed, so there are
+    // padding bytes between `type` (u16) and `data_len` (u32). The CRC is
+    // computed over sizeof(hdr), so leaving padding uninitialized both reads
+    // indeterminate stack memory (UB) and writes nondeterministic bytes into
+    // the durable WAL. Zeroing keeps the on-disk format/size unchanged while
+    // making the bytes deterministic.
     WalRecord hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
     hdr.magic = kWalRecordMagic;
     hdr.crc = 0;     // placeholder — included in the CRC as zero
-    hdr.lsn = next_lsn_;
+    hdr.lsn = next_lsn_.load();
     hdr.txn_id = txn_id;
     hdr.type = type;
     hdr.data_len = data_len;
@@ -146,8 +153,8 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     }
     if (data_len > 0 && !append_to_buffer(data, data_len)) return 0;
 
-    bytes_since_checkpoint_ += sizeof(hdr) + data_len;
-    next_lsn_++;
+    bytes_since_checkpoint_.fetch_add(sizeof(hdr) + data_len);
+    next_lsn_.fetch_add(1);
     last_written_lsn_ = hdr.lsn;
     if (TraceContext* trace = current_trace()) {
         trace->record_wal(wal_type_name(type), hdr.lsn, txn_id,
@@ -158,7 +165,7 @@ u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 dat
     if (fstat(fd_, &st) == 0 &&
         static_cast<u64>(st.st_size) + write_buf_pos_ > segment_size_bytes_) {
         if (flush_buffer() && (!fsync_enabled_ || fsync(fd_) == 0)) {
-            durable_lsn_ = last_written_lsn_;
+            durable_lsn_.store(last_written_lsn_);
         }
     }
     return hdr.lsn;
@@ -182,7 +189,7 @@ u64 WalManager::log_abort(u64 txn_id) {
     u64 lsn = write_record(WalType::kTxnAbort, txn_id, nullptr, 0);
     if (lsn != 0) {
         LockGuard guard(latch_);
-        if (flush_buffer() && fd_ >= 0 && (!fsync_enabled_ || fsync(fd_) == 0)) durable_lsn_ = lsn;
+        if (flush_buffer() && fd_ >= 0 && (!fsync_enabled_ || fsync(fd_) == 0)) durable_lsn_.store(lsn);
     }
     return lsn;
 }
@@ -381,16 +388,17 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // log is truncated, so no other writer can sneak in records that
     // would later get clobbered by the truncate.
     WalRecord hdr;
+    std::memset(&hdr, 0, sizeof(hdr));  // zero padding; see write_record
     hdr.magic = kWalRecordMagic;
     hdr.crc = 0;
-    hdr.lsn = next_lsn_;
+    hdr.lsn = next_lsn_.load();
     hdr.txn_id = 0;
     hdr.type = WalType::kCheckpoint;
     hdr.data_len = 0;
     hdr.crc = wal_crc32(reinterpret_cast<const byte*>(&hdr), sizeof(hdr), nullptr, 0);
     if (!append_to_buffer(reinterpret_cast<const byte*>(&hdr), sizeof(hdr))) return 0;
-    bytes_since_checkpoint_ += sizeof(hdr);
-    next_lsn_++;
+    bytes_since_checkpoint_.fetch_add(sizeof(hdr));
+    next_lsn_.fetch_add(1);
     last_written_lsn_ = hdr.lsn;
     u64 lsn = hdr.lsn;
     if (TraceContext* trace = current_trace()) {
@@ -401,7 +409,7 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // Phase 2: fsync the WAL up to and including the kCheckpoint record.
     if (!flush_buffer()) return 0;
     if (fsync_enabled_ && fsync(fd_) != 0) return 0;
-    durable_lsn_ = last_written_lsn_;
+    durable_lsn_.store(last_written_lsn_);
     commit_cond_.broadcast();
 
     // Phase 3: flush dirty pages while the latch is still held. At this
@@ -416,17 +424,17 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // Phase 4: truncate the WAL. Safe now because everything that
     // referenced records we are about to discard is durable on disk.
     if (fd_ >= 0) {
-        u64 keep_next = next_lsn_;
-        u64 keep_durable = durable_lsn_;
+        u64 keep_next = next_lsn_.load();
+        u64 keep_durable = durable_lsn_.load();
         close(fd_);
         String path = wal_dir_ + "/wal.log";
         fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-        next_lsn_ = keep_next;
-        durable_lsn_ = keep_durable;
+        next_lsn_.store(keep_next);
+        durable_lsn_.store(keep_durable);
         last_written_lsn_ = keep_durable;
     }
 
-    bytes_since_checkpoint_ = 0;
+    bytes_since_checkpoint_.store(0);
     return lsn;
 }
 
@@ -436,17 +444,17 @@ bool WalManager::flush_commit(u64 lsn) {
 
     if (!fsync_enabled_) {
         if (!flush_buffer()) return false;
-        if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+        if (durable_lsn_.load() < lsn) durable_lsn_.store(lsn);
         commit_cond_.broadcast();
-        return durable_lsn_ >= lsn;
+        return durable_lsn_.load() >= lsn;
     }
 
     if (!group_commit_enabled_ || group_commit_delay_ms_ == 0) {
         if (!flush_buffer()) return false;
         if (fsync(fd_) != 0) return false;
-        durable_lsn_ = last_written_lsn_;
+        durable_lsn_.store(last_written_lsn_);
         commit_cond_.broadcast();
-        return durable_lsn_ >= lsn;
+        return durable_lsn_.load() >= lsn;
     }
 
     pending_commit_waiters_++;
@@ -459,29 +467,29 @@ bool WalManager::flush_commit(u64 lsn) {
             commit_cond_.timed_wait(latch_, static_cast<u32>(group_commit_delay_ms_));
         }
         const bool ok = flush_buffer() && fsync(fd_) == 0;
-        if (ok) durable_lsn_ = last_written_lsn_;
-        group_commit_batches_++;
+        if (ok) durable_lsn_.store(last_written_lsn_);
+        group_commit_batches_.fetch_add(1);
         commit_batch_id_++;
         pending_commit_waiters_ = 0;
         commit_cond_.broadcast();
-        return ok && durable_lsn_ >= lsn;
+        return ok && durable_lsn_.load() >= lsn;
     }
 
     // Follower: wait for our LSN to become durable, or for the current
     // batch to close (so we can observe a failed flush). Loop on the
     // predicate to stay correct under spurious wake-ups.
     const u64 entry_batch = commit_batch_id_;
-    while (durable_lsn_ < lsn && commit_batch_id_ == entry_batch) {
+    while (durable_lsn_.load() < lsn && commit_batch_id_ == entry_batch) {
         commit_cond_.wait(latch_);
     }
-    return durable_lsn_ >= lsn;
+    return durable_lsn_.load() >= lsn;
 }
 
 void WalManager::flush() {
     LockGuard guard(latch_);
     if (fd_ >= 0) {
         if (flush_buffer() && (!fsync_enabled_ || fsync(fd_) == 0)) {
-            durable_lsn_ = last_written_lsn_;
+            durable_lsn_.store(last_written_lsn_);
             commit_cond_.broadcast();
         }
     }
@@ -489,33 +497,33 @@ void WalManager::flush() {
 
 bool WalManager::flush_until(u64 lsn) {
     LockGuard guard(latch_);
-    if (lsn == 0 || durable_lsn_ >= lsn) return true;
+    if (lsn == 0 || durable_lsn_.load() >= lsn) return true;
     if (fd_ < 0) return false;
     if (!flush_buffer()) return false;
     if (fsync_enabled_ && fsync(fd_) != 0) return false;
-    durable_lsn_ = last_written_lsn_;
+    durable_lsn_.store(last_written_lsn_);
     commit_cond_.broadcast();
-    return durable_lsn_ >= lsn;
+    return durable_lsn_.load() >= lsn;
 }
 
 void WalManager::ensure_next_lsn_at_least(u64 lsn) {
     LockGuard guard(latch_);
     if (lsn == 0) return;
-    if (next_lsn_ <= lsn) next_lsn_ = lsn + 1;
+    if (next_lsn_.load() <= lsn) next_lsn_.store(lsn + 1);
     if (last_written_lsn_ < lsn) last_written_lsn_ = lsn;
-    if (durable_lsn_ < lsn) durable_lsn_ = lsn;
+    if (durable_lsn_.load() < lsn) durable_lsn_.store(lsn);
 }
 
 void WalManager::truncate() {
     LockGuard guard(latch_);
     if (fd_ >= 0) {
-        u64 keep_next = next_lsn_;
-        u64 keep_durable = durable_lsn_;
+        u64 keep_next = next_lsn_.load();
+        u64 keep_durable = durable_lsn_.load();
         close(fd_);
         String path = wal_dir_ + "/wal.log";
         fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-        next_lsn_ = keep_next;
-        durable_lsn_ = keep_durable;
+        next_lsn_.store(keep_next);
+        durable_lsn_.store(keep_durable);
         last_written_lsn_ = keep_durable;
     }
 }
@@ -669,6 +677,16 @@ bool WalManager::recover(Database* db) {
                 std::memcpy(&sp, data.data(), sizeof(sp));
                 HeapFile* heap = db->get_heap_file(sp.table_id);
                 if (heap) {
+                    // Idempotency guard, matching the kDelete/kUpdate redo
+                    // paths: if the page is already durable at or past this
+                    // record's LSN, the undo (and everything after it) is
+                    // already reflected on disk. Replaying it would lower the
+                    // page LSN and, if the slot was later pruned and reused by
+                    // a committed insert, clobber that committed tuple.
+                    LSN page_lsn = 0;
+                    if (page_lsn_at(sp.page_id, &page_lsn) && page_lsn >= hdr.lsn) {
+                        continue;
+                    }
                     if (hdr.type == WalType::kSavepointUndoInsert) {
                         heap->rollback_insert(sp.page_id, sp.slot_idx, hdr.lsn);
                     } else {
@@ -938,9 +956,9 @@ bool WalManager::recover(Database* db) {
     // shutdown. Resetting to max_lsn+1 here would re-introduce the D2
     // checkpoint deadlock (page_lsn > durable_lsn → flush_until under
     // held WAL latch).
-    if (max_lsn + 1 > next_lsn_)      next_lsn_ = max_lsn + 1;
-    if (max_lsn > durable_lsn_)       durable_lsn_ = max_lsn;
-    if (max_lsn > last_written_lsn_)  last_written_lsn_ = max_lsn;
+    if (max_lsn + 1 > next_lsn_.load())  next_lsn_.store(max_lsn + 1);
+    if (max_lsn > durable_lsn_.load())   durable_lsn_.store(max_lsn);
+    if (max_lsn > last_written_lsn_)     last_written_lsn_ = max_lsn;
     if (db && max_txn_id > 0) {
         db->txn_manager().ensure_next_txn_id_at_least(max_txn_id + 1);
     }

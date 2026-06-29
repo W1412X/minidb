@@ -8,14 +8,6 @@
 
 namespace minidb {
 
-namespace {
-
-inline String::size_type min_val(String::size_type a, String::size_type b) {
-    return a < b ? a : b;
-}
-
-} // anonymous namespace
-
 String::String() noexcept : size_(0), is_sso_(true) {
     stack_buf_[0] = '\0';
 }
@@ -303,12 +295,14 @@ bool String::operator==(const String& other) const {
 }
 
 bool String::operator!=(const String& other) const { return !(*this == other); }
-bool String::operator<(const String& other) const {
-    return memcmp(c_str(), other.c_str(), min_val(size_, other.size_)) < 0;
-}
-bool String::operator>(const String& other) const { return other < *this; }
-bool String::operator<=(const String& other) const { return !(other < *this); }
-bool String::operator>=(const String& other) const { return !(*this < other); }
+// Relational operators must use lexicographic compare(), which applies the
+// length tiebreak after the common prefix matches. A bare memcmp over only
+// min(size) bytes wrongly reports "abc" and "abcd" as equal-ordering, breaking
+// sorts and ordered comparisons whenever one string is a prefix of another.
+bool String::operator<(const String& other) const { return compare(other) < 0; }
+bool String::operator>(const String& other) const { return compare(other) > 0; }
+bool String::operator<=(const String& other) const { return compare(other) <= 0; }
+bool String::operator>=(const String& other) const { return compare(other) >= 0; }
 
 String::size_type String::find(char ch, size_type pos) const {
     for (size_type i = pos; i < size_; i++) {
