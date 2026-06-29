@@ -142,9 +142,13 @@ Database::Database(const String& db_dir, const DbConfig& config)
 Database::~Database() {
     stop_background_maintenance();
     save_catalog();
-    for (auto it = heap_files_.begin(); it; it = heap_files_.next(it)) {
-        if (it->value) it->value->flush_meta();
-    }
+    // Clean-shutdown checkpoint: flush all dirty heap/index pages to disk and
+    // truncate the WAL. The destructor previously only flushed the WAL buffer
+    // (durability via the log) but never checkpointed, so the WAL grew for the
+    // whole session and a restart replayed the entire log — startup cost was
+    // O(WAL size). A checkpoint here makes the on-disk pages authoritative so
+    // the next open starts from an (almost) empty WAL.
+    checkpoint();
     flush();
     save_control_file(true);
     fprintf(stderr, "[DB] destructor: flush complete, durable_lsn=%lu\n",
