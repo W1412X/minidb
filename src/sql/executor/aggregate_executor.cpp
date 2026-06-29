@@ -303,7 +303,14 @@ bool AggregateExecutor::compute_groups_sort_spill() {
 
     const Schema& input_schema = child_->output_schema();
     std::vector<std::string> run_paths;
-    Vector<Tuple> chunk;
+    // Each buffered tuple carries its precomputed group key so neither the run
+    // sort nor the in-memory sort recomputes it on every comparison. Before,
+    // the sort comparator called key_for_tuple() (evaluate group exprs + build
+    // a String) twice per comparison — O(N log N) String allocations per run,
+    // which was both the dominant CPU cost and the malloc high-water for
+    // high-cardinality GROUP BY.
+    struct Keyed { String key; Tuple tuple; };
+    Vector<Keyed> chunk;
     u64 memory_used = 0;
 
     auto cleanup = [&]() {
@@ -312,9 +319,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
 
     auto write_run = [&]() -> bool {
         if (chunk.size() == 0) return true;
-        chunk.sort([&](const Tuple& a, const Tuple& b) {
-            return key_for_tuple(a) < key_for_tuple(b);
-        });
+        chunk.sort([](const Keyed& a, const Keyed& b) { return a.key < b.key; });
         std::string path_template = temp_dir_;
         if (!path_template.empty() && path_template.back() != '/') path_template += "/";
         path_template += "minidb_agg_XXXXXX";
@@ -333,7 +338,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             return false;
         }
         for (u32 i = 0; i < chunk.size(); i++) {
-            u32 len = chunk[i].serialized_size();
+            u32 len = chunk[i].tuple.serialized_size();
             if (std::fwrite(&len, sizeof(len), 1, file) != 1) {
                 std::fclose(file);
                 unlink(path.data());
@@ -341,7 +346,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
                 return false;
             }
             std::vector<byte> bytes(len);
-            chunk[i].serialize_to_page(bytes.data());
+            chunk[i].tuple.serialize_to_page(bytes.data());
             bool ok = std::fwrite(bytes.data(), 1, len, file) == len;
             if (!ok) {
                 std::fclose(file);
@@ -364,8 +369,11 @@ bool AggregateExecutor::compute_groups_sort_spill() {
         }
         ExecResult r = child_->next();
         if (!r.ok()) break;
-        memory_used += r.tuple.serialized_size() + 64;
-        chunk.push_back(static_cast<Tuple&&>(r.tuple));
+        Keyed kt;
+        kt.key = key_for_tuple(r.tuple);
+        memory_used += r.tuple.serialized_size() + kt.key.size() + 64;
+        kt.tuple = static_cast<Tuple&&>(r.tuple);
+        chunk.push_back(static_cast<Keyed&&>(kt));
         if (memory_used > work_mem_bytes_ && !write_run()) {
             cleanup();
             return true;
@@ -373,9 +381,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
     }
 
     if (run_paths.empty()) {
-        chunk.sort([&](const Tuple& a, const Tuple& b) {
-            return key_for_tuple(a) < key_for_tuple(b);
-        });
+        chunk.sort([](const Keyed& a, const Keyed& b) { return a.key < b.key; });
         String current_key;
         Vector<Value> current_values;
         Vector<AggState> states(aggregates_.size());
@@ -395,13 +401,13 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             result_groups_.push_back(static_cast<Vector<Value>&&>(row));
         };
         for (u32 i = 0; i < chunk.size(); i++) {
-            String k = key_for_tuple(chunk[i]);
-            if (!have_group || k != current_key) {
+            const Tuple& t = chunk[i].tuple;
+            if (!have_group || chunk[i].key != current_key) {
                 flush_group();
-                current_key = k;
+                current_key = chunk[i].key;
                 current_values.clear();
                 for (u32 g = 0; g < group_by_.size(); g++) {
-                    current_values.push_back(ExpressionEvaluator::evaluate(*group_by_[g], chunk[i]));
+                    current_values.push_back(ExpressionEvaluator::evaluate(*group_by_[g], t));
                 }
                 states.clear();
                 states.resize(aggregates_.size());
@@ -409,7 +415,7 @@ bool AggregateExecutor::compute_groups_sort_spill() {
             }
             for (u32 a = 0; a < aggregates_.size(); a++) {
                 if (aggregates_[a].argument) {
-                    Value v = ExpressionEvaluator::evaluate(*aggregates_[a].argument, chunk[i]);
+                    Value v = ExpressionEvaluator::evaluate(*aggregates_[a].argument, t);
                     if (!v.is_null()) advance_agg(&states[a], aggregates_[a].func, v,
                                                    aggregates_[a].distinct);
                 } else {
