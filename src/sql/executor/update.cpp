@@ -256,6 +256,7 @@ ExecResult UpdateExecutor::next() {
     bool explicit_txn = txn_mgr_ && txn_mgr_->current();
     u64 txn_id = explicit_txn ? txn_mgr_->current()->id() : reinterpret_cast<u64>(this);
     Vector<RecordId> autocommit_record_locks;
+    Vector<String> autocommit_key_locks;
 
     // Collect column indices modified by SET clause
     Vector<u32> modified_cols;
@@ -382,23 +383,40 @@ ExecResult UpdateExecutor::next() {
             set_executor_error(reason);
             return ExecResult::empty();
         }
-        if (!unique_groups.empty() &&
-            violates_unique_constraints(new_values, old_rid, unique_groups)) {
-            continue;
-        }
-        bool batch_unique_conflict = false;
+        // C4: take the same logical unique-key locks as INSERT before the
+        // snapshot uniqueness check. Without this, two UPDATEs can each see
+        // no conflicting committed key and both commit duplicate UNIQUE/PK
+        // values. Lock first, then re-check under the lock.
         Vector<String> row_unique_keys;
+        bool key_lock_failed = false;
         for (u32 g = 0; g < unique_groups.size(); g++) {
             String key;
             if (!make_projected_values_key(new_values, unique_groups[g], true, &key)) continue;
             String scoped = String(static_cast<u64>(g));
             scoped += '|';
             scoped += key;
-            if (pending_unique_keys.find(scoped)) {
+            if (db_ && !db_->lock_manager().lock_key(txn_id, table_id_, scoped,
+                                                       LockMode::kRowExclusive).ok()) {
+                key_lock_failed = true;
+                break;
+            }
+            if (!explicit_txn) autocommit_key_locks.push_back(scoped);
+            row_unique_keys.push_back(scoped);
+        }
+        if (key_lock_failed) {
+            set_executor_error("could not serialize access due to concurrent update");
+            return ExecResult::empty();
+        }
+        if (!unique_groups.empty() &&
+            violates_unique_constraints(new_values, old_rid, unique_groups)) {
+            continue;
+        }
+        bool batch_unique_conflict = false;
+        for (u32 k = 0; k < row_unique_keys.size(); k++) {
+            if (pending_unique_keys.find(row_unique_keys[k])) {
                 batch_unique_conflict = true;
                 break;
             }
-            row_unique_keys.push_back(scoped);
         }
         if (batch_unique_conflict) continue;
 
@@ -519,6 +537,9 @@ ExecResult UpdateExecutor::next() {
     if (db_ && !explicit_txn) {
         for (u32 i = 0; i < autocommit_record_locks.size(); i++) {
             db_->lock_manager().unlock_record(txn_id, table_id_, autocommit_record_locks[i]);
+        }
+        for (u32 i = 0; i < autocommit_key_locks.size(); i++) {
+            db_->lock_manager().unlock_key(txn_id, table_id_, autocommit_key_locks[i]);
         }
     }
     Vector<Value> rv;
