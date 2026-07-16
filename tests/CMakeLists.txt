@@ -155,6 +155,8 @@ add_test(NAME checkpoint_barrier
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/checkpoint_barrier.py $<TARGET_FILE:minidb> --seed 12648440)
 add_test(NAME wal_record_corruption
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_record_corruption.py $<TARGET_FILE:minidb> --seed 12648447)
+add_test(NAME wal_dml_fail_closed
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_dml_fail_closed.py $<TARGET_FILE:minidb> --seed 12648462)
 add_test(NAME index_state_machine
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/index_state_machine.py $<TARGET_FILE:minidb> --seed 12648448)
 add_test(NAME ddl_wal

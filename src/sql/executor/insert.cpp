@@ -339,6 +339,13 @@ ExecResult InsertExecutor::next() {
         if (wal_) {
             lsn = wal_->log_insert(txn_id, table_id_, reservation.page_id(),
                                     reservation.predicted_slot(), buffer, size);
+            // WAL-before-data: never install a heap tuple whose insert is
+            // not durable in the log. LSN 0 would let BufferPool flush the
+            // dirty page without waiting on WAL (page_lsn <= durable_lsn).
+            if (lsn == 0) {
+                set_executor_error("WAL write failed during insert");
+                return ExecResult::empty();
+            }
         }
 
         auto result = reservation.commit(buffer, size, lsn);

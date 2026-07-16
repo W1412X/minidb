@@ -950,7 +950,12 @@ bool Database::insert_index_entries(u32 table_id, const Tuple& tuple, const Reco
         if (key.is_null() || !key.fits()) continue;  // NULL columns are not indexed
         BPlusTree* tree = get_index_tree(index->index_id);
         if (!tree) continue;
-        wal_->log_index_insert(txn_id, index->index_id, key, rid);
+        u64 idx_lsn = wal_->log_index_insert(txn_id, index->index_id, key, rid);
+        if (idx_lsn == 0) {
+            // Same WAL-before-data rule as heap DML: do not mutate the
+            // B-tree when the log record could not be written.
+            return false;
+        }
         if (silent) continue;
         if (fault_active("index_insert_fail") || !tree->insert(key, rid)) {
             // The heap tuple is in place but at least one index entry is

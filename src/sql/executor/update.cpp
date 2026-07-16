@@ -432,6 +432,10 @@ ExecResult UpdateExecutor::next() {
                                            old_rid.page_id, old_rid.slot_idx,
                                            old_rid.page_id, reservation.predicted_slot(),
                                            buffer, size);
+                    if (lsn == 0) {
+                        set_executor_error("WAL write failed during update");
+                        return ExecResult::empty();
+                    }
                 }
 
                 auto hot_result = reservation.commit(buffer, size, lsn);
@@ -469,6 +473,10 @@ ExecResult UpdateExecutor::next() {
                                            old_rid.page_id, old_rid.slot_idx,
                                            reservation.page_id(), reservation.predicted_slot(),
                                            buffer, size);
+                    if (lsn == 0) {
+                        set_executor_error("WAL write failed during update");
+                        return ExecResult::empty();
+                    }
                 }
 
                 auto ins_result = reservation.commit(buffer, size, lsn);

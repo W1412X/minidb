@@ -49,7 +49,14 @@ ExecResult DeleteExecutor::next() {
             // to find this tuple via IndexScan; the entry stays until GC
             // can prove no live snapshot can see the row anymore. The heap
             // tuple's xmax is set below, and IndexScan filters by visibility.
-            u64 lsn = wal_ ? wal_->log_delete(txn_id, table_id_, rid.page_id, rid.slot_idx) : 0;
+            u64 lsn = 0;
+            if (wal_) {
+                lsn = wal_->log_delete(txn_id, table_id_, rid.page_id, rid.slot_idx);
+                if (lsn == 0) {
+                    set_executor_error("WAL write failed during delete");
+                    return ExecResult::empty();
+                }
+            }
             bool conflict = false;
             if (!heap_->mark_deleted_if_current(rid.page_id, rid.slot_idx,
                                                 txn_id, lsn, &conflict)) {

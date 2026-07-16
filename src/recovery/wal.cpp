@@ -127,9 +127,37 @@ bool WalManager::flush_buffer() {
     return false;
 }
 
+// Fault-injection for ACID durability tests. MINIDB_FAULT=wal_dml_fail makes
+// heap/index DML log records fail closed (return LSN 0) so executors must
+// refuse to mutate pages. Production leaves the env unset.
+static bool wal_dml_fault_active() {
+    const char* env = std::getenv("MINIDB_FAULT");
+    if (!env || !*env) return false;
+    const char* name = "wal_dml_fail";
+    size_t len = std::strlen(name);
+    const char* p = env;
+    while (*p) {
+        const char* end = p;
+        while (*end && *end != ',') ++end;
+        if (static_cast<size_t>(end - p) == len && std::strncmp(p, name, len) == 0) {
+            return true;
+        }
+        if (!*end) break;
+        p = end + 1;
+    }
+    return false;
+}
+
+static bool is_dml_wal_type(WalType type) {
+    return type == WalType::kInsert || type == WalType::kDelete ||
+           type == WalType::kUpdate || type == WalType::kIndexInsert ||
+           type == WalType::kIndexDelete;
+}
+
 u64 WalManager::write_record(WalType type, u64 txn_id, const byte* data, u32 data_len) {
     LockGuard guard(latch_);
     if (fd_ < 0) return 0;
+    if (is_dml_wal_type(type) && wal_dml_fault_active()) return 0;
 
     // Zero the whole header first: WalRecord is not packed, so there are
     // padding bytes between `type` (u16) and `data_len` (u32). The CRC is
