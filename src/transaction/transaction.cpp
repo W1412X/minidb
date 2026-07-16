@@ -312,12 +312,14 @@ bool TransactionManager::commit(Transaction* txn) {
 // log_abort and recovery skips the whole transaction, so no per-record
 // compensation is needed there. Statement-level savepoint, however, will
 // commit later — recovery must be told to undo those specific records.
-static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn,
+// Returns false if a required compensating WAL write fails (caller must
+// escalate to full abort so a later COMMIT cannot redo the undone DML).
+static bool apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn,
                               bool for_savepoint, u64 txn_id,
                               const DdlUndoInfo* ddl_info = nullptr) {
     // DDL undo types — reverse the schema change.
     if (static_cast<u8>(rec.type) >= 10) {
-        if (!ddl_info) return;
+        if (!ddl_info) return true;
         switch (rec.type) {
             case UndoType::kDdlCreateTable:
                 db->undo_create_table(rec.table_id, *ddl_info);
@@ -343,20 +345,23 @@ static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn
             default:
                 break;
         }
-        return;
+        return true;
     }
 
     HeapFile* heap = db->get_heap_file(rec.table_id);
-    if (!heap) return;
+    if (!heap) return true;
     TableEntry* table = db->catalog().get_table(rec.table_id);
-    if (!table) return;
+    if (!table) return true;
     Tuple tuple;
     bool has_tuple = db->read_tuple(rec.table_id, table->schema, rec.rid, &tuple);
 
     if (rec.type == UndoType::kInsert) {
         if (for_savepoint) {
-            db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
-                                                rec.rid.page_id, rec.rid.slot_idx);
+            if (db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
+                                                    rec.rid.page_id,
+                                                    rec.rid.slot_idx) == 0) {
+                return false;
+            }
         }
         if (has_tuple) {
             db->delete_index_entries(rec.table_id, tuple, rec.rid);
@@ -364,25 +369,35 @@ static void apply_undo_record(Database* db, const UndoRecord& rec, u64 abort_lsn
         heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
     } else if (rec.type == UndoType::kHotInsert) {
         if (for_savepoint) {
-            db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
-                                                rec.rid.page_id, rec.rid.slot_idx);
+            if (db->wal().log_savepoint_undo_insert(txn_id, rec.table_id,
+                                                    rec.rid.page_id,
+                                                    rec.rid.slot_idx) == 0) {
+                return false;
+            }
         }
         heap->rollback_insert(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
     } else if (rec.type == UndoType::kDelete) {
         if (for_savepoint) {
-            db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
-                                                rec.rid.page_id, rec.rid.slot_idx);
+            if (db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
+                                                    rec.rid.page_id,
+                                                    rec.rid.slot_idx) == 0) {
+                return false;
+            }
         }
         heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
         // No re-insert needed: under lazy index cleanup the entry is still
         // there. Clearing xmax restores visibility.
     } else if (rec.type == UndoType::kHotDelete) {
         if (for_savepoint) {
-            db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
-                                                rec.rid.page_id, rec.rid.slot_idx);
+            if (db->wal().log_savepoint_undo_delete(txn_id, rec.table_id,
+                                                    rec.rid.page_id,
+                                                    rec.rid.slot_idx) == 0) {
+                return false;
+            }
         }
         heap->rollback_delete(rec.rid.page_id, rec.rid.slot_idx, abort_lsn);
     }
+    return true;
 }
 
 bool TransactionManager::rollback(Transaction* txn) {
@@ -452,8 +467,13 @@ bool TransactionManager::rollback_to_savepoint(Transaction* txn, u32 mark) {
         if (static_cast<u8>(rec.type) >= 10) {
             ddl_info = &txn->ddl_undo_infos()[rec.ddl_info_idx];
         }
-        apply_undo_record(db_, rec, 0,
-                          /*for_savepoint=*/true, txn->id(), ddl_info);
+        if (!apply_undo_record(db_, rec, 0,
+                               /*for_savepoint=*/true, txn->id(), ddl_info)) {
+            // Compensating WAL failed — leave undo intact and signal the
+            // caller to abort the whole transaction. Partial heap undo
+            // without WAL would let COMMIT+crash resurrect the statement.
+            return false;
+        }
     }
     txn->truncate_undo(mark);
     return true;
@@ -605,6 +625,17 @@ u64 TransactionManager::get_oldest_active_txn_id() const {
         }
     }
     return oldest;
+}
+
+bool TransactionManager::has_active_transactions() const {
+    LockGuard guard(latch_);
+    for (u32 i = 0; i < txn_slots_.size(); i++) {
+        if (txn_slots_[i].state == TxnState::kActive &&
+            txn_slots_[i].txn_id != kInvalidTxnId) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void TransactionManager::ensure_next_txn_id_at_least(u64 next_id) {

@@ -107,8 +107,12 @@ public:
     // truncated. Used to flush dirty pages so that no committed page write
     // depends on a WAL record we are about to truncate.
     using CheckpointPageFlush = void (*)(void* ctx);
-    u64 checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx);
-    u64 checkpoint() { return checkpoint(nullptr, nullptr); }
+    // When allow_truncate is false, dirty pages are still flushed but the
+    // WAL file is kept — required while transactions remain active so their
+    // BEGIN/DML records survive a crash for undo.
+    u64 checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx,
+                   bool allow_truncate = true);
+    u64 checkpoint() { return checkpoint(nullptr, nullptr, true); }
 
     void flush();
     bool flush_until(u64 lsn);

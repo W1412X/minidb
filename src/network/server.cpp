@@ -36,6 +36,9 @@ struct CursorState {
     UniquePtr<Executor> exec;
     Schema schema;
     u64 timeout_ms = 0;
+    // When DECLARE started its own transaction, CLOSE must end it so the
+    // AccessShare table locks taken during executor create are released.
+    bool owns_txn = false;
 };
 
 static thread_local std::unordered_map<std::string, std::unique_ptr<CursorState>> g_session_cursors;
@@ -230,11 +233,19 @@ static void clear_prepared_cache() {
 struct ExecRwGuard {
     RwLock& lock;
     bool write;
+    // Readers must take the shared lock so DDL (write) cannot free heap /
+    // index objects under an active scan. The previous write-only guard left
+    // SELECT with no latch at all — a concurrent DROP TABLE was a UAF.
+    // FETCH is a special case: it must NOT take this latch (see FETCH path)
+    // because DROP may already hold the write latch while waiting on the
+    // cursor's AccessShare — a shared FETCH latch would deadlock.
     ExecRwGuard(RwLock& l, bool w) : lock(l), write(w) {
         if (write) lock.write_lock();
+        else lock.read_lock();
     }
     ~ExecRwGuard() {
         if (write) lock.write_unlock();
+        else lock.read_unlock();
     }
 };
 
@@ -365,8 +376,10 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         return String("Error: ") + executor_error() + "\n";
     }
@@ -375,8 +388,10 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         return String("Error: statement timeout.\n");
     }
@@ -489,23 +504,42 @@ String Server::execute_sql(const String& sql) {
         }
         QueryResourceGuard query_guard(db_.resources(), false, db_.config().work_mem_bytes);
         if (!query_guard.acquired()) return String("Error: server busy: admission timeout.\n");
+        // Hold AccessShare (via executor create) until CLOSE so concurrent
+        // DROP TABLE cannot free heap/index objects under the cursor.
+        bool owns_txn = false;
+        if (!db_.txn_manager().current()) {
+            if (!db_.txn_manager().begin()) {
+                return String("Error: failed to start cursor transaction.\n");
+            }
+            owns_txn = true;
+        }
         ExecRwGuard guard(exec_latch_, false);
         Planner planner(&db_.catalog(), optimizer_config_from_db(db_));
         UniquePtr<PlanNode> plan = planner.plan(cursor_stmt);
-        if (!plan) return String("Error: failed to build plan.\n");
+        if (!plan) {
+            if (owns_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+            return String("Error: failed to build plan.\n");
+        }
         ExecutorFactory factory(db_);
         UniquePtr<Executor> exec = factory.create(plan.get());
-        if (!exec) return String("Error: failed to create executor.\n");
+        if (!exec) {
+            if (owns_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+            return String("Error: failed to create executor.\n");
+        }
         clear_executor_error();
         u64 effective_timeout_ms = g_statement_timeout_ms != 0
                                    ? g_statement_timeout_ms
                                    : db_.config().statement_timeout_ms;
         set_executor_deadline_ms(effective_timeout_ms);
         exec->init();
-        if (executor_error()) return String("Error: ") + executor_error() + "\n";
+        if (executor_error()) {
+            if (owns_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+            return String("Error: ") + executor_error() + "\n";
+        }
         auto cursor = std::make_unique<CursorState>();
         cursor->schema = exec->output_schema();
         cursor->timeout_ms = effective_timeout_ms;
+        cursor->owns_txn = owns_txn;
         cursor->exec = static_cast<UniquePtr<Executor>&&>(exec);
         g_session_cursors[std::string(cursor_name.c_str())] = std::move(cursor);
         return String("DECLARE CURSOR\n");
@@ -514,11 +548,21 @@ String Server::execute_sql(const String& sql) {
     if (parse_fetch_cursor(sql, &cursor_name, &fetch_count)) {
         auto it = g_session_cursors.find(std::string(cursor_name.c_str()));
         if (it == g_session_cursors.end()) return String("Error: cursor not found.\n");
+        // No exec_latch_ here: DROP may already hold the write latch while
+        // blocked on this cursor's AccessShare. The open cursor transaction
+        // pins the relation until CLOSE, so FETCH is safe without the latch.
         return fetch_cursor_rows(it->second.get(), fetch_count);
     }
     if (parse_close_cursor(sql, &cursor_name)) {
-        auto erased = g_session_cursors.erase(std::string(cursor_name.c_str()));
-        return erased ? String("CLOSE CURSOR\n") : String("Error: cursor not found.\n");
+        auto it = g_session_cursors.find(std::string(cursor_name.c_str()));
+        if (it == g_session_cursors.end()) return String("Error: cursor not found.\n");
+        const bool owns_txn = it->second->owns_txn;
+        it->second->exec.reset();
+        g_session_cursors.erase(it);
+        if (owns_txn && db_.txn_manager().current()) {
+            db_.txn_manager().commit(db_.txn_manager().current());
+        }
+        return String("CLOSE CURSOR\n");
     }
 
     String normalized = upper_sql(trim_sql(sql));
@@ -557,6 +601,9 @@ String Server::execute_sql(const String& sql) {
         return result;
     }
     if (stmt.type == StmtType::kCommit) {
+        if (!g_session_cursors.empty()) {
+            return String("Error: close open cursors before COMMIT.\n");
+        }
         Transaction* txn = db_.txn_manager().current();
         if (txn && db_.txn_manager().commit(txn))
             result = String("Transaction committed.\n");
@@ -565,6 +612,9 @@ String Server::execute_sql(const String& sql) {
         return result;
     }
     if (stmt.type == StmtType::kRollback) {
+        // Abort releases table locks; drop cursors first so they cannot
+        // keep dangling HeapFile*/BPlusTree* after unlock.
+        g_session_cursors.clear();
         Transaction* txn = db_.txn_manager().current();
         if (txn && db_.txn_manager().rollback(txn))
             result = String("Transaction rolled back.\n");
@@ -942,12 +992,17 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         return 0;
     }
     if (stmt.type == StmtType::kCommit) {
+        if (!g_session_cursors.empty()) {
+            send_str("Error: close open cursors before COMMIT.\n");
+            return 0;
+        }
         Transaction* txn = db_.txn_manager().current();
         if (txn && db_.txn_manager().commit(txn)) send_str("Transaction committed.\n");
         else send_str("Error: no active transaction.\n");
         return 0;
     }
     if (stmt.type == StmtType::kRollback) {
+        g_session_cursors.clear();
         Transaction* txn = db_.txn_manager().current();
         if (txn && db_.txn_manager().rollback(txn)) send_str("Transaction rolled back.\n");
         else send_str("Error: no active transaction.\n");
@@ -1311,8 +1366,10 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         send_str(String("Error: ") + executor_error() + "\n");
         return row_count;
@@ -1322,8 +1379,10 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         send_str("Error: statement timeout.\n");
         return row_count;

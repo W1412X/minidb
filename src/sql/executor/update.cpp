@@ -464,8 +464,24 @@ ExecResult UpdateExecutor::next() {
                     if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                                  new_rid.first, new_rid.second, txn_id, lsn)) {
                         // H3: new version is installed but old xmax/next was
-                        // not updated — remove the orphan and fail closed.
+                        // not updated — remove the orphan and emit compensating
+                        // WAL so a later COMMIT cannot resurrect the UPDATE
+                        // via redo of the already-written kUpdate record.
                         heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                        if (wal_) {
+                            // Compensate the already-logged kUpdate so commit
+                            // + crash cannot redo a failed statement.
+                            if (wal_->log_savepoint_undo_insert(
+                                    txn_id, table_id_, new_rid.first,
+                                    new_rid.second) == 0 ||
+                                wal_->log_savepoint_undo_delete(
+                                    txn_id, table_id_, old_rid.page_id,
+                                    old_rid.slot_idx) == 0) {
+                                set_executor_error(
+                                    "WAL write failed during UPDATE compensation");
+                                return ExecResult::empty();
+                            }
+                        }
                         set_executor_error("failed to invalidate old tuple version");
                         return ExecResult::empty();
                     }
@@ -512,6 +528,18 @@ ExecResult UpdateExecutor::next() {
                     if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
                                                  new_rid.first, new_rid.second, txn_id, lsn)) {
                         heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                        if (wal_) {
+                            if (wal_->log_savepoint_undo_insert(
+                                    txn_id, table_id_, new_rid.first,
+                                    new_rid.second) == 0 ||
+                                wal_->log_savepoint_undo_delete(
+                                    txn_id, table_id_, old_rid.page_id,
+                                    old_rid.slot_idx) == 0) {
+                                set_executor_error(
+                                    "WAL write failed during UPDATE compensation");
+                                return ExecResult::empty();
+                            }
+                        }
                         set_executor_error("failed to invalidate old tuple version");
                         return ExecResult::empty();
                     }

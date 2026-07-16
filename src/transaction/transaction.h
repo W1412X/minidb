@@ -183,6 +183,9 @@ public:
     bool get_txn_state(u64 txn_id, TxnState* out) const;
     u64  get_commit_id(u64 txn_id) const;
     u64  get_oldest_active_txn_id() const;
+    // True if any TxnSlot is currently kActive. Used to keep WAL truncate
+    // from discarding records still needed to undo in-flight transactions.
+    bool has_active_transactions() const;
     void ensure_next_txn_id_at_least(u64 next_id);
     u64  next_txn_id() const;
 

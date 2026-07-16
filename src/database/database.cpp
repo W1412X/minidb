@@ -347,62 +347,59 @@ bool Database::drop_table(const String& name) {
 
     u32 table_id = table->table_id;
 
-    // DDL lock: AccessExclusive blocks all concurrent access.
-    if (txn_manager_.current()) {
-        auto lock_res = lock_mgr_.lock_table(
-            txn_manager_.current()->id(), table_id, LockMode::kAccessExclusive);
-        if (!lock_res.ok()) return false;
+    // Always hold AccessExclusive under a real transaction so concurrent
+    // scans/DML cannot keep raw HeapFile*/BPlusTree* pointers across DROP.
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) return false;
+        started = true;
     }
     Transaction* txn = txn_manager_.current();
-
-    // Save info for DDL undo before modifying the catalog.
-    DdlUndoInfo undo_info;
-    if (txn) {
-        undo_info.table_name = name;
-        undo_info.saved_schema = table->schema;
-        Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
-        for (u32 i = 0; i < indexes.size(); i++) {
-            DdlSavedIndex si;
-            si.index_id = indexes[i]->index_id;
-            si.index_name = indexes[i]->index_name;
-            si.table_id = indexes[i]->table_id;
-            si.key_columns = indexes[i]->key_columns;
-            si.is_unique = indexes[i]->is_unique;
-            undo_info.saved_indexes.push_back(si);
-            undo_info.deferred_deletes.push_back(
-                String("indexes/") + String(si.index_id) + ".btree");
-        }
-        undo_info.deferred_deletes.push_back(
-            String("tables/") + String(table_id) + ".heap");
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table_id, LockMode::kAccessExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
     }
 
+    DdlUndoInfo undo_info;
+    undo_info.table_name = name;
+    undo_info.saved_schema = table->schema;
     Vector<IndexEntry*> indexes = catalog_.get_indexes(table_id);
+    for (u32 i = 0; i < indexes.size(); i++) {
+        DdlSavedIndex si;
+        si.index_id = indexes[i]->index_id;
+        si.index_name = indexes[i]->index_name;
+        si.table_id = indexes[i]->table_id;
+        si.key_columns = indexes[i]->key_columns;
+        si.is_unique = indexes[i]->is_unique;
+        undo_info.saved_indexes.push_back(si);
+        undo_info.deferred_deletes.push_back(
+            String("indexes/") + String(si.index_id) + ".btree");
+    }
+    undo_info.deferred_deletes.push_back(
+        String("tables/") + String(table_id) + ".heap");
+
     Vector<u32> index_ids;
     for (u32 i = 0; i < indexes.size(); i++) {
         index_ids.push_back(indexes[i]->index_id);
     }
-    if (!catalog_.drop_table(name)) return false;
+    if (!catalog_.drop_table(name)) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
+    }
 
     for (u32 i = 0; i < index_ids.size(); i++) {
         index_trees_.erase(index_ids[i]);
-        if (!txn && page_store_) {
-            page_store_->delete_file(String("indexes/") + String(index_ids[i]) + ".btree");
-        }
     }
     heap_files_.erase(table_id);
-    if (!txn && page_store_) {
-        page_store_->delete_file(String("tables/") + String(table_id) + ".heap");
-    }
     save_catalog();
-        if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kDropTable, table_id, 0, name);
+    if (wal_) {
+        wal_->log_ddl(txn->id(), DdlOp::kDropTable, table_id, 0, name);
     }
 
-    if (txn) {
-        txn->record_ddl(UndoType::kDdlDropTable, table_id,
-                        static_cast<DdlUndoInfo&&>(undo_info));
-    }
+    txn->record_ddl(UndoType::kDdlDropTable, table_id,
+                    static_cast<DdlUndoInfo&&>(undo_info));
+    if (started && !txn_manager_.commit(txn)) return false;
     return true;
 }
 
@@ -411,41 +408,41 @@ bool Database::drop_index(const String& name) {
     if (!index) return false;
     u32 index_id = index->index_id;
     u32 table_id = index->table_id;
+
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) return false;
+        started = true;
+    }
     Transaction* txn = txn_manager_.current();
-
-    // DDL lock: AccessExclusive on the parent table.
-    if (txn) {
-        auto lock_res = lock_mgr_.lock_table(txn->id(), table_id, LockMode::kAccessExclusive);
-        if (!lock_res.ok()) return false;
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table_id, LockMode::kAccessExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
     }
 
-    // Save info for DDL undo before modifying the catalog.
     DdlUndoInfo undo_info;
-    if (txn) {
-        undo_info.single_index.index_id = index_id;
-        undo_info.single_index.index_name = index->index_name;
-        undo_info.single_index.table_id = table_id;
-        undo_info.single_index.key_columns = index->key_columns;
-        undo_info.single_index.is_unique = index->is_unique;
-        undo_info.deferred_deletes.push_back(
-            String("indexes/") + String(index_id) + ".btree");
-    }
+    undo_info.single_index.index_id = index_id;
+    undo_info.single_index.index_name = index->index_name;
+    undo_info.single_index.table_id = table_id;
+    undo_info.single_index.key_columns = index->key_columns;
+    undo_info.single_index.is_unique = index->is_unique;
+    undo_info.deferred_deletes.push_back(
+        String("indexes/") + String(index_id) + ".btree");
 
-    if (!catalog_.drop_index(name)) return false;
+    if (!catalog_.drop_index(name)) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
+    }
     index_trees_.erase(index_id);
-    if (!txn && page_store_) {
-        page_store_->delete_file(String("indexes/") + String(index_id) + ".btree");
-    }
     save_catalog();
-        if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kDropIndex, table_id, index_id, name);
+    if (wal_) {
+        wal_->log_ddl(txn->id(), DdlOp::kDropIndex, table_id, index_id, name);
     }
 
-    if (txn) {
-        txn->record_ddl(UndoType::kDdlDropIndex, table_id,
-                        static_cast<DdlUndoInfo&&>(undo_info));
-    }
+    txn->record_ddl(UndoType::kDdlDropIndex, table_id,
+                    static_cast<DdlUndoInfo&&>(undo_info));
+    if (started && !txn_manager_.commit(txn)) return false;
     return true;
 }
 
@@ -454,19 +451,31 @@ bool Database::create_index(const String& name, const String& table_name,
     TableEntry* table = catalog_.get_table(table_name);
     if (!table || catalog_.get_index(name)) return false;
 
-    // DDL lock: Exclusive allows concurrent reads but blocks writes.
-    if (txn_manager_.current()) {
-        auto lock_res = lock_mgr_.lock_table(
-            txn_manager_.current()->id(), table->table_id, LockMode::kExclusive);
-        if (!lock_res.ok()) return false;
+    // Always take Exclusive under a real transaction so concurrent DML
+    // cannot race the bulk build (autocommit previously skipped the lock).
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) return false;
+        started = true;
     }
+    Transaction* txn = txn_manager_.current();
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table->table_id, LockMode::kExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
+    }
+
+    auto fail = [&]() -> bool {
+        if (started) txn_manager_.rollback(txn_manager_.current());
+        return false;
+    };
 
     Vector<u32> key_cols;
     for (u32 i = 0; i < columns.size(); i++) {
         int idx = table->schema.get_column_index(columns[i]);
-        if (idx < 0) return false;
+        if (idx < 0) return fail();
         if (!btree_supports_type(table->schema.get_column(static_cast<u32>(idx)).type)) {
-            return false;
+            return fail();
         }
         key_cols.push_back(static_cast<u32>(idx));
     }
@@ -499,7 +508,7 @@ bool Database::create_index(const String& name, const String& table_name,
                 IndexKey key = index_key_from_tuple(probe, tuple);
                 if (!key.fits()) {
                     pool_->unpin_page(page_id);
-                    return false;
+                    return fail();
                 }
                 if (unique) {
                     String unique_key;
@@ -510,7 +519,7 @@ bool Database::create_index(const String& name, const String& table_name,
                     if (make_projected_tuple_key(tuple, key_cols, true, &unique_key)) {
                         if (seen_keys.find(unique_key)) {
                             pool_->unpin_page(page_id);
-                            return false;
+                            return fail();
                         }
                         seen_keys.insert(unique_key, true);
                     }
@@ -528,7 +537,7 @@ bool Database::create_index(const String& name, const String& table_name,
 
     u32 index_id = catalog_.create_index(name, table->table_id, key_cols, unique);
     if (index_id == 0) {
-        return false;
+        return fail();
     }
     IndexEntry* index = catalog_.get_index(name);
     auto tree = UniquePtr<BPlusTree>(new BPlusTree(index_id, pool_.get()));
@@ -538,28 +547,24 @@ bool Database::create_index(const String& name, const String& table_name,
     if (!tree_ptr->bulk_load_sorted(entries)) {
         catalog_.drop_index(name);
         index_trees_.erase(index_id);
-        return false;
+        return fail();
     }
     index->root_page_id = tree_ptr->root_page_id();
     index->state = IndexState::kValid;
     save_catalog();
-        if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kCreateIndex, table->table_id, index_id, name);
+    if (wal_) {
+        wal_->log_ddl(txn->id(), DdlOp::kCreateIndex, table->table_id, index_id, name);
     }
 
-    // Record DDL undo if inside a transaction.
-    Transaction* txn = txn_manager_.current();
-    if (txn) {
-        DdlUndoInfo info;
-        info.single_index.index_id = index_id;
-        info.single_index.index_name = name;
-        info.single_index.table_id = table->table_id;
-        info.single_index.key_columns = key_cols;
-        info.single_index.is_unique = unique;
-        txn->record_ddl(UndoType::kDdlCreateIndex, table->table_id,
-                        static_cast<DdlUndoInfo&&>(info));
-    }
+    DdlUndoInfo info;
+    info.single_index.index_id = index_id;
+    info.single_index.index_name = name;
+    info.single_index.table_id = table->table_id;
+    info.single_index.key_columns = key_cols;
+    info.single_index.is_unique = unique;
+    txn->record_ddl(UndoType::kDdlCreateIndex, table->table_id,
+                    static_cast<DdlUndoInfo&&>(info));
+    if (started && !txn_manager_.commit(txn)) return false;
     return true;
 }
 
@@ -603,19 +608,31 @@ bool Database::alter_table_add_column(const String& table_name, const Column& co
         return false;
     }
 
-    // DDL lock: AccessExclusive for ALTER TABLE.
-    if (txn_manager_.current()) {
-        auto lock_res = lock_mgr_.lock_table(
-            txn_manager_.current()->id(), table->table_id, LockMode::kAccessExclusive);
-        if (!lock_res.ok()) { set_alter_error(error, "could not acquire DDL lock"); return false; }
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) {
+            set_alter_error(error, "could not start DDL transaction");
+            return false;
+        }
+        started = true;
+    }
+    Transaction* txn = txn_manager_.current();
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table->table_id,
+                                         LockMode::kAccessExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        set_alter_error(error, "could not acquire DDL lock");
+        return false;
     }
     if (table->schema.get_column_index(column.name) >= 0) {
+        if (started) txn_manager_.rollback(txn);
         set_alter_error(error, "column already exists");
         return false;
     }
     if (column.not_null && column.default_value.empty()) {
         HeapFile* heap = get_heap_file(table->table_id);
         if (table_has_live_rows(pool_.get(), heap, table->schema)) {
+            if (started) txn_manager_.rollback(txn);
             set_alter_error(error, "cannot add NOT NULL column without DEFAULT to non-empty table");
             return false;
         }
@@ -623,26 +640,33 @@ bool Database::alter_table_add_column(const String& table_name, const Column& co
 
     u32 added_col_idx = table->schema.column_count();
     u32 tid = table->table_id;
+    u64 ddl_txn_id = txn->id();
     table->schema.add_column(column);
     save_catalog();
-    checkpoint();
-    // log_ddl runs AFTER checkpoint because checkpoint truncates the WAL;
-    // writing the marker last guarantees it lives in the post-truncate
-    // region for any future repair pass to find.
-    if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kAlterAddColumn, tid, added_col_idx,
-                      table_name + "." + column.name);
-    }
 
-    // Record DDL undo if inside a transaction.
-    Transaction* txn = txn_manager_.current();
-    if (txn) {
-        DdlUndoInfo info;
-        info.table_name = table_name;
-        info.column_position = added_col_idx;
-        txn->record_ddl(UndoType::kDdlAlterAddColumn, tid,
-                        static_cast<DdlUndoInfo&&>(info));
+    DdlUndoInfo info;
+    info.table_name = table_name;
+    info.column_position = added_col_idx;
+    txn->record_ddl(UndoType::kDdlAlterAddColumn, tid,
+                    static_cast<DdlUndoInfo&&>(info));
+    if (started) {
+        if (!txn_manager_.commit(txn)) {
+            set_alter_error(error, "DDL commit failed");
+            return false;
+        }
+        // Checkpoint after commit so truncate is not blocked by our txn,
+        // then write the DDL marker into the post-truncate WAL region.
+        checkpoint();
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterAddColumn, tid, added_col_idx,
+                          table_name + "." + column.name);
+        }
+    } else {
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterAddColumn, tid, added_col_idx,
+                          table_name + "." + column.name);
+        }
+        checkpoint();
     }
     return true;
 }
@@ -655,16 +679,27 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
         return false;
     }
 
-    // DDL lock: AccessExclusive for ALTER TABLE.
-    if (txn_manager_.current()) {
-        auto lock_res = lock_mgr_.lock_table(
-            txn_manager_.current()->id(), table->table_id, LockMode::kAccessExclusive);
-        if (!lock_res.ok()) { set_alter_error(error, "could not acquire DDL lock"); return false; }
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) {
+            set_alter_error(error, "could not start DDL transaction");
+            return false;
+        }
+        started = true;
+    }
+    Transaction* txn = txn_manager_.current();
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table->table_id,
+                                         LockMode::kAccessExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        set_alter_error(error, "could not acquire DDL lock");
+        return false;
     }
     // get_column_index already skips is_dropped columns, so re-dropping
     // a previously dropped column is rejected ("column not found").
     int col_idx_raw = table->schema.get_column_index(column_name);
     if (col_idx_raw < 0) {
+        if (started) txn_manager_.rollback(txn);
         set_alter_error(error, "column not found");
         return false;
     }
@@ -678,6 +713,7 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
         if (!index) continue;
         for (u32 k = 0; k < index->key_columns.size(); k++) {
             if (index->key_columns[k] == col_idx) {
+                if (started) txn_manager_.rollback(txn);
                 set_alter_error(error, "cannot drop indexed column");
                 return false;
             }
@@ -690,24 +726,32 @@ bool Database::alter_table_drop_column(const String& table_name, const String& c
     // No heap scan required, O(1) regardless of table size.
     // Column positions (used by indexes, tuple layout, etc.) do NOT shift.
     u32 tid = table->table_id;
+    u64 ddl_txn_id = txn->id();
     Column& col = const_cast<Column&>(table->schema.get_column(col_idx));
     col.is_dropped = true;
     save_catalog();
-    checkpoint();
-    if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kAlterDropColumn, tid, col_idx,
-                      table_name + "." + column_name);
-    }
 
-    // Record DDL undo if inside a transaction — rollback clears is_dropped.
-    Transaction* txn = txn_manager_.current();
-    if (txn) {
-        DdlUndoInfo info;
-        info.table_name = table_name;
-        info.column_position = col_idx;
-        txn->record_ddl(UndoType::kDdlAlterDropColumn, tid,
-                        static_cast<DdlUndoInfo&&>(info));
+    DdlUndoInfo info;
+    info.table_name = table_name;
+    info.column_position = col_idx;
+    txn->record_ddl(UndoType::kDdlAlterDropColumn, tid,
+                    static_cast<DdlUndoInfo&&>(info));
+    if (started) {
+        if (!txn_manager_.commit(txn)) {
+            set_alter_error(error, "DDL commit failed");
+            return false;
+        }
+        checkpoint();
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterDropColumn, tid, col_idx,
+                          table_name + "." + column_name);
+        }
+    } else {
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterDropColumn, tid, col_idx,
+                          table_name + "." + column_name);
+        }
+        checkpoint();
     }
     return true;
 }
@@ -720,41 +764,61 @@ bool Database::alter_table_rename_column(const String& table_name, const String&
         return false;
     }
 
-    // DDL lock: AccessExclusive for ALTER TABLE.
-    if (txn_manager_.current()) {
-        auto lock_res = lock_mgr_.lock_table(
-            txn_manager_.current()->id(), table->table_id, LockMode::kAccessExclusive);
-        if (!lock_res.ok()) { set_alter_error(error, "could not acquire DDL lock"); return false; }
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) {
+            set_alter_error(error, "could not start DDL transaction");
+            return false;
+        }
+        started = true;
+    }
+    Transaction* txn = txn_manager_.current();
+    auto lock_res = lock_mgr_.lock_table(txn->id(), table->table_id,
+                                         LockMode::kAccessExclusive);
+    if (!lock_res.ok()) {
+        if (started) txn_manager_.rollback(txn);
+        set_alter_error(error, "could not acquire DDL lock");
+        return false;
     }
     int old_idx = table->schema.get_column_index(old_name);
     if (old_idx < 0) {
+        if (started) txn_manager_.rollback(txn);
         set_alter_error(error, "column not found");
         return false;
     }
     if (table->schema.get_column_index(new_name) >= 0) {
+        if (started) txn_manager_.rollback(txn);
         set_alter_error(error, "target column already exists");
         return false;
     }
     u32 col_pos = static_cast<u32>(old_idx);
     u32 tid = table->table_id;
+    u64 ddl_txn_id = txn->id();
     table->schema.rename_column(col_pos, new_name);
     save_catalog();
-    checkpoint();
-    if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kAlterRenameColumn, tid, col_pos,
-                      table_name + "." + old_name + "->" + new_name);
-    }
 
-    // Record DDL undo if inside a transaction.
-    Transaction* txn = txn_manager_.current();
-    if (txn) {
-        DdlUndoInfo info;
-        info.table_name = table_name;
-        info.column_position = col_pos;
-        info.rename_from = old_name;
-        txn->record_ddl(UndoType::kDdlAlterRenameColumn, tid,
-                        static_cast<DdlUndoInfo&&>(info));
+    DdlUndoInfo info;
+    info.table_name = table_name;
+    info.column_position = col_pos;
+    info.rename_from = old_name;
+    txn->record_ddl(UndoType::kDdlAlterRenameColumn, tid,
+                    static_cast<DdlUndoInfo&&>(info));
+    if (started) {
+        if (!txn_manager_.commit(txn)) {
+            set_alter_error(error, "DDL commit failed");
+            return false;
+        }
+        checkpoint();
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterRenameColumn, tid, col_pos,
+                          table_name + "." + old_name + "->" + new_name);
+        }
+    } else {
+        if (wal_) {
+            wal_->log_ddl(ddl_txn_id, DdlOp::kAlterRenameColumn, tid, col_pos,
+                          table_name + "." + old_name + "->" + new_name);
+        }
+        checkpoint();
     }
     return true;
 }
@@ -1283,7 +1347,12 @@ void Database::checkpoint() {
     for (auto it = heap_files_.begin(); it; it = heap_files_.next(it)) {
         if (it->value) it->value->flush_meta();
     }
-    wal_->checkpoint(&Database::flush_pages_for_checkpoint_trampoline, this);
+    // Never discard WAL while transactions are active — their uncommitted
+    // heap pages may already be flushed by the checkpoint barrier, and
+    // recovery needs the DML records to undo them after a crash.
+    const bool allow_truncate = !txn_manager_.has_active_transactions();
+    wal_->checkpoint(&Database::flush_pages_for_checkpoint_trampoline, this,
+                     allow_truncate);
     save_control_file(false);
 }
 

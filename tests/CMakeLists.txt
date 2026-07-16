@@ -127,6 +127,8 @@ add_test(NAME abort_visibility
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/abort_visibility.py $<TARGET_FILE:minidb> --seed 12648461)
 add_test(NAME gc_all_visible_uncommitted
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/gc_all_visible_uncommitted.py $<TARGET_FILE:minidb> --seed 12648464)
+add_test(NAME ddl_vs_scan
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/ddl_vs_scan.py $<TARGET_FILE:minidb> --seed 12648465)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
 add_test(NAME index_heap_atomic
@@ -157,6 +159,8 @@ add_test(NAME torn_page
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/torn_page.py $<TARGET_FILE:minidb> --seed 12648436)
 add_test(NAME checkpoint_barrier
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/checkpoint_barrier.py $<TARGET_FILE:minidb> --seed 12648440)
+add_test(NAME checkpoint_open_txn
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/checkpoint_open_txn.py $<TARGET_FILE:minidb> --seed 12648466)
 add_test(NAME wal_record_corruption
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/durability/wal_record_corruption.py $<TARGET_FILE:minidb> --seed 12648447)
 add_test(NAME wal_dml_fail_closed

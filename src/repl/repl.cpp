@@ -823,8 +823,10 @@ void REPL::execute_sql(const String& sql) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         printf("Error: %s\n\n", executor_error());
         return;
@@ -833,8 +835,10 @@ void REPL::execute_sql(const String& sql) {
         if (implicit_txn) {
             db_.txn_manager().rollback(db_.txn_manager().current());
         } else if (savepoint_active) {
-            db_.txn_manager().rollback_to_savepoint(
-                db_.txn_manager().current(), savepoint_mark);
+            if (!db_.txn_manager().rollback_to_savepoint(
+                    db_.txn_manager().current(), savepoint_mark)) {
+                db_.txn_manager().rollback(db_.txn_manager().current());
+            }
         }
         printf("Error: statement timeout.\n\n");
         return;

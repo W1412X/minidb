@@ -407,7 +407,8 @@ u64 WalManager::log_index_delete(u64 txn_id, u32 index_id, const IndexKey& key, 
     return lsn;
 }
 
-u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
+u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx,
+                           bool allow_truncate) {
     LockGuard guard(latch_);
     if (fd_ < 0) return 0;
 
@@ -449,9 +450,11 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
     // flush.
     if (flush_pages_cb) flush_pages_cb(ctx);
 
-    // Phase 4: truncate the WAL. Safe now because everything that
-    // referenced records we are about to discard is durable on disk.
-    if (fd_ >= 0) {
+    // Phase 4: truncate the WAL. Only safe when no in-flight transaction
+    // still needs its BEGIN/DML records for crash undo. Truncating while a
+    // transaction is open can leave its uncommitted pages on disk with no
+    // WAL trail — recovery would then treat those rows as committed.
+    if (allow_truncate && fd_ >= 0) {
         u64 keep_next = next_lsn_.load();
         u64 keep_durable = durable_lsn_.load();
         close(fd_);
@@ -460,9 +463,11 @@ u64 WalManager::checkpoint(CheckpointPageFlush flush_pages_cb, void* ctx) {
         next_lsn_.store(keep_next);
         durable_lsn_.store(keep_durable);
         last_written_lsn_ = keep_durable;
+        bytes_since_checkpoint_.store(0);
     }
+    // When truncate is skipped, leave bytes_since_checkpoint_ alone so the
+    // background loop keeps retrying until active transactions drain.
 
-    bytes_since_checkpoint_.store(0);
     return lsn;
 }
 
@@ -669,6 +674,12 @@ bool WalManager::recover(Database* db) {
         }
     }
     bool needs_index_rebuild = false;
+    // Index pages are not page-LSN protected the way heap pages are. A
+    // committed heap insert can flush while its B-tree leaf stays dirty;
+    // after crash, heap redo is skipped by page_lsn and the old code left
+    // needs_index_rebuild=false. Any committed heap DML in the WAL means
+    // indexes may be stale and must be rebuilt.
+    bool saw_committed_heap_dml = false;
 
     if (db) {
         if (lseek(fd, 0, SEEK_SET) < 0) {
@@ -688,6 +699,12 @@ bool WalManager::recover(Database* db) {
                 hdr.type == WalType::kSavepointUndoDelete;
             if (!is_data_record && !is_savepoint_undo) {
                 continue;
+            }
+            if (is_data_record) {
+                const bool* is_committed = committed.find(hdr.txn_id);
+                if (is_committed && *is_committed) {
+                    saw_committed_heap_dml = true;
+                }
             }
             // Statement-level savepoint compensation. Applied unconditionally
             // — the recorded RID's earlier kInsert/kDelete was already redone
@@ -990,6 +1007,7 @@ bool WalManager::recover(Database* db) {
     if (db && max_txn_id > 0) {
         db->txn_manager().ensure_next_txn_id_at_least(max_txn_id + 1);
     }
+    if (saw_committed_heap_dml) needs_index_rebuild = true;
     return needs_index_rebuild;
 }
 
