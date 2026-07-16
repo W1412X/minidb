@@ -179,6 +179,20 @@ public:
     u32 table_id() const { return table_id_; }
     void flush_meta();
 
+    // Serialize heap content mutations (INSERT/UPDATE/DELETE/GC) on the
+    // canonical HeapFile instance. GC must use Database::get_heap_file() and
+    // hold this guard — a stack-local HeapFile has a different latch_ and
+    // does not exclude concurrent DML.
+    class LatchGuard {
+    public:
+        explicit LatchGuard(HeapFile& heap) : m_(heap.latch_) { m_.lock(); }
+        ~LatchGuard() { m_.unlock(); }
+        LatchGuard(const LatchGuard&) = delete;
+        LatchGuard& operator=(const LatchGuard&) = delete;
+    private:
+        Mutex& m_;
+    };
+
 private:
     void ensure_meta_loaded() const;
     PageId meta_page_id() const;

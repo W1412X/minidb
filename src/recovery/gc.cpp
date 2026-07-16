@@ -59,11 +59,17 @@ bool GarbageCollector::run_gc(u32 max_pages) {
         if (ctx->pages_processed >= ctx->max_pages) return;
 
         GarbageCollector* gc = ctx->gc;
-        HeapFile heap(gc->pool_, te.table_id);
-        PageId first_page = heap.first_data_page_id();
+        // Must use the live HeapFile so FSM/VM updates and latch_ exclude
+        // concurrent DML (a stack-local HeapFile has a separate latch).
+        if (!gc->db_) return;
+        HeapFile* heap = gc->db_->get_heap_file(te.table_id);
+        if (!heap) return;
+        HeapFile::LatchGuard heap_guard(*heap);
+
+        PageId first_page = heap->first_data_page_id();
         if (first_page == kNullPageId) return;
         u32 file_id = file_id_from_page(first_page);
-        u32 pages = heap.meta().num_data_pages;
+        u32 pages = heap->meta().num_data_pages;
         if (pages == 0) return;
 
         // Incremental: resume from last processed page for this table
@@ -97,10 +103,8 @@ bool GarbageCollector::run_gc(u32 max_pages) {
                     // BEFORE we mark its slot DEAD. DELETE used to do this
                     // eagerly which broke SI visibility through IndexScan;
                     // now the index entry lives until GC.
-                    if (gc->db_) {
-                        gc->db_->delete_index_entries(te.table_id, tuple,
-                            RecordId(page_id, slot));
-                    }
+                    gc->db_->delete_index_entries(te.table_id, tuple,
+                        RecordId(page_id, slot));
                     if (tuple.has_next_version()) {
                         PageId next_page = tuple.next_version_page();
                         SlotIdx next_slot = tuple.next_version_slot();
@@ -129,18 +133,18 @@ bool GarbageCollector::run_gc(u32 max_pages) {
                 page->prune();
                 gc->pool_->mark_dirty(page_id);
                 // Update FSM: space was reclaimed.
-                heap.fsm().update(page_id, page->get_free_space());
+                heap->fsm().update(page_id, page->get_free_space());
                 // Page was modified, so it's not all-visible anymore.
-                heap.vm().clear_page(page_id);
+                heap->vm().clear_page(page_id);
                 ctx->any_modified = true;
             } else if (all_visible) {
                 // Every live tuple is committed, older than all active
                 // snapshots, and not deleted — safe for IndexOnlyScan to
                 // skip heap MVCC rechecks.
-                heap.vm().set_visible(page_id);
+                heap->vm().set_visible(page_id);
             } else {
                 // In-flight or recently-committed tuples remain; keep VM clear.
-                heap.vm().clear_page(page_id);
+                heap->vm().clear_page(page_id);
             }
 
             gc->pool_->unpin_page(page_id);
@@ -173,18 +177,22 @@ void GarbageCollector::run_vacuum() {
     auto vacuum_callback = [](TableEntry& te, void* c) {
         auto* ctx = static_cast<VacuumCtx*>(c);
         GarbageCollector* gc = ctx->gc;
-        HeapFile heap(gc->pool_, te.table_id);
-        PageId first_page = heap.first_data_page_id();
+        if (!gc->db_) return;
+        HeapFile* heap = gc->db_->get_heap_file(te.table_id);
+        if (!heap) return;
+        HeapFile::LatchGuard heap_guard(*heap);
+
+        PageId first_page = heap->first_data_page_id();
         if (first_page == kNullPageId) return;
         u32 file_id = file_id_from_page(first_page);
-        u32 pages = heap.meta().num_data_pages;
+        u32 pages = heap->meta().num_data_pages;
         if (pages == 0) return;
 
         for (u32 p = 0; p < pages; p++) {
             PageId page_id = make_page_id(file_id, page_num_from_page(first_page) + p);
 
             // Skip pages already fully frozen — nothing left to do.
-            if (heap.vm().is_frozen(page_id)) continue;
+            if (heap->vm().is_frozen(page_id)) continue;
 
             auto result = gc->pool_->fetch_page(page_id, true);
             if (!result.ok()) continue;
@@ -206,10 +214,8 @@ void GarbageCollector::run_vacuum() {
                     has_garbage = true;
                     all_visible = false;
                     all_frozen = false;
-                    if (gc->db_) {
-                        gc->db_->delete_index_entries(te.table_id, tuple,
-                            RecordId(page_id, slot));
-                    }
+                    gc->db_->delete_index_entries(te.table_id, tuple,
+                        RecordId(page_id, slot));
                     if (tuple.has_next_version()) {
                         PageId next_page = tuple.next_version_page();
                         SlotIdx next_slot = tuple.next_version_slot();
@@ -250,14 +256,14 @@ void GarbageCollector::run_vacuum() {
             if (has_garbage) {
                 page->prune();
                 gc->pool_->mark_dirty(page_id);
-                heap.fsm().update(page_id, page->get_free_space());
-                heap.vm().clear_page(page_id);
+                heap->fsm().update(page_id, page->get_free_space());
+                heap->vm().clear_page(page_id);
             } else if (all_frozen && num_tuples > 0) {
-                heap.vm().set_frozen(page_id);
+                heap->vm().set_frozen(page_id);
             } else if (all_visible) {
-                heap.vm().set_visible(page_id);
+                heap->vm().set_visible(page_id);
             } else {
-                heap.vm().clear_page(page_id);
+                heap->vm().clear_page(page_id);
             }
 
             gc->pool_->unpin_page(page_id);

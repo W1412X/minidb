@@ -303,8 +303,21 @@ String Database::stats_summary() const {
 }
 
 bool Database::create_table(const String& name, const Schema& schema) {
+    // Match other DDL: always run under a real transaction so autocommit
+    // CREATE TABLE can roll back a partial catalog/index build and so the
+    // WAL DDL marker carries a non-zero txn_id for recovery.
+    bool started = false;
+    if (!txn_manager_.current()) {
+        if (!txn_manager_.begin()) return false;
+        started = true;
+    }
+    Transaction* txn = txn_manager_.current();
+
     u32 tid = catalog_.create_table(name, schema);
-    if (tid == 0) return false;
+    if (tid == 0) {
+        if (started) txn_manager_.rollback(txn);
+        return false;
+    }
     heap_files_[tid] = UniquePtr<HeapFile>(new HeapFile(pool_.get(), tid));
     heap_files_[tid]->create();
 
@@ -324,20 +337,16 @@ bool Database::create_table(const String& name, const Schema& schema) {
     }
 
     save_catalog();
-        if (wal_) {
-        u64 ddl_txn = txn_manager_.current() ? txn_manager_.current()->id() : 0;
-        wal_->log_ddl(ddl_txn, DdlOp::kCreateTable, tid, 0, name);
+    if (wal_) {
+        wal_->log_ddl(txn->id(), DdlOp::kCreateTable, tid, 0, name);
     }
 
-    // Record DDL undo if inside a transaction.
-    Transaction* txn = txn_manager_.current();
-    if (txn) {
-        DdlUndoInfo info;
-        info.table_name = name;
-        info.auto_index_ids = static_cast<Vector<u32>&&>(auto_idx_ids);
-        txn->record_ddl(UndoType::kDdlCreateTable, tid,
-                        static_cast<DdlUndoInfo&&>(info));
-    }
+    DdlUndoInfo info;
+    info.table_name = name;
+    info.auto_index_ids = static_cast<Vector<u32>&&>(auto_idx_ids);
+    txn->record_ddl(UndoType::kDdlCreateTable, tid,
+                    static_cast<DdlUndoInfo&&>(info));
+    if (started && !txn_manager_.commit(txn)) return false;
     return true;
 }
 

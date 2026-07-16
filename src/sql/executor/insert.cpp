@@ -301,44 +301,59 @@ ExecResult InsertExecutor::next() {
             if (!explicit_txn) autocommit_key_locks.push_back(scoped);
             row_unique_keys.push_back(scoped);
         }
-        if (key_lock_failed) continue;
-        if (violates_unique_constraints(values_[i])) continue;
+        if (key_lock_failed) {
+            set_executor_error("could not serialize access due to concurrent update");
+            return ExecResult::empty();
+        }
+        if (violates_unique_constraints(values_[i])) {
+            set_executor_error("duplicate key value violates unique constraint");
+            return ExecResult::empty();
+        }
 
-        bool batch_unique_conflict = false;
         for (u32 k = 0; k < row_unique_keys.size(); k++) {
             if (pending_unique_keys.find(row_unique_keys[k])) {
-                batch_unique_conflict = true;
-                break;
+                set_executor_error("duplicate key value violates unique constraint");
+                return ExecResult::empty();
             }
         }
-        if (batch_unique_conflict) continue;
 
         Tuple tuple(schema_, values_[i]);
         tuple.set_xmin(txn_id);
         tuple.set_xmax(0);
-        if (db_ && !db_->validate_index_keys(table_id_, tuple)) continue;
+        if (db_ && !db_->validate_index_keys(table_id_, tuple)) {
+            set_executor_error("index key validation failed");
+            return ExecResult::empty();
+        }
 
         u32 serialized_size = tuple.serialized_size();
-        if (serialized_size > kPageSize) continue;
+        if (serialized_size > kPageSize) {
+            set_executor_error("tuple too large for page");
+            return ExecResult::empty();
+        }
         byte buffer[kPageSize];
         byte* buf = tuple.serialize_to_page(buffer);
         u16 size = static_cast<u16>(buf - buffer);
 
         // WAL-first: 1. Reserve position (RAII) → 2. Write WAL → 3. Commit data
         auto prepare = heap_->prepare_insert(size);
-        if (!prepare.ok()) continue;
+        if (!prepare.ok()) {
+            set_executor_error("could not allocate space for insert");
+            return ExecResult::empty();
+        }
 
         auto reservation = std::move(prepare.value());
-        RecordId predicted_rid(reservation.page_id(), reservation.predicted_slot());
+        const PageId ins_page = reservation.page_id();
+        const SlotIdx ins_slot = reservation.predicted_slot();
+        RecordId predicted_rid(ins_page, ins_slot);
         if (db_ && !db_->lock_manager().lock_record(txn_id, table_id_, predicted_rid,
                                                      LockMode::kRowExclusive).ok()) {
-            continue;  // reservation destructor releases the heap latch
+            set_executor_error("could not serialize access due to concurrent update");
+            return ExecResult::empty();
         }
         if (!explicit_txn) autocommit_record_locks.push_back(predicted_rid);
         u64 lsn = 0;
         if (wal_) {
-            lsn = wal_->log_insert(txn_id, table_id_, reservation.page_id(),
-                                    reservation.predicted_slot(), buffer, size);
+            lsn = wal_->log_insert(txn_id, table_id_, ins_page, ins_slot, buffer, size);
             // WAL-before-data: never install a heap tuple whose insert is
             // not durable in the log. LSN 0 would let BufferPool flush the
             // dirty page without waiting on WAL (page_lsn <= durable_lsn).
@@ -349,24 +364,34 @@ ExecResult InsertExecutor::next() {
         }
 
         auto result = reservation.commit(buffer, size, lsn);
-        if (result.ok()) {
-            Pair<PageId, SlotIdx> rid = result.value();
-            RecordId record_id(rid.first, rid.second);
-            // Record the heap-insert undo BEFORE touching indexes so the
-            // active transaction's rollback removes both the heap row and
-            // any partial index entries via delete_index_entries.
-            if (txn_mgr_ && txn_mgr_->current()) {
-                txn_mgr_->record_insert(table_id_, record_id);
+        if (!result.ok()) {
+            if (wal_) {
+                if (wal_->log_savepoint_undo_insert(
+                        txn_id, table_id_, ins_page, ins_slot) == 0) {
+                    set_executor_error(
+                        "WAL write failed during INSERT compensation");
+                    return ExecResult::empty();
+                }
             }
-            if (db_ && !db_->insert_index_entries(table_id_, tuple, record_id)) {
-                set_executor_error("index insert failed");
-                return ExecResult::empty();
-            }
-            for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                pending_unique_keys.insert(row_unique_keys[k], true);
-            }
-            count++;
+            set_executor_error("heap insert failed");
+            return ExecResult::empty();
         }
+        Pair<PageId, SlotIdx> rid = result.value();
+        RecordId record_id(rid.first, rid.second);
+        // Record the heap-insert undo BEFORE touching indexes so the
+        // active transaction's rollback removes both the heap row and
+        // any partial index entries via delete_index_entries.
+        if (txn_mgr_ && txn_mgr_->current()) {
+            txn_mgr_->record_insert(table_id_, record_id);
+        }
+        if (db_ && !db_->insert_index_entries(table_id_, tuple, record_id)) {
+            set_executor_error("index insert failed");
+            return ExecResult::empty();
+        }
+        for (u32 k = 0; k < row_unique_keys.size(); k++) {
+            pending_unique_keys.insert(row_unique_keys[k], true);
+        }
+        count++;
     }
 
     Vector<Value> rv;

@@ -60,6 +60,17 @@ ExecResult DeleteExecutor::next() {
             bool conflict = false;
             if (!heap_->mark_deleted_if_current(rid.page_id, rid.slot_idx,
                                                 txn_id, lsn, &conflict)) {
+                // WAL already has kDelete; without compensation a later
+                // COMMIT + crash would redo the delete even though the
+                // statement failed (same class as H3 UPDATE).
+                if (wal_) {
+                    if (wal_->log_savepoint_undo_delete(
+                            txn_id, table_id_, rid.page_id, rid.slot_idx) == 0) {
+                        set_executor_error(
+                            "WAL write failed during DELETE compensation");
+                        return ExecResult::empty();
+                    }
+                }
                 set_executor_error(conflict
                     ? "could not serialize access due to concurrent update"
                     : "could not read row for delete");

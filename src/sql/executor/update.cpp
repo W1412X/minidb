@@ -409,16 +409,15 @@ ExecResult UpdateExecutor::next() {
         }
         if (!unique_groups.empty() &&
             violates_unique_constraints(new_values, old_rid, unique_groups)) {
-            continue;
+            set_executor_error("duplicate key value violates unique constraint");
+            return ExecResult::empty();
         }
-        bool batch_unique_conflict = false;
         for (u32 k = 0; k < row_unique_keys.size(); k++) {
             if (pending_unique_keys.find(row_unique_keys[k])) {
-                batch_unique_conflict = true;
-                break;
+                set_executor_error("duplicate key value violates unique constraint");
+                return ExecResult::empty();
             }
         }
-        if (batch_unique_conflict) continue;
 
         // Build new version Tuple
         // Version chain direction: old -> new -> end (PostgreSQL t_ctid).
@@ -427,10 +426,16 @@ ExecResult UpdateExecutor::next() {
         new_tuple.set_xmin(txn_id);
         new_tuple.set_xmax(0);
         new_tuple.set_next_version(kNullPageId, 0);  // end of chain
-        if (db_ && !db_->validate_index_keys(table_id_, new_tuple)) continue;
+        if (db_ && !db_->validate_index_keys(table_id_, new_tuple)) {
+            set_executor_error("index key validation failed");
+            return ExecResult::empty();
+        }
 
         u32 serialized_size = new_tuple.serialized_size();
-        if (serialized_size > kPageSize) continue;
+        if (serialized_size > kPageSize) {
+            set_executor_error("tuple too large for page");
+            return ExecResult::empty();
+        }
         byte buffer[kPageSize];
         byte* buf = new_tuple.serialize_to_page(buffer);
         u16 size = static_cast<u16>(buf - buffer);
@@ -444,11 +449,12 @@ ExecResult UpdateExecutor::next() {
             auto prepare = heap_->prepare_insert_in_page(old_rid.page_id, size);
             if (prepare.ok()) {
                 auto reservation = std::move(prepare.value());
+                const SlotIdx hot_slot = reservation.predicted_slot();
                 u64 lsn = 0;
                 if (wal_) {
                     lsn = wal_->log_update(txn_id, table_id_,
                                            old_rid.page_id, old_rid.slot_idx,
-                                           old_rid.page_id, reservation.predicted_slot(),
+                                           old_rid.page_id, hot_slot,
                                            buffer, size);
                     if (lsn == 0) {
                         set_executor_error("WAL write failed during update");
@@ -457,46 +463,59 @@ ExecResult UpdateExecutor::next() {
                 }
 
                 auto hot_result = reservation.commit(buffer, size, lsn);
-                if (hot_result.ok()) {
-                    Pair<PageId, SlotIdx> new_rid = hot_result.value();
-
-                    // Atomic: set_next_version + mark_deleted + set_lsn (LSN stamped before unpin).
-                    if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
-                                                 new_rid.first, new_rid.second, txn_id, lsn)) {
-                        // H3: new version is installed but old xmax/next was
-                        // not updated — remove the orphan and emit compensating
-                        // WAL so a later COMMIT cannot resurrect the UPDATE
-                        // via redo of the already-written kUpdate record.
-                        heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
-                        if (wal_) {
-                            // Compensate the already-logged kUpdate so commit
-                            // + crash cannot redo a failed statement.
-                            if (wal_->log_savepoint_undo_insert(
-                                    txn_id, table_id_, new_rid.first,
-                                    new_rid.second) == 0 ||
-                                wal_->log_savepoint_undo_delete(
-                                    txn_id, table_id_, old_rid.page_id,
-                                    old_rid.slot_idx) == 0) {
-                                set_executor_error(
-                                    "WAL write failed during UPDATE compensation");
-                                return ExecResult::empty();
-                            }
+                if (!hot_result.ok()) {
+                    // HOT WAL was written; do not fall through to non-HOT
+                    // (that would log a second kUpdate). Compensate and fail.
+                    if (wal_) {
+                        if (wal_->log_savepoint_undo_insert(
+                                txn_id, table_id_, old_rid.page_id, hot_slot) == 0 ||
+                            wal_->log_savepoint_undo_delete(
+                                txn_id, table_id_, old_rid.page_id,
+                                old_rid.slot_idx) == 0) {
+                            set_executor_error(
+                                "WAL write failed during UPDATE compensation");
+                            return ExecResult::empty();
                         }
-                        set_executor_error("failed to invalidate old tuple version");
-                        return ExecResult::empty();
                     }
-
-                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                        pending_unique_keys.insert(row_unique_keys[k], true);
-                    }
-                    if (txn_mgr_ && txn_mgr_->current()) {
-                        RecordId new_record_id(new_rid.first, new_rid.second);
-                        txn_mgr_->record_hot_delete(table_id_, old_rid);
-                        txn_mgr_->record_hot_insert(table_id_, new_record_id);
-                    }
-                    hot_used = true;
-                    count++;
+                    set_executor_error("HOT update install failed");
+                    return ExecResult::empty();
                 }
+                Pair<PageId, SlotIdx> new_rid = hot_result.value();
+
+                // Atomic: set_next_version + mark_deleted + set_lsn (LSN stamped before unpin).
+                if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
+                                             new_rid.first, new_rid.second, txn_id, lsn)) {
+                    // H3: new version is installed but old xmax/next was
+                    // not updated — remove the orphan and emit compensating
+                    // WAL so a later COMMIT cannot resurrect the UPDATE
+                    // via redo of the already-written kUpdate record.
+                    heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                    if (wal_) {
+                        if (wal_->log_savepoint_undo_insert(
+                                txn_id, table_id_, new_rid.first,
+                                new_rid.second) == 0 ||
+                            wal_->log_savepoint_undo_delete(
+                                txn_id, table_id_, old_rid.page_id,
+                                old_rid.slot_idx) == 0) {
+                            set_executor_error(
+                                "WAL write failed during UPDATE compensation");
+                            return ExecResult::empty();
+                        }
+                    }
+                    set_executor_error("failed to invalidate old tuple version");
+                    return ExecResult::empty();
+                }
+
+                for (u32 k = 0; k < row_unique_keys.size(); k++) {
+                    pending_unique_keys.insert(row_unique_keys[k], true);
+                }
+                if (txn_mgr_ && txn_mgr_->current()) {
+                    RecordId new_record_id(new_rid.first, new_rid.second);
+                    txn_mgr_->record_hot_delete(table_id_, old_rid);
+                    txn_mgr_->record_hot_insert(table_id_, new_record_id);
+                }
+                hot_used = true;
+                count++;
             }
         }
 
@@ -505,70 +524,87 @@ ExecResult UpdateExecutor::next() {
         // ============================================================
         if (!hot_used) {
             auto prepare = heap_->prepare_insert(size);
-            if (prepare.ok()) {
-                auto reservation = std::move(prepare.value());
-                u64 lsn = 0;
-                if (wal_) {
-                    lsn = wal_->log_update(txn_id, table_id_,
-                                           old_rid.page_id, old_rid.slot_idx,
-                                           reservation.page_id(), reservation.predicted_slot(),
-                                           buffer, size);
-                    if (lsn == 0) {
-                        set_executor_error("WAL write failed during update");
-                        return ExecResult::empty();
-                    }
-                }
-
-                auto ins_result = reservation.commit(buffer, size, lsn);
-                if (ins_result.ok()) {
-                    Pair<PageId, SlotIdx> new_rid = ins_result.value();
-                    RecordId new_record_id(new_rid.first, new_rid.second);
-
-                    // Atomic: set_next_version + mark_deleted + set_lsn.
-                    if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
-                                                 new_rid.first, new_rid.second, txn_id, lsn)) {
-                        heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
-                        if (wal_) {
-                            if (wal_->log_savepoint_undo_insert(
-                                    txn_id, table_id_, new_rid.first,
-                                    new_rid.second) == 0 ||
-                                wal_->log_savepoint_undo_delete(
-                                    txn_id, table_id_, old_rid.page_id,
-                                    old_rid.slot_idx) == 0) {
-                                set_executor_error(
-                                    "WAL write failed during UPDATE compensation");
-                                return ExecResult::empty();
-                            }
-                        }
-                        set_executor_error("failed to invalidate old tuple version");
-                        return ExecResult::empty();
-                    }
-
-                    // Record undo BEFORE touching indexes so a failure in
-                    // insert_index_entries unwinds heap + partial indexes
-                    // via the transaction's rollback path.
-                    if (txn_mgr_ && txn_mgr_->current()) {
-                        txn_mgr_->record_delete(table_id_, old_rid);
-                        txn_mgr_->record_insert(table_id_, new_record_id);
-                    }
-                    if (db_) {
-                        // Do NOT eagerly remove the old version's index
-                        // entry — under SI an older snapshot may still need
-                        // to find the old row through this index. GC removes
-                        // it later. Insert the new version's entries
-                        // incrementally so non-HOT UPDATE does not rebuild
-                        // every table index after each statement.
-                        if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
-                            set_executor_error("index insert failed");
-                            return ExecResult::empty();
-                        }
-                    }
-                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                        pending_unique_keys.insert(row_unique_keys[k], true);
-                    }
-                    count++;
+            if (!prepare.ok()) {
+                set_executor_error("could not allocate space for update");
+                return ExecResult::empty();
+            }
+            auto reservation = std::move(prepare.value());
+            const PageId new_page = reservation.page_id();
+            const SlotIdx new_slot = reservation.predicted_slot();
+            u64 lsn = 0;
+            if (wal_) {
+                lsn = wal_->log_update(txn_id, table_id_,
+                                       old_rid.page_id, old_rid.slot_idx,
+                                       new_page, new_slot,
+                                       buffer, size);
+                if (lsn == 0) {
+                    set_executor_error("WAL write failed during update");
+                    return ExecResult::empty();
                 }
             }
+
+            auto ins_result = reservation.commit(buffer, size, lsn);
+            if (!ins_result.ok()) {
+                if (wal_) {
+                    if (wal_->log_savepoint_undo_insert(
+                            txn_id, table_id_, new_page, new_slot) == 0 ||
+                        wal_->log_savepoint_undo_delete(
+                            txn_id, table_id_, old_rid.page_id,
+                            old_rid.slot_idx) == 0) {
+                        set_executor_error(
+                            "WAL write failed during UPDATE compensation");
+                        return ExecResult::empty();
+                    }
+                }
+                set_executor_error("update install failed");
+                return ExecResult::empty();
+            }
+            Pair<PageId, SlotIdx> new_rid = ins_result.value();
+            RecordId new_record_id(new_rid.first, new_rid.second);
+
+            // Atomic: set_next_version + mark_deleted + set_lsn.
+            if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
+                                         new_rid.first, new_rid.second, txn_id, lsn)) {
+                heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                if (wal_) {
+                    if (wal_->log_savepoint_undo_insert(
+                            txn_id, table_id_, new_rid.first,
+                            new_rid.second) == 0 ||
+                        wal_->log_savepoint_undo_delete(
+                            txn_id, table_id_, old_rid.page_id,
+                            old_rid.slot_idx) == 0) {
+                        set_executor_error(
+                            "WAL write failed during UPDATE compensation");
+                        return ExecResult::empty();
+                    }
+                }
+                set_executor_error("failed to invalidate old tuple version");
+                return ExecResult::empty();
+            }
+
+            // Record undo BEFORE touching indexes so a failure in
+            // insert_index_entries unwinds heap + partial indexes
+            // via the transaction's rollback path.
+            if (txn_mgr_ && txn_mgr_->current()) {
+                txn_mgr_->record_delete(table_id_, old_rid);
+                txn_mgr_->record_insert(table_id_, new_record_id);
+            }
+            if (db_) {
+                // Do NOT eagerly remove the old version's index
+                // entry — under SI an older snapshot may still need
+                // to find the old row through this index. GC removes
+                // it later. Insert the new version's entries
+                // incrementally so non-HOT UPDATE does not rebuild
+                // every table index after each statement.
+                if (!db_->insert_index_entries(table_id_, new_tuple, new_record_id)) {
+                    set_executor_error("index insert failed");
+                    return ExecResult::empty();
+                }
+            }
+            for (u32 k = 0; k < row_unique_keys.size(); k++) {
+                pending_unique_keys.insert(row_unique_keys[k], true);
+            }
+            count++;
         }
     }
 
