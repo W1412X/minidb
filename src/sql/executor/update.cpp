@@ -458,15 +458,21 @@ ExecResult UpdateExecutor::next() {
 
                 auto hot_result = reservation.commit(buffer, size, lsn);
                 if (hot_result.ok()) {
-                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
-                        pending_unique_keys.insert(row_unique_keys[k], true);
-                    }
                     Pair<PageId, SlotIdx> new_rid = hot_result.value();
 
                     // Atomic: set_next_version + mark_deleted + set_lsn (LSN stamped before unpin).
-                    heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
-                                            new_rid.first, new_rid.second, txn_id, lsn);
+                    if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
+                                                 new_rid.first, new_rid.second, txn_id, lsn)) {
+                        // H3: new version is installed but old xmax/next was
+                        // not updated — remove the orphan and fail closed.
+                        heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                        set_executor_error("failed to invalidate old tuple version");
+                        return ExecResult::empty();
+                    }
 
+                    for (u32 k = 0; k < row_unique_keys.size(); k++) {
+                        pending_unique_keys.insert(row_unique_keys[k], true);
+                    }
                     if (txn_mgr_ && txn_mgr_->current()) {
                         RecordId new_record_id(new_rid.first, new_rid.second);
                         txn_mgr_->record_hot_delete(table_id_, old_rid);
@@ -503,8 +509,12 @@ ExecResult UpdateExecutor::next() {
                     RecordId new_record_id(new_rid.first, new_rid.second);
 
                     // Atomic: set_next_version + mark_deleted + set_lsn.
-                    heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
-                                            new_rid.first, new_rid.second, txn_id, lsn);
+                    if (!heap_->commit_old_tuple(old_rid.page_id, old_rid.slot_idx,
+                                                 new_rid.first, new_rid.second, txn_id, lsn)) {
+                        heap_->rollback_insert(new_rid.first, new_rid.second, lsn);
+                        set_executor_error("failed to invalidate old tuple version");
+                        return ExecResult::empty();
+                    }
 
                     // Record undo BEFORE touching indexes so a failure in
                     // insert_index_entries unwinds heap + partial indexes
