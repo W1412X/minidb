@@ -278,65 +278,12 @@ Status LockManager::lock_record(u64 txn_id, u32 table_id, const RecordId& rid, L
         }
         trace_waited = true;
         if (!cond_.timed_wait(latch_, kLockWaitTimeoutMs)) {
-            // W14: Timeout — check for deadlock and select victim
+            // H1: on timeout/deadlock, only abort the waiter (self). Never
+            // silently revoke another transaction's granted lock — that left
+            // the "victim" running with a phantom grant while another writer
+            // proceeded, breaking isolation.
             obj = record_locks_.find(key);
-            if (!obj) break;
-
-            // Find the youngest txn in the wait chain as victim
-            u64 victim_txn = txn_id;
-            for (u32 i = 0; i < obj->requests.size(); i++) {
-                if (obj->requests[i].granted && obj->requests[i].txn_id > victim_txn) {
-                    victim_txn = obj->requests[i].txn_id;
-                }
-            }
-
-            // If we are the victim, abort ourselves
-            if (victim_txn == txn_id) {
-                // Remove our pending request
-                for (u32 i = 0; obj && i < obj->requests.size(); i++) {
-                    if (obj->requests[i].txn_id == txn_id &&
-                        obj->requests[i].mode == mode && !obj->requests[i].granted) {
-                        for (u32 j = i; j < obj->requests.size() - 1; j++) {
-                            obj->requests[j] = obj->requests[j + 1];
-                        }
-                        obj->requests.resize(obj->requests.size() - 1);
-                        break;
-                    }
-                }
-                latch_.unlock();
-                if (TraceContext* trace = current_trace()) {
-                    u64 wait_us = static_cast<u64>(
-                        std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::steady_clock::now() - trace_start).count());
-                    trace->record_lock("record", txn_id, table_id, true, wait_us, false);
-                }
-                return Status(ErrorCode::kLockConflict, "deadlock detected, this transaction chosen as victim");
-            }
-
-            // Otherwise, force-release the victim's locks to break the deadlock
-            // Remove victim's granted request from this lock object
-            for (u32 i = 0; obj && i < obj->requests.size(); i++) {
-                if (obj->requests[i].txn_id == victim_txn && obj->requests[i].granted) {
-                    for (u32 j = i; j < obj->requests.size() - 1; j++) {
-                        obj->requests[j] = obj->requests[j + 1];
-                    }
-                    obj->requests.resize(obj->requests.size() - 1);
-                    break;
-                }
-            }
-            // Update granted_mask
-            LockMode max_held = LockMode::kAccessShare;
-            for (u32 i = 0; obj && i < obj->requests.size(); i++) {
-                if (obj->requests[i].granted) {
-                    max_held = max_mode(max_held, obj->requests[i].mode);
-                }
-            }
-            obj->granted_mask = max_held;
-            cond_.broadcast();
-            // Continue waiting for our turn
-            obj = record_locks_.find(key);
-            if (!obj) break;
-            continue;
+            break;
         }
         obj = record_locks_.find(key);
         if (!obj) break;
