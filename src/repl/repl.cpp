@@ -717,7 +717,10 @@ void REPL::execute_sql(const String& sql) {
     }
 
     // Generic: SELECT / INSERT / UPDATE / DELETE
-    if (is_write_stmt && !db_.txn_manager().current()) {
+    // SELECT needs a snapshot too — without one, scans skip MVCC checks and
+    // can return in-flight inserts from other connections.
+    bool needs_snapshot = is_write_stmt || stmt.type == StmtType::kSelect;
+    if (needs_snapshot && !db_.txn_manager().current()) {
         implicit_txn = db_.txn_manager().begin() != nullptr;
         if (!implicit_txn) {
             printf("Error: failed to start implicit transaction.\n\n");
@@ -887,16 +890,16 @@ void REPL::execute_sql(const String& sql) {
         }
     }
 
-    if (is_write_stmt) {
-        if (implicit_txn) {
-            Transaction* txn = db_.txn_manager().current();
-            if (!txn || !db_.txn_manager().commit(txn)) {
-                printf("Error: implicit transaction commit failed.\n\n");
-                return;
-            }
-        } else if (!db_.txn_manager().current()) {
-            db_.flush();
+    if (implicit_txn) {
+        Transaction* txn = db_.txn_manager().current();
+        if (!txn || !db_.txn_manager().commit(txn)) {
+            printf("Error: implicit transaction commit failed.\n\n");
+            return;
         }
+    } else if (is_write_stmt && !db_.txn_manager().current()) {
+        db_.flush();
+    }
+    if (is_write_stmt) {
         db_.maybe_gc();
     }
 

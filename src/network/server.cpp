@@ -288,10 +288,13 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
     bool is_write_stmt = type == StmtType::kInsert ||
                          type == StmtType::kDelete ||
                          type == StmtType::kUpdate;
+    // SELECT also needs a snapshot: without a current transaction, scan
+    // executors skip MVCC and can return uncommitted rows (C3).
+    bool needs_snapshot = is_write_stmt || type == StmtType::kSelect;
     bool implicit_txn = false;
     String result;
 
-    if (is_write_stmt && !db_.txn_manager().current()) {
+    if (needs_snapshot && !db_.txn_manager().current()) {
         implicit_txn = db_.txn_manager().begin() != nullptr;
         if (!implicit_txn) return String("Error: failed to start implicit transaction.\n");
     }
@@ -375,15 +378,15 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
         return String("Error: statement timeout.\n");
     }
 
-    if (is_write_stmt) {
-        if (implicit_txn) {
-            Transaction* txn = db_.txn_manager().current();
-            if (!txn || !db_.txn_manager().commit(txn)) {
-                return String("Error: implicit transaction commit failed.\n");
-            }
-        } else if (!db_.txn_manager().current()) {
-            db_.flush();
+    if (implicit_txn) {
+        Transaction* txn = db_.txn_manager().current();
+        if (!txn || !db_.txn_manager().commit(txn)) {
+            return String("Error: implicit transaction commit failed.\n");
         }
+    } else if (is_write_stmt && !db_.txn_manager().current()) {
+        db_.flush();
+    }
+    if (is_write_stmt) {
         db_.maybe_gc();
     }
 
@@ -597,6 +600,19 @@ String Server::execute_sql(const String& sql) {
         db_.collect_statistics(table->table_id);
         clear_prepared_cache();
         return String("ANALYZE\n");
+    }
+
+    if (stmt.type == StmtType::kVacuum) {
+        if (!stmt.vacuum_table_name.empty()) {
+            TableEntry* table = db_.get_table(stmt.vacuum_table_name);
+            if (!table) {
+                snprintf(buf, sizeof(buf), "Error: table '%s' not found.\n",
+                         stmt.vacuum_table_name.c_str());
+                return String(buf);
+            }
+        }
+        db_.vacuum();
+        return String("VACUUM\n");
     }
 
     if (stmt.type == StmtType::kCreateTable && stmt.create_table) {
@@ -960,6 +976,21 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         send_str("ANALYZE\n");
         return 0;
     }
+    if (stmt.type == StmtType::kVacuum) {
+        if (!stmt.vacuum_table_name.empty()) {
+            TableEntry* table = db_.get_table(stmt.vacuum_table_name);
+            if (!table) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "Error: table '%s' not found.\n",
+                         stmt.vacuum_table_name.c_str());
+                send_str(buf);
+                return 0;
+            }
+        }
+        db_.vacuum();
+        send_str("VACUUM\n");
+        return 0;
+    }
     if (stmt.type == StmtType::kCreateTable && stmt.create_table) {
         Schema schema;
         for (u32 i = 0; i < stmt.create_table->columns.size(); i++) {
@@ -1177,12 +1208,13 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
 
     // SELECT / INSERT / UPDATE / DELETE — Streaming path
     bool is_write_stmt = stmt.type == StmtType::kInsert || stmt.type == StmtType::kDelete || stmt.type == StmtType::kUpdate;
+    bool needs_snapshot = is_write_stmt || stmt.type == StmtType::kSelect;
     if (stmt.type == StmtType::kSelect && !stmt.select) {
         send_str("Error: unsupported or unrecognized command.\n"); return 0;
     }
 
     bool implicit_txn = false;
-    if (is_write_stmt && !db_.txn_manager().current()) {
+    if (needs_snapshot && !db_.txn_manager().current()) {
         implicit_txn = db_.txn_manager().begin() != nullptr;
         if (!implicit_txn) { send_str("Error: failed to start implicit transaction.\n"); return 0; }
     }
@@ -1289,13 +1321,15 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
         return row_count;
     }
 
-    if (is_write_stmt) {
-        if (implicit_txn) {
-            Transaction* txn = db_.txn_manager().current();
-            if (!txn || !db_.txn_manager().commit(txn)) send_str("Error: implicit transaction commit failed.\n");
-        } else if (!db_.txn_manager().current()) {
-            db_.flush();
+    if (implicit_txn) {
+        Transaction* txn = db_.txn_manager().current();
+        if (!txn || !db_.txn_manager().commit(txn)) {
+            send_str("Error: implicit transaction commit failed.\n");
         }
+    } else if (is_write_stmt && !db_.txn_manager().current()) {
+        db_.flush();
+    }
+    if (is_write_stmt) {
         db_.maybe_gc();
     }
 

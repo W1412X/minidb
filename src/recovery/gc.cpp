@@ -31,6 +31,17 @@ bool GarbageCollector::is_garbage(const Tuple& t, u64 oldest_active) {
     return true;  // This version is invisible to all current and future transactions
 }
 
+bool GarbageCollector::is_all_visible_tuple(const Tuple& t, u64 oldest_active) {
+    // C3: "no garbage" is not the same as "all-visible". An uncommitted
+    // insert has no garbage but must not skip heap MVCC on IndexOnlyScan.
+    if (t.xmin() == 0) return false;
+    if (t.xmax() != 0) return false;
+    if (t.xmin() == kFrozenTxnId) return true;
+    if (!txn_mgr_->is_txn_committed(t.xmin())) return false;
+    if (t.xmin() >= oldest_active) return false;
+    return true;
+}
+
 bool GarbageCollector::run_gc(u32 max_pages) {
     u64 oldest_active = txn_mgr_->get_oldest_active_txn_id();
 
@@ -70,6 +81,7 @@ bool GarbageCollector::run_gc(u32 max_pages) {
             Page* page = result.value();
             u16 num_tuples = page->header()->num_tuples;
             bool has_garbage = false;
+            bool all_visible = true;
 
             for (u16 slot = 0; slot < num_tuples; slot++) {
                 const LinePointer* lp = page->line_pointer(slot);
@@ -80,6 +92,7 @@ bool GarbageCollector::run_gc(u32 max_pages) {
 
                 if (gc->is_garbage(tuple, ctx->oldest)) {
                     has_garbage = true;
+                    all_visible = false;
                     // Remove the index entries for this no-longer-visible tuple
                     // BEFORE we mark its slot DEAD. DELETE used to do this
                     // eagerly which broke SI visibility through IndexScan;
@@ -106,6 +119,8 @@ bool GarbageCollector::run_gc(u32 max_pages) {
                         page->mark_dead(slot);
                         gc->pool_->mark_dirty(page_id);
                     }
+                } else if (!gc->is_all_visible_tuple(tuple, ctx->oldest)) {
+                    all_visible = false;
                 }
             }
 
@@ -118,10 +133,14 @@ bool GarbageCollector::run_gc(u32 max_pages) {
                 // Page was modified, so it's not all-visible anymore.
                 heap.vm().clear_page(page_id);
                 ctx->any_modified = true;
-            } else {
-                // No garbage found: all live tuples are visible to all
-                // current snapshots.  Mark the page all-visible in the VM.
+            } else if (all_visible) {
+                // Every live tuple is committed, older than all active
+                // snapshots, and not deleted — safe for IndexOnlyScan to
+                // skip heap MVCC rechecks.
                 heap.vm().set_visible(page_id);
+            } else {
+                // In-flight or recently-committed tuples remain; keep VM clear.
+                heap.vm().clear_page(page_id);
             }
 
             gc->pool_->unpin_page(page_id);
@@ -174,6 +193,7 @@ void GarbageCollector::run_vacuum() {
             u16 num_tuples = page->header()->num_tuples;
             bool has_garbage = false;
             bool all_frozen = true;
+            bool all_visible = true;
 
             for (u16 slot = 0; slot < num_tuples; slot++) {
                 const LinePointer* lp = page->line_pointer(slot);
@@ -184,6 +204,8 @@ void GarbageCollector::run_vacuum() {
 
                 if (gc->is_garbage(tuple, ctx->oldest)) {
                     has_garbage = true;
+                    all_visible = false;
+                    all_frozen = false;
                     if (gc->db_) {
                         gc->db_->delete_index_entries(te.table_id, tuple,
                             RecordId(page_id, slot));
@@ -219,6 +241,9 @@ void GarbageCollector::run_vacuum() {
                     if (tuple.xmin() != kFrozenTxnId) {
                         all_frozen = false;
                     }
+                    if (!gc->is_all_visible_tuple(tuple, ctx->oldest)) {
+                        all_visible = false;
+                    }
                 }
             }
 
@@ -229,8 +254,10 @@ void GarbageCollector::run_vacuum() {
                 heap.vm().clear_page(page_id);
             } else if (all_frozen && num_tuples > 0) {
                 heap.vm().set_frozen(page_id);
-            } else {
+            } else if (all_visible) {
                 heap.vm().set_visible(page_id);
+            } else {
+                heap.vm().clear_page(page_id);
             }
 
             gc->pool_->unpin_page(page_id);

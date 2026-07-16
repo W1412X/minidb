@@ -32,6 +32,9 @@ public:
 
 private:
     bool is_garbage(const Tuple& t, u64 oldest_active_txn);
+    // True when a live tuple is committed, older than every active snapshot,
+    // and not deleted — required before the page may be marked all-visible.
+    bool is_all_visible_tuple(const Tuple& t, u64 oldest_active_txn);
 
     BufferPool* pool_;
     TransactionManager* txn_mgr_;

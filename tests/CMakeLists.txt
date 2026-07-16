@@ -125,6 +125,8 @@ add_test(NAME vacuum_concurrent
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/vacuum_concurrent.py $<TARGET_FILE:minidb> --seed 12648459)
 add_test(NAME abort_visibility
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/abort_visibility.py $<TARGET_FILE:minidb> --seed 12648461)
+add_test(NAME gc_all_visible_uncommitted
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/gc_all_visible_uncommitted.py $<TARGET_FILE:minidb> --seed 12648464)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
 add_test(NAME index_heap_atomic
