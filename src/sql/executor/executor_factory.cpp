@@ -1,4 +1,5 @@
 #include "sql/executor/executor_factory.h"
+#include "sql/executor/executor.h"
 #include "sql/executor/seq_scan.h"
 #include "sql/executor/index_scan_executor.h"
 #include "sql/executor/filter.h"
@@ -125,10 +126,13 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kSeqScan: {
             auto* scan_plan = static_cast<SeqScanPlan*>(plan);
-            // Acquire AccessShare lock (read)
-            if (txn_id > 0) {
-                db_.lock_manager().lock_table(txn_id, scan_plan->table_id,
-                                              LockMode::kAccessShare);
+            // Acquire AccessShare lock (read) — must succeed or we must not
+            // scan while DDL holds AccessExclusive.
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, scan_plan->table_id,
+                                              LockMode::kAccessShare).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
             }
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
             if (!heap) return UniquePtr<Executor>();
@@ -159,6 +163,12 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kIndexScan: {
             auto* scan_plan = static_cast<IndexScanPlan*>(plan);
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, scan_plan->table_id,
+                                              LockMode::kAccessShare).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
+            }
             HeapFile* heap = db_.get_heap_file(scan_plan->table_id);
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!heap || !index) return UniquePtr<Executor>();
@@ -180,6 +190,12 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kIndexOnlyScan: {
             auto* scan_plan = static_cast<IndexOnlyScanPlan*>(plan);
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, scan_plan->table_id,
+                                              LockMode::kAccessShare).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
+            }
             BPlusTree* index = db_.get_index_tree(scan_plan->index_id);
             if (!index) return UniquePtr<Executor>();
             TransactionManager* tm = db_.txn_manager().current() ? &db_.txn_manager() : nullptr;
@@ -260,10 +276,11 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kInsert: {
             auto* i_plan = static_cast<InsertPlan*>(plan);
-            // Acquire RowExclusive lock (write)
-            if (txn_id > 0) {
-                db_.lock_manager().lock_table(txn_id, i_plan->table_id,
-                                              LockMode::kRowExclusive);
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, i_plan->table_id,
+                                              LockMode::kRowExclusive).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
             }
             HeapFile* heap = db_.get_heap_file(i_plan->table_id);
             if (!heap) return UniquePtr<Executor>();
@@ -275,10 +292,11 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kDelete: {
             auto* d_plan = static_cast<DeletePlan*>(plan);
-            // Acquire RowExclusive lock (write)
-            if (txn_id > 0) {
-                db_.lock_manager().lock_table(txn_id, d_plan->table_id,
-                                              LockMode::kRowExclusive);
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, d_plan->table_id,
+                                              LockMode::kRowExclusive).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
             }
             HeapFile* heap = db_.get_heap_file(d_plan->table_id);
             if (!heap) return UniquePtr<Executor>();
@@ -293,10 +311,11 @@ UniquePtr<Executor> ExecutorFactory::create(PlanNode* plan) {
 
         case PlanNodeType::kUpdate: {
             auto* u_plan = static_cast<UpdatePlan*>(plan);
-            // Acquire RowExclusive lock (write)
-            if (txn_id > 0) {
-                db_.lock_manager().lock_table(txn_id, u_plan->table_id,
-                                              LockMode::kRowExclusive);
+            if (txn_id > 0 &&
+                !db_.lock_manager().lock_table(txn_id, u_plan->table_id,
+                                              LockMode::kRowExclusive).ok()) {
+                set_executor_error("could not acquire table lock");
+                return UniquePtr<Executor>();
             }
             HeapFile* heap = db_.get_heap_file(u_plan->table_id);
             if (!heap) return UniquePtr<Executor>();

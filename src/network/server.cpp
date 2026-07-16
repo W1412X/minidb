@@ -303,6 +303,9 @@ String Server::execute_plan_result(StmtType type, PlanNode* plan) {
     UniquePtr<Executor> exec = factory.create(plan);
     if (!exec) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
+        if (const char* err = executor_error()) {
+            return String("Error: ") + err + "\n";
+        }
         return String("Error: failed to create executor.\n");
     }
 
@@ -1230,7 +1233,12 @@ u64 Server::execute_sql_streaming(const String& sql, int fd) {
     UniquePtr<Executor> exec = factory.create(plan.get());
     if (!exec) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
-        send_str("Error: failed to create executor.\n"); return 0;
+        if (const char* err = executor_error()) {
+            send_str(String("Error: ") + err + "\n");
+        } else {
+            send_str("Error: failed to create executor.\n");
+        }
+        return 0;
     }
 
     u64 effective_timeout_ms = g_statement_timeout_ms != 0

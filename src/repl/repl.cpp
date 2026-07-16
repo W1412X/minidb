@@ -762,7 +762,11 @@ void REPL::execute_sql(const String& sql) {
     UniquePtr<Executor> exec = factory.create(plan.get());
     if (!exec) {
         if (implicit_txn) db_.txn_manager().rollback(db_.txn_manager().current());
-        printf("Error: failed to create executor.\n\n");
+        if (const char* err = executor_error()) {
+            printf("Error: %s\n\n", err);
+        } else {
+            printf("Error: failed to create executor.\n\n");
+        }
         return;
     }
 
