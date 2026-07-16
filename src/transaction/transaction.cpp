@@ -392,18 +392,27 @@ bool TransactionManager::rollback(Transaction* txn) {
     // immediately see this txn as aborted. Keep the latch narrow — never
     // hold it while doing heap/index/catalog I/O (avoids deadlock with
     // checkpoint, background threads, and other txn lifecycle calls).
+    u64 aborted_xid = txn->id();
     {
         LockGuard guard(latch_);
-        TxnSlot* slot = find_slot(txn->id());
+        TxnSlot* slot = find_slot(aborted_xid);
         if (slot) {
             slot->state = TxnState::kAborted;
         }
     }
 
-    u64 abort_lsn = db_->wal().log_abort(txn->id());
+    // A1 / C1: publish the abort to the status log BEFORE unlock and undo.
+    // New transactions that begin after the slot leaves kActive are not in
+    // our "was_active_in_snapshot" set; without an early status_log entry
+    // they would treat this xmin as committed and dirty-read aborted rows
+    // (or hide rows whose delete is aborting). TxnStatusLog::record also
+    // updates its in-memory map before fsync so readers do not wait on I/O.
+    if (status_log_) status_log_->record(aborted_xid, TxnFinalState::kAborted);
+
+    u64 abort_lsn = db_->wal().log_abort(aborted_xid);
 
     // Free all locks held by the transaction
-    db_->lock_manager().unlock_all(txn->id());
+    db_->lock_manager().unlock_all(aborted_xid);
 
     // Phase 2 (latch released): apply undo records. These do heap I/O,
     // index mutations, and catalog persistence — all operations that may
@@ -416,20 +425,14 @@ bool TransactionManager::rollback(Transaction* txn) {
             ddl_info = &txn->ddl_undo_infos()[rec.ddl_info_idx];
         }
         apply_undo_record(db_, rec, abort_lsn,
-                          /*for_savepoint=*/false, txn->id(), ddl_info);
+                          /*for_savepoint=*/false, aborted_xid, ddl_info);
     }
 
     txn->set_state(TxnState::kAborted);
-    u64 aborted_xid = txn->id();
     bool release_resource = txn->resource_acquired();
     delete txn;
     g_current_txn = nullptr;
     if (release_resource) db_->resources().release_transaction();
-    // A1: persist the abort. Doing this AFTER the slot is freed means a
-    // crash between rollback() returning and the next operation cannot lose
-    // the fact that the txn was aborted, even if the slot has since been
-    // reused.
-    if (status_log_) status_log_->record(aborted_xid, TxnFinalState::kAborted);
     return true;
 }
 
@@ -503,34 +506,39 @@ bool TransactionManager::is_visible(u64 xmin, u64 xmax, const Transaction& txn) 
         return false;
     };
 
+    // True when `xid` is known not to have committed yet: aborted in the
+    // status log, still Active, or Aborted in a live slot whose status_log
+    // entry has not been observed. Missing status + recycled slot falls
+    // through to the SI "already finished" assumption (committed).
+    auto is_uncommitted = [&](u64 xid) -> bool {
+        if (status_log_) {
+            TxnFinalState s;
+            if (status_log_->status(xid, &s)) {
+                return s == TxnFinalState::kAborted;
+            }
+        }
+        TxnState live;
+        if (get_txn_state(xid, &live)) {
+            return live != TxnState::kCommitted;
+        }
+        return false;
+    };
+
     // --- Hot path: xmin precedes our snapshot --------------------------------
     // When xmin < snapshot_id, the transaction was already either active or
     // finished at our begin() time. The active set we captured then is
-    // authoritative — no live slot lookup is required. status_log answers any
-    // "was it aborted?" question without holding the manager latch.
-    //
-    // This removes the global latch + O(#slots) linear scan that was hit on
-    // every visible-tuple test, which was the single biggest serialization
-    // point during scans/lookups (5000 rows × ≥1 latch each).
+    // authoritative for in-flight creators. status_log (and live aborted
+    // slots) answers "was it aborted?" for creators that left kActive after
+    // our snapshot was taken — the C1 abort-visibility race.
     if (xmin < txn.snapshot_id()) {
         if (was_active_in_snapshot(xmin)) return false;
-        if (status_log_) {
-            TxnFinalState s;
-            if (status_log_->status(xmin, &s) && s == TxnFinalState::kAborted) {
-                return false;
-            }
-        }
+        if (is_uncommitted(xmin)) return false;
         // xmin is committed from our snapshot's perspective.
         if (xmax == kInvalidTxnId) return true;
         if (xmax == txn.id()) return false;
         if (xmax >= txn.snapshot_id()) return true;        // delete after we began
         if (was_active_in_snapshot(xmax)) return true;     // delete still pending
-        if (status_log_) {
-            TxnFinalState xs;
-            if (status_log_->status(xmax, &xs) && xs == TxnFinalState::kAborted) {
-                return true;                               // delete rolled back
-            }
-        }
+        if (is_uncommitted(xmax)) return true;             // delete rolled back / aborting
         return false;                                       // delete committed
     }
 

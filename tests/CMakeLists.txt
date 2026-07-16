@@ -28,6 +28,7 @@ set(MINIDB_UNIT_TESTS
     page_store_remote_test
     wal_buffer_pool_test
     transaction_slots_test
+    abort_visibility_test
     btree_property_test
     index_key_btree_test
     datetime_parse_test
@@ -46,6 +47,7 @@ add_test(NAME tuple_value_edge_test     COMMAND $<TARGET_FILE:tuple_value_edge_t
 add_test(NAME page_store_remote_test    COMMAND $<TARGET_FILE:page_store_remote_test>)
 add_test(NAME wal_buffer_pool_test      COMMAND $<TARGET_FILE:wal_buffer_pool_test>)
 add_test(NAME transaction_slots_test    COMMAND $<TARGET_FILE:transaction_slots_test>)
+add_test(NAME abort_visibility_test     COMMAND $<TARGET_FILE:abort_visibility_test>)
 add_test(NAME btree_property_test       COMMAND $<TARGET_FILE:btree_property_test> 12648434)
 add_test(NAME index_key_btree_test      COMMAND $<TARGET_FILE:index_key_btree_test>)
 add_test(NAME datetime_parse_test       COMMAND $<TARGET_FILE:datetime_parse_test>)
@@ -121,6 +123,8 @@ add_test(NAME long_snapshot_gc
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/long_snapshot_gc.py $<TARGET_FILE:minidb> --seed 12648458)
 add_test(NAME vacuum_concurrent
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/vacuum_concurrent.py $<TARGET_FILE:minidb> --seed 12648459)
+add_test(NAME abort_visibility
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/isolation/abort_visibility.py $<TARGET_FILE:minidb> --seed 12648461)
 add_test(NAME commit_durability
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/acid/atomicity/commit_durability.py $<TARGET_FILE:minidb> --seed 12648435)
 add_test(NAME index_heap_atomic

@@ -49,6 +49,11 @@ TxnStatusLog::~TxnStatusLog() {
 bool TxnStatusLog::record(u64 xid, TxnFinalState state) {
     LockGuard guard(latch_);
     if (fd_ < 0) return false;
+    // Publish the in-memory decision BEFORE durability. Concurrent
+    // is_visible() must observe abort/commit as soon as the transaction
+    // manager records it; waiting for fsync left a window where a new
+    // snapshot could treat an aborting xmin as committed.
+    states_.insert(xid, static_cast<u8>(state));
     byte buf[kRecordSize];
     std::memcpy(buf, &xid, sizeof(xid));
     buf[sizeof(u64)] = static_cast<byte>(state);
@@ -56,7 +61,6 @@ bool TxnStatusLog::record(u64 xid, TxnFinalState state) {
         return false;
     }
     if (fsync(fd_) != 0) return false;
-    states_.insert(xid, static_cast<u8>(state));
     return true;
 }
 
